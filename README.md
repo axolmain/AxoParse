@@ -105,6 +105,7 @@ Libraries benched:
 
 - [libevtx](https://github.com/libyal/libevtx) - C-based
 - [evtx](https://github.com/omerbenamram/evtx) - Rust-based
+- [evtx-parser](https://github.com/axolmain/evtx-parser) - Typescript-based (technically JS ig but hey)
 
 
 | File                               | C# (1 thread)     | C# (8 threads)   | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node           | libevtx (C)       |
