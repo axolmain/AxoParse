@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
 set -euo pipefail
 
 # ── Default flag values ──────────────────────────────────────────────
@@ -15,11 +16,14 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CSHARP_PROJECT="$ROOT_DIR/src/AxoParse.Bench/AxoParse.Bench.csproj"
 CSHARP_BIN="$ROOT_DIR/src/AxoParse.Bench/bin/publish/AxoParse.Bench"
 CS_WASM_CLI="$SCRIPT_DIR/bench-wasm-cli.mjs"
-CS_WASM_FRAMEWORK="${CS_WASM_FRAMEWORK:-}"
+CS_WASM_PROJECT="$ROOT_DIR/src/AxoParse.Browser/AxoParse.Browser.csproj"
 RUST_WASM_CLI="$SCRIPT_DIR/bench-rust-wasm-cli.mjs"
 
 # External parsers directory (defaults to system temp dir)
 EXTERNAL_DIR="${EXTERNAL_DIR:-${TMPDIR:-/tmp}/evtx-bench}"
+
+# C# WASM framework output (must be after EXTERNAL_DIR)
+CS_WASM_FRAMEWORK="${CS_WASM_FRAMEWORK:-$EXTERNAL_DIR/cs-wasm/_framework}"
 
 # Rust evtx parser (cloned from GitHub into external dir)
 RUST_DIR="$EXTERNAL_DIR/evtx-rust"
@@ -123,12 +127,12 @@ elif [[ -d "$TEST_DATA" ]]; then
 fi
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
-  echo "No .evtx files found in $TEST_DATA" >&2
+  log_error "No .evtx files found in $TEST_DATA"
   exit 1
 fi
 
 echo "Found ${#FILES[@]} .evtx files"
-echo ""
+echo
 
 # ── Build table header + write markdown header ─────────────────────
 build_table_header
@@ -143,17 +147,17 @@ pass=0
 fail=0
 
 for file in "${FILES[@]}"; do
-  i=$((i + 1))
+  ((i++))
   name="$(basename "$file")"
   size="$(du -h "$file" | cut -f1 | xargs)"
 
   echo "[$i/${#FILES[@]}] $name ($size)"
 
-  # Run JS parser first to check it doesn't error out (skip in native-only mode)
+  # Run JS parser first to check it doesn't error out
   if $HAS_JS; then
     if ! node "$JS_CLI" "$file" -o json &>/dev/null; then
       log_warn "JS parser failed — skipping"
-      fail=$((fail + 1))
+      ((fail++))
       continue
     fi
   fi
@@ -162,16 +166,16 @@ for file in "${FILES[@]}"; do
 
   # XML benchmark (skipped if --json-only)
   if [[ "$FORMAT_FILTER" != "json" ]]; then
-    ROWS+=("$(run_xml_benchmark "$file" "$file_label")")
+    ROWS+=("$(run_benchmark xml "$file" "$file_label")")
   fi
 
   # JSON benchmark (skipped if --xml-only)
   if [[ "$FORMAT_FILTER" != "xml" ]]; then
-    ROWS+=("$(run_json_benchmark "$file" "$file_label")")
+    ROWS+=("$(run_benchmark json "$file" "$file_label")")
   fi
 
-  pass=$((pass + 1))
-  echo ""
+  ((pass++))
+  echo
 done
 
 # ── Write results + summary ─────────────────────────────────────────

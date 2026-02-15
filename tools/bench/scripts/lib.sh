@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
 # Color helpers and utility functions for benchmarking.
 
 # ── Color helpers ────────────────────────────────────────────────────
@@ -13,53 +14,73 @@ log_success() { echo -e "${GREEN}[OK]${NC} $*"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $*"; }
 
-# ── Helper functions ─────────────────────────────────────────────────
+# ── Cross-platform helpers ───────────────────────────────────────────
 
-# Format hyperfine result as "275.9 ms +/- 2.1 ms" or "2.439 s +/- 0.035 s"
+# Available CPU count (Linux nproc, macOS sysctl, fallback 4).
+ncpus() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
+
+# ── Benchmark helpers ────────────────────────────────────────────────
+
+# Format hyperfine result as "275.9 ms ± 2.1 ms" or "2.439 s ± 0.035 s".
 get_formatted() {
   node -e "
-    const d = JSON.parse(require('fs').readFileSync('$1', 'utf8'));
-    const r = d.results[$2];
+    const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+    const r = d.results[parseInt(process.argv[2])];
     const mean = r.mean, sd = r.stddev;
     if (mean < 1.0) {
-      console.log((mean*1000).toFixed(1) + ' ms ± ' + (sd*1000).toFixed(1) + ' ms');
+      console.log((mean*1000).toFixed(1) + ' ms \u00b1 ' + (sd*1000).toFixed(1) + ' ms');
     } else if (mean < 60.0) {
-      console.log(mean.toFixed(3) + ' s ± ' + sd.toFixed(3) + ' s');
+      console.log(mean.toFixed(3) + ' s \u00b1 ' + sd.toFixed(3) + ' s');
     } else {
       const m = Math.floor(mean / 60);
       const s = mean - m * 60;
-      console.log(m + 'm' + s.toFixed(3) + 's ± ' + sd.toFixed(3) + ' s');
+      console.log(m + 'm' + s.toFixed(3) + 's \u00b1 ' + sd.toFixed(3) + ' s');
     }
-  "
+  " "$1" "$2"
 }
 
+# Time a shell command string and print elapsed seconds.
 measure_cmd_once_seconds() {
-  local cmd="$1"
-  python3 - "$cmd" <<'PY'
-import subprocess, sys, time
-cmd = sys.argv[1]
-start = time.perf_counter()
-proc = subprocess.run(cmd, shell=True)
-end = time.perf_counter()
-if proc.returncode != 0:
-    raise SystemExit(proc.returncode)
-print(f"{end - start:.6f}")
-PY
+  node -e "
+    const {execSync} = require('child_process');
+    const start = process.hrtime.bigint();
+    try { execSync(process.argv[1], {stdio: 'pipe', shell: true}); }
+    catch(e) { process.exit(e.status || 1); }
+    const ns = Number(process.hrtime.bigint() - start);
+    console.log((ns / 1e9).toFixed(6));
+  " "$1"
 }
 
-# Format single-run seconds as "0.367s (ran once)" or "2m41.075s (ran once)"
+# Format single-run seconds as "0.367s (ran once)" or "2m41.075s (ran once)".
 format_single_run() {
-  python3 - "$1" <<'PY'
-import sys
-s = float(sys.argv[1])
-if s >= 60.0:
-    m = int(s // 60.0)
-    rem = s - (m * 60.0)
-    print(f"{m}m{rem:.3f}s (ran once)")
-else:
-    print(f"{s:.3f}s (ran once)")
-PY
+  awk -v s="$1" 'BEGIN {
+    if (s >= 60.0) {
+      m = int(s / 60.0);
+      rem = s - (m * 60.0);
+      printf "%dm%.3fs (ran once)\n", m, rem
+    } else {
+      printf "%.3fs (ran once)\n", s
+    }
+  }'
 }
+
+# Build the pyevtx-rs benchmark command string for a given method and file.
+pyevtx_rs_cmd() {
+  local method="$1" file="$2"
+  printf "uv run --with evtx python -c 'import sys,collections;from evtx import PyEvtxParser;p=PyEvtxParser(sys.argv[1]);collections.deque((sys.stdout.write(r[\"data\"]+\"\\n\")for r in p.%s()),maxlen=0)' '%s' > /dev/null" "$method" "$file"
+}
+
+# Check if a parser name is in the PARSER_FILTER comma-separated list.
+parser_in_filter() {
+  local name="$1" p
+  IFS=',' read -ra _pf <<< "$PARSER_FILTER"
+  for p in "${_pf[@]}"; do
+    [[ "$p" == "$name" ]] && return 0
+  done
+  return 1
+}
+
+# ── CLI help ─────────────────────────────────────────────────────────
 
 show_help() {
   cat <<'USAGE'
@@ -78,8 +99,8 @@ Options:
   --list-parsers      Show available parsers and their status, then exit
 
 Parser names for --parsers:
-  rust, csharp, cs-wasm, rust-wasm, js, libevtx,
-  velocidex, 0xrawsec, pyevtx-rs, python-evtx, python-evtx-pypy
+  rust, csharp, cs-wasm, rust-wasm, js,
+  libevtx, velocidex, 0xrawsec, pyevtx-rs
 
 Environment variables:
   HYPERFINE_WARMUP    Default warmup runs (overridden by --warmup)
@@ -90,6 +111,12 @@ Environment variables:
 USAGE
 }
 
+# ── Binary compatibility ─────────────────────────────────────────────
+
+# Check if a compiled binary matches the current OS (prevents running
+# Linux binaries on macOS and vice versa). Returns 0 (compatible) when
+# the `file` command is unavailable — permissive fallback since we
+# cannot determine compatibility without it.
 binary_looks_compatible() {
   local bin="$1"
   [[ -f "$bin" ]] || return 1

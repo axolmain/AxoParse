@@ -1,47 +1,47 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
 # Markdown results output: table header, header metadata, results table, summary.
 # Expects all path variables, HAS_* flags, NATIVE_ONLY, WARMUP, RUNS, RESULTS set by parent scope.
+
+# ── List parsers ─────────────────────────────────────────────────────
+
+# Print a single parser row for --list-parsers output.
+print_parser_row() {
+  local name="$1" has_flag="$2" bin_path="$3"
+  local status="missing"
+  if [[ "$has_flag" == "true" ]]; then
+    status="available"
+  elif [[ -n "${PARSER_FILTER:-}" ]] && ! parser_in_filter "$name"; then
+    status="disabled"
+  fi
+  printf "%-22s %-12s %s\n" "$name" "$status" "$bin_path"
+}
 
 # Print parser availability table for --list-parsers.
 list_parsers() {
   printf "%-22s %-12s %s\n" "Parser" "Status" "Path"
   printf "%-22s %-12s %s\n" "──────" "──────" "────"
 
-  # Rust native is always present (baseline)
-  local rust_status="available"
-  [[ ! -x "$RUST_BIN" ]] && rust_status="missing"
-  printf "%-22s %-12s %s\n" "rust" "$rust_status" "$RUST_BIN"
+  local rust_avail="false"
+  [[ -x "$RUST_BIN" ]] && rust_avail="true"
 
-  local -A PARSER_MAP=(
-    [csharp]="$HAS_CSHARP|$CSHARP_BIN"
-    [cs-wasm]="$HAS_CS_WASM|$CS_WASM_CLI"
-    [rust-wasm]="$HAS_RUST_WASM|$RUST_WASM_CLI"
-    [js]="$HAS_JS|$JS_CLI"
-    [libevtx]="$HAS_LIBEVTX|$EXTERNAL_DIR/libevtx/evtxtools/evtxexport"
-    [velocidex]="$HAS_VELOCIDEX|$EXTERNAL_DIR/velocidex-evtx/dumpevtx"
-    [0xrawsec]="$HAS_0XRAWSEC|$EXTERNAL_DIR/0xrawsec-evtx/evtxdump"
-    [pyevtx-rs]="$HAS_PYEVTX_RS|uv run --with evtx python"
-    [python-evtx]="$HAS_PYTHON_EVTX|$EXTERNAL_DIR/python-evtx/.venv-cpython/bin/python"
-    [python-evtx-pypy]="$HAS_PYTHON_EVTX_PYPY|$EXTERNAL_DIR/python-evtx/.venv-pypy/bin/python"
-  )
+  print_parser_row "rust"      "$rust_avail"     "$RUST_BIN"
+  print_parser_row "csharp"    "$HAS_CSHARP"     "$CSHARP_BIN"
+  print_parser_row "cs-wasm"   "$HAS_CS_WASM"    "$CS_WASM_CLI"
+  print_parser_row "rust-wasm" "$HAS_RUST_WASM"  "$RUST_WASM_CLI"
+  print_parser_row "js"        "$HAS_JS"         "$JS_CLI"
+  print_parser_row "libevtx"   "$HAS_LIBEVTX"    "$EXTERNAL_DIR/libevtx/evtxtools/evtxexport"
+  print_parser_row "velocidex" "$HAS_VELOCIDEX"  "$EXTERNAL_DIR/velocidex-evtx/dumpevtx"
+  print_parser_row "0xrawsec"  "$HAS_0XRAWSEC"   "$EXTERNAL_DIR/0xrawsec-evtx/evtxdump"
+  print_parser_row "pyevtx-rs" "$HAS_PYEVTX_RS"  "uv run --with evtx python"
+}
 
-  local ORDERED=(csharp cs-wasm rust-wasm js libevtx velocidex 0xrawsec pyevtx-rs python-evtx python-evtx-pypy)
-  for name in "${ORDERED[@]}"; do
-    local entry="${PARSER_MAP[$name]}"
-    local has_flag="${entry%%|*}"
-    local path="${entry#*|}"
-    local status="missing"
-    if [[ "$has_flag" == "true" ]]; then
-      status="available"
-    elif [[ -n "${PARSER_FILTER:-}" ]]; then
-      # Check if explicitly disabled by --parsers filter
-      IFS=',' read -ra SEL <<< "$PARSER_FILTER"
-      if ! printf '%s\n' "${SEL[@]}" | grep -qx "$name"; then
-        status="disabled"
-      fi
-    fi
-    printf "%-22s %-12s %s\n" "$name" "$status" "$path"
-  done
+# ── Table header ─────────────────────────────────────────────────────
+
+# Append a column to the table header and separator.
+add_column() {
+  tbl_header="$tbl_header $1 |"
+  tbl_sep="$tbl_sep----------------------|"
 }
 
 # Build the dynamic table header and separator based on active parsers.
@@ -49,72 +49,44 @@ list_parsers() {
 build_table_header() {
   tbl_header="| File |"
   tbl_sep="|----------------------|"
+
   if $HAS_CSHARP; then
-    tbl_header="$tbl_header C# (1 thread) | C# (8 threads) |"
-    tbl_sep="$tbl_sep----------------------|----------------------|"
+    add_column "C# (1 thread)"
+    add_column "C# (8 threads)"
   fi
-  if $HAS_CS_WASM; then
-    tbl_header="$tbl_header C# WASM |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
-  tbl_header="$tbl_header evtx (Rust - 1 thread) | evtx (Rust - 8 threads) |"
-  tbl_sep="$tbl_sep----------------------|----------------------|"
-  if $HAS_RUST_WASM; then
-    tbl_header="$tbl_header Rust WASM |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
-  if $HAS_JS; then
-    tbl_header="$tbl_header JS Node |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
-  if $HAS_LIBEVTX; then
-    tbl_header="$tbl_header libevtx (C) |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
-  if $HAS_VELOCIDEX; then
-    tbl_header="$tbl_header velocidex/evtx (Go) |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
-  if $HAS_0XRAWSEC; then
-    tbl_header="$tbl_header golang-evtx (Go) |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
-  if $HAS_PYEVTX_RS; then
-    tbl_header="$tbl_header pyevtx-rs |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
-  if $HAS_PYTHON_EVTX; then
-    tbl_header="$tbl_header python-evtx (CPython) |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
-  if $HAS_PYTHON_EVTX_PYPY; then
-    tbl_header="$tbl_header python-evtx (PyPy) |"
-    tbl_sep="$tbl_sep----------------------|"
-  fi
+  $HAS_CS_WASM   && add_column "C# WASM"
+  add_column "evtx (Rust - 1 thread)"
+  add_column "evtx (Rust - 8 threads)"
+  $HAS_RUST_WASM && add_column "Rust WASM"
+  $HAS_JS        && add_column "JS Node"
+  $HAS_LIBEVTX   && add_column "libevtx (C)"
+  $HAS_VELOCIDEX && add_column "velocidex/evtx (Go)"
+  $HAS_0XRAWSEC  && add_column "golang-evtx (Go)"
+  $HAS_PYEVTX_RS && add_column "pyevtx-rs"
 }
+
+# ── Markdown output ──────────────────────────────────────────────────
 
 # Write the metadata header block to $RESULTS (overwrites file).
 write_markdown_header() {
   {
     echo "# Parser Benchmark Comparison"
-    echo ""
+    echo
     echo "| Field | Value |"
     echo "|-------|-------|"
     echo "| **Date** | $(date -u '+%Y-%m-%d %H:%M:%S UTC') |"
-    $HAS_JS && echo "| **Node** | $(node --version) |"
+    if $HAS_JS; then echo "| **Node** | $(node --version) |"; fi
     echo "| **dotnet** | $(dotnet --version 2>/dev/null || echo 'N/A') |"
     echo "| **Platform** | $(uname -s) $(uname -m) |"
     echo "| **Rust binary** | \`evtx_dump --release\` |"
-    $NATIVE_ONLY && echo "| **Mode** | native-only (C# + Rust) |"
+    if $NATIVE_ONLY; then echo "| **Mode** | native-only (C# + Rust) |"; fi
     echo "| **Warmup** | $WARMUP |"
     echo "| **Runs** | $RUNS |"
-    $HAS_LIBEVTX && echo "| **libevtx (C)** | evtxexport (single-threaded) |"
-    $HAS_VELOCIDEX && echo "| **Velocidex (Go)** | dumpevtx |"
-    $HAS_0XRAWSEC && echo "| **0xrawsec (Go)** | evtxdump |"
-    $HAS_PYTHON_EVTX && echo "| **python-evtx** | CPython venv |"
-    $HAS_PYTHON_EVTX_PYPY && echo "| **python-evtx** | PyPy venv |"
-    $HAS_PYEVTX_RS && echo "| **pyevtx-rs** | via \`uv run --with evtx\` |"
-    echo ""
+    if $HAS_LIBEVTX; then echo "| **libevtx (C)** | evtxexport (single-threaded) |"; fi
+    if $HAS_VELOCIDEX; then echo "| **Velocidex (Go)** | dumpevtx |"; fi
+    if $HAS_0XRAWSEC; then echo "| **0xrawsec (Go)** | evtxdump |"; fi
+    if $HAS_PYEVTX_RS; then echo "| **pyevtx-rs** | via \`uv run --with evtx\` |"; fi
+    echo
   } > "$RESULTS"
 }
 
@@ -123,15 +95,15 @@ write_markdown_header() {
 write_results_table() {
   {
     echo "## Benchmark Results"
-    echo ""
+    echo
     echo "$tbl_header"
     echo "$tbl_sep"
     for row in "$@"; do
       echo "$row"
     done
-    echo ""
+    echo
     echo "**Note**: Numbers shown are \`real-time\` measurements (wall-clock time for invocation to complete). Single-run entries are marked with *(ran once)* — these parsers are too slow for repeated benchmarking via hyperfine."
-    echo ""
+    echo
   } >> "$RESULTS"
 }
 
@@ -144,27 +116,25 @@ write_summary() {
 
   {
     echo "## Summary"
-    echo ""
+    echo
     echo "- **Files tested:** $file_count"
     echo "- **Passed:** $pass_count"
-    $HAS_JS && echo "- **Failed (JS):** $fail_count"
-    $NATIVE_ONLY && echo "- **Mode:** native-only (C# + Rust)"
-    echo ""
+    if $HAS_JS; then echo "- **Failed (JS):** $fail_count"; fi
+    if $NATIVE_ONLY; then echo "- **Mode:** native-only (C# + Rust)"; fi
+    echo
     echo "### Internal parsers"
-    $HAS_CSHARP && echo "- C# native: yes"
+    if $HAS_CSHARP; then echo "- C# native: yes"; fi
     echo "- Rust native: yes"
     if ! $NATIVE_ONLY; then
-      $HAS_JS && echo "- JS Node: yes"
-      $HAS_RUST_WASM && echo "- Rust WASM: yes"
-      $HAS_CS_WASM && echo "- C# WASM (AOT): yes"
-      echo ""
+      if $HAS_JS; then echo "- JS Node: yes"; fi
+      if $HAS_RUST_WASM; then echo "- Rust WASM: yes"; fi
+      if $HAS_CS_WASM; then echo "- C# WASM (AOT): yes"; fi
+      echo
       echo "### External parsers"
-      $HAS_LIBEVTX && echo "- libevtx (C): yes" || echo "- libevtx (C): skipped"
-      $HAS_VELOCIDEX && echo "- Velocidex (Go): yes" || echo "- Velocidex (Go): skipped"
-      $HAS_0XRAWSEC && echo "- 0xrawsec (Go): yes" || echo "- 0xrawsec (Go): skipped"
-      $HAS_PYTHON_EVTX && echo "- python-evtx CPython: yes" || echo "- python-evtx CPython: skipped"
-      $HAS_PYTHON_EVTX_PYPY && echo "- python-evtx PyPy: yes" || echo "- python-evtx PyPy: skipped"
-      $HAS_PYEVTX_RS && echo "- pyevtx-rs: yes" || echo "- pyevtx-rs: skipped"
+      if $HAS_LIBEVTX;   then echo "- libevtx (C): yes";   else echo "- libevtx (C): skipped";   fi
+      if $HAS_VELOCIDEX;  then echo "- Velocidex (Go): yes"; else echo "- Velocidex (Go): skipped"; fi
+      if $HAS_0XRAWSEC;   then echo "- 0xrawsec (Go): yes";  else echo "- 0xrawsec (Go): skipped";  fi
+      if $HAS_PYEVTX_RS;  then echo "- pyevtx-rs: yes";      else echo "- pyevtx-rs: skipped";      fi
     fi
   } >> "$RESULTS"
 }

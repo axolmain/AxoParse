@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
+# shellcheck shell=bash
 # Functions to fetch and build external parsers for benchmarking.
-# Expects: RUST_DIR, RUST_BIN, EXTERNAL_DIR set by bench-all.sh
+# Expects: RUST_DIR, RUST_BIN, EXTERNAL_DIR, CS_WASM_PROJECT, CS_WASM_FRAMEWORK,
+#          JS_REPO_DIR, JS_CLI set by bench-all.sh
 
 fetch_and_build_rust_evtx() {
   log_info "Setting up Rust evtx parser..."
@@ -17,6 +19,33 @@ fetch_and_build_rust_evtx() {
   fi
 
   log_success "Rust evtx ready"
+}
+
+build_cs_wasm() {
+  log_info "Building C# WASM (AOT)..."
+
+  if [[ ! -f "$CS_WASM_PROJECT" ]]; then
+    log_warn "C# WASM project not found at $CS_WASM_PROJECT"
+    return 1
+  fi
+
+  local out_dir="$EXTERNAL_DIR/cs-wasm"
+  mkdir -p "$out_dir"
+
+  if ! dotnet publish "$CS_WASM_PROJECT" -c Release -o "$out_dir" --nologo -v quiet 2>/dev/null; then
+    return 1
+  fi
+
+  # Locate _framework in publish output (path varies by SDK version)
+  local found
+  found=$(find "$out_dir" -type d -name "_framework" -print -quit 2>/dev/null)
+  if [[ -n "$found" && -d "$found" ]]; then
+    CS_WASM_FRAMEWORK="$found"
+    log_success "C# WASM ready at $CS_WASM_FRAMEWORK"
+  else
+    log_warn "C# WASM _framework directory not found in publish output"
+    return 1
+  fi
 }
 
 build_rust_wasm() {
@@ -46,27 +75,22 @@ fetch_and_build_libevtx() {
     git clone --quiet https://github.com/libyal/libevtx.git "$dir"
   fi
 
-  local prev_dir="$PWD"
-  cd "$dir"
+  (
+    cd "$dir" || return 1
 
-  if [[ ! -f "evtxtools/evtxexport" ]] || ! binary_looks_compatible "evtxtools/evtxexport"; then
-    log_info "Building libevtx (this may take a while)..."
-    rm -f evtxtools/evtxexport 2>/dev/null || true
+    if [[ ! -f "evtxtools/evtxexport" ]] || ! binary_looks_compatible "evtxtools/evtxexport"; then
+      log_info "Building libevtx (this may take a while)..."
+      rm -f evtxtools/evtxexport 2>/dev/null || true
 
-    if [[ ! -d "libcerror" ]]; then
-      ./synclibs.sh 2>/dev/null
+      [[ ! -d "libcerror" ]] && ./synclibs.sh 2>/dev/null
+      [[ ! -f "configure" ]] && ./autogen.sh 2>/dev/null
+
+      ./configure --enable-static --disable-shared --enable-static-executables \
+        --quiet 2>/dev/null
+      make -j"$(ncpus)" --quiet 2>/dev/null
     fi
+  )
 
-    if [[ ! -f "configure" ]]; then
-      ./autogen.sh 2>/dev/null
-    fi
-
-    ./configure --enable-static --disable-shared --enable-static-executables \
-      --quiet 2>/dev/null
-    make -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)" --quiet 2>/dev/null
-  fi
-
-  cd "$prev_dir"
   log_success "C libevtx ready"
 }
 
@@ -79,15 +103,15 @@ fetch_and_build_velocidex() {
     git clone --quiet https://github.com/Velocidex/evtx.git "$dir"
   fi
 
-  local prev_dir="$PWD"
-  cd "$dir"
+  (
+    cd "$dir" || return 1
 
-  if [[ ! -f "dumpevtx" ]] || ! binary_looks_compatible "dumpevtx"; then
-    log_info "Building Velocidex dumpevtx..."
-    go build -o dumpevtx ./cmd/ 2>/dev/null
-  fi
+    if [[ ! -f "dumpevtx" ]] || ! binary_looks_compatible "dumpevtx"; then
+      log_info "Building Velocidex dumpevtx..."
+      go build -o dumpevtx ./cmd/ 2>/dev/null
+    fi
+  )
 
-  cd "$prev_dir"
   log_success "Go Velocidex ready"
 }
 
@@ -100,25 +124,31 @@ fetch_and_build_0xrawsec() {
     git clone --quiet https://github.com/0xrawsec/golang-evtx.git "$dir"
   fi
 
-  local prev_dir="$PWD"
-  cd "$dir"
+  (
+    cd "$dir" || return 1
 
-  if [[ ! -f "evtxdump" ]] || ! binary_looks_compatible "evtxdump"; then
-    log_info "Building 0xrawsec evtxdump..."
+    if [[ ! -f "evtxdump" ]] || ! binary_looks_compatible "evtxdump"; then
+      log_info "Building 0xrawsec evtxdump..."
 
-    # Fix missing Version/CommitID if needed
-    if ! grep -q "Version.*=.*\"" tools/evtxdump/evtxdump.go 2>/dev/null; then
-      sed -i.bak '/^const (/,/^)/{
-        /conditions;`$/a\
+      # Patch missing Version/CommitID constants if needed
+      if ! grep -q "Version.*=.*\"" tools/evtxdump/evtxdump.go 2>/dev/null; then
+        local tmpf
+        tmpf=$(mktemp)
+        if sed '/^const (/,/^)/{
+          /conditions;`$/a\
 	Version  = "dev"\
 	CommitID = "unknown"
-      }' tools/evtxdump/evtxdump.go 2>/dev/null || true
+        }' tools/evtxdump/evtxdump.go > "$tmpf" 2>/dev/null; then
+          mv "$tmpf" tools/evtxdump/evtxdump.go
+        else
+          rm -f "$tmpf"
+        fi
+      fi
+
+      go build -o evtxdump ./tools/evtxdump/ 2>/dev/null
     fi
+  )
 
-    go build -o evtxdump ./tools/evtxdump/ 2>/dev/null
-  fi
-
-  cd "$prev_dir"
   log_success "Go 0xrawsec ready"
 }
 
@@ -141,38 +171,4 @@ fetch_and_build_js_evtx() {
     --outfile="$JS_CLI" --log-level=warning
 
   log_success "JS evtx parser ready at $JS_CLI"
-}
-
-fetch_and_setup_python_evtx() {
-  log_info "Setting up Python python-evtx..."
-  local dir="$EXTERNAL_DIR/python-evtx"
-
-  if [[ ! -d "$dir" ]]; then
-    log_info "Cloning python-evtx..."
-    git clone --quiet https://github.com/williballenthin/python-evtx.git "$dir"
-  fi
-
-  local prev_dir="$PWD"
-  cd "$dir"
-
-  # Setup with CPython
-  if [[ ! -d ".venv-cpython" ]]; then
-    log_info "Setting up CPython venv..."
-    uv venv --python 3.13 .venv-cpython 2>/dev/null
-    uv pip install --quiet -p .venv-cpython/bin/python -e . 2>/dev/null
-  fi
-
-  # Setup with PyPy
-  if [[ ! -d ".venv-pypy" ]]; then
-    log_info "Setting up PyPy venv..."
-    uv python install pypy3.10 2>/dev/null || true
-    if uv venv --python pypy3.10 .venv-pypy 2>/dev/null; then
-      uv pip install --quiet -p .venv-pypy/bin/python -e . 2>/dev/null
-    else
-      log_warn "PyPy setup failed, skipping"
-    fi
-  fi
-
-  cd "$prev_dir"
-  log_success "Python python-evtx ready"
 }
