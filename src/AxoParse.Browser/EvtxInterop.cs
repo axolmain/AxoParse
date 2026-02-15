@@ -1,10 +1,12 @@
 using System.Runtime.InteropServices.JavaScript;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using AxoParse.Evtx;
 
 namespace AxoParse.Browser;
 
+[SupportedOSPlatform("browser")]
 public partial class EvtxInterop
 {
     private static readonly string[] LevelNames = ["", "Critical", "Error", "Warning", "Information", "Verbose"];

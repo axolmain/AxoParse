@@ -6,10 +6,7 @@
         <PackageProjectUrl>https://github.com/axolmain/AxoParse</PackageProjectUrl>
         <RepositoryUrl>https://github.com/axolmain/AxoParse</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
-    </PropertyGroup>
 
-    <!-- Source Link: enables stepping into source during debugging -->
-    <PropertyGroup>
         <PublishRepositoryUrl>true</PublishRepositoryUrl>
         <EmbedUntrackedSources>true</EmbedUntrackedSources>
         <IncludeSymbols>true</IncludeSymbols>

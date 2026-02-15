@@ -2,12 +2,32 @@ using System.Buffers.Binary;
 
 namespace AxoParse.Evtx;
 
+/// <summary>
+/// Bit flags stored at offset 120 of the EVTX file header (4 bytes).
+/// The file header indicates file state and integrity-check availability.
+/// </summary>
 [Flags]
 public enum HeaderFlags : uint
 {
+    /// <summary>
+    /// No specific flag — file is clean and not full.
+    /// </summary>
     None = 0x0,
+
+    /// <summary>
+    /// Log was not closed cleanly (dirty shutdown/crash). Existing records are valid, 
+    /// but the log may be truncated at the end.
+    /// </summary>
     Dirty = 0x1,
+
+    /// <summary>
+    /// Log has reached its configured maximum size.
+    /// </summary>
     Full = 0x2,
+
+    /// <summary>
+    /// Header CRC32 checksum is not present or should not be validated.
+    /// </summary>
     NoCrc32 = 0x4,
 }
 
@@ -39,6 +59,12 @@ public readonly record struct EvtxFileHeader(
     HeaderFlags FileFlags,
     uint Checksum)
 {
+    /// <summary>
+    /// Parses the first 128 bytes of a raw EVTX file into an <see cref="EvtxFileHeader"/>.
+    /// Validates the 8-byte "ElfFile\0" magic signature at offset 0.
+    /// </summary>
+    /// <param name="data">Raw file bytes; must be at least 128 bytes long.</param>
+    /// <returns>A populated <see cref="EvtxFileHeader"/> with all header fields.</returns>
     public static EvtxFileHeader ParseEvtxFileHeader(byte[] data) => ParseBytes(data);
 
     private static EvtxFileHeader ParseBytes(ReadOnlySpan<byte> data)
