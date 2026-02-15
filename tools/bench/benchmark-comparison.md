@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Date** | 2026-02-15 10:23:45 UTC |
+| **Date** | 2026-02-15 18:13:14 UTC |
 | **Node** | v25.6.0 |
 | **dotnet** | 10.0.101 |
 | **Platform** | Darwin arm64 |
@@ -18,8 +18,8 @@
 
 | File | C# (1 thread) | C# (8 threads) | C# WASM | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node | libevtx (C) | velocidex/evtx (Go) | golang-evtx (Go) | pyevtx-rs |
 |----------------------|----------------------|----------------------|----------------------|----------------------|----------------------|----------------------|----------------------|----------------------|----------------------|----------------------|
-| 30M security_big_sample.evtx (XML) | 119.3 ms ± 3.4 ms | 71.9 ms ± 0.6 ms | N/A (web only) | 302.3 ms ± 1.7 ms | 126.2 ms ± 83.3 ms | 1.947 s ± 0.017 s | 2.697 s ± 0.029 s | No support | No support | ERR |
-| 30M security_big_sample.evtx (JSON) | 326.8 ms ± 7.0 ms | 153.7 ms ± 3.6 ms |  |  |  |  | No support |  |  | ERR |
+| 30M security_big_sample.evtx (XML) | 58.9 ms ± 2.2 ms | 47.5 ms ± 4.7 ms | N/A (web only) | 155.3 ms ± 0.7 ms | 56.0 ms ± 0.6 ms | 1.005 s ± 0.017 s | 1.377 s ± 0.019 s | No support | No support | ERR |
+| 30M security_big_sample.evtx (JSON) | 165.6 ms ± 1.6 ms | 94.8 ms ± 2.5 ms | 122.1 ms ± 13.0 ms | 139.8 ms ± 1.0 ms | 53.4 ms ± 2.6 ms | 1.332 s ± 0.021 s | No support | 2.212 s ± 0.017 s | 873.8 ms ± 18.5 ms | ERR |
 
 **Note**: Numbers shown are `real-time` measurements (wall-clock time for invocation to complete). Single-run entries are marked with *(ran once)* — these parsers are too slow for repeated benchmarking via hyperfine.
 

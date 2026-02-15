@@ -26,6 +26,7 @@ get_formatted() {
   node -e "
     const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
     const r = d.results[parseInt(process.argv[2])];
+    if (!r || r.mean == null) { console.log('ERR'); process.exit(0); }
     const mean = r.mean, sd = r.stddev;
     if (mean < 1.0) {
       console.log((mean*1000).toFixed(1) + ' ms \u00b1 ' + (sd*1000).toFixed(1) + ' ms');

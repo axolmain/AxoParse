@@ -87,6 +87,7 @@ run_benchmark() {
   fi
 
   hyperfine --warmup "$WARMUP" --runs "$RUNS" --style basic \
+    --ignore-failure \
     --export-json "$tmp_file" \
     "${cmds[@]}" \
     2>&1 | sed 's/^/    /' >&2
