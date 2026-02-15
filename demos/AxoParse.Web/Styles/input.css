@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/* Blazor error UI — shown via JS when an unhandled exception occurs */
+#blazor-error-ui {
+    display: none;
+}
+
+/* Virtual grid: CSS Grid layout replacing <table> to avoid Virtualize spacer div issues */
+.vgrid-wrapper {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.vgrid-scroll {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-x: auto;
+    min-height: 0;
+}
+
+.vgrid-header,
+.vgrid-row {
+    display: grid;
+    grid-template-columns: var(--grid-cols);
+}
+
+.vgrid-header {
+    background-color: #1a1a2e;
+    color: #fff;
+    font-weight: 600;
+    font-size: 0.875rem;
+    flex-shrink: 0;
+}
+
+.vgrid-header .vgrid-cell {
+    padding: 6px 8px;
+    border-bottom: 2px solid #32383e;
+    user-select: none;
+}
+
+.vgrid-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.vgrid-row {
+    font-size: 0.875rem;
+    border-bottom: 1px solid #e5e7eb;
+}
+
+.vgrid-row-even { background-color: #fff; }
+.vgrid-row-odd  { background-color: #f9fafb; }
+.vgrid-row:hover { background-color: #eef2ff; }
+
+.vgrid-cell {
+    padding: 4px 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}

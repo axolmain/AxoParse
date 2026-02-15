@@ -114,6 +114,41 @@ Libraries benched:
 
 **Note**: Numbers shown are `real-time` measurements (wall-clock time for invocation to complete). Single-run entries are marked with *(ran once)* — these parsers are too slow for repeated benchmarking via hyperfine.
 
+## Web Demo (Blazor WASM)
+
+Pre-req (optional if you don't want to test the blazor server locally):
+- [dotnet-serve](https://github.com/natemcmaster/dotnet-serve)
+
+`demos/AxoParse.Web` is a Blazor WebAssembly app that parses `.evtx` files entirely in-browser — no server required.
+
+
+```bash
+# Dev (interpreted, slower)
+dotnet run --project AxoParse.Web
+
+# AOT-compiled (matches benchmark performance)
+dotnet publish demos/AxoParse.Web -c Release -o demos/AxoParse.Web/publish
+dotnet serve -d ./demos/AxoParse.Web/publish/wwwroot -p 5271
+```
+
+> `dotnet run` uses the IL interpreter. For full performance, publish with AOT and serve the static output.
+
+## Web Demo (React + WASM)
+
+`demos/AxoParse.React` is a React + TypeScript app that loads the AxoParse WASM module and renders parsed events with TanStack Table.
+
+```bash
+# 1. Build the WASM module
+dotnet publish src/AxoParse.Browser -c Release -o demos/AxoParse.React/public/wasm
+
+# 2. Install deps & start dev server
+cd demos/AxoParse.React
+npm install
+npm run dev
+```
+
+> The dev server sets `Cross-Origin-Embedder-Policy` and `Cross-Origin-Opener-Policy` headers required by the .NET WASM runtime.
+
 ## Installation
 
 tbd
