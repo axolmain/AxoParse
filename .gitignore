@@ -484,3 +484,6 @@ $RECYCLE.BIN/
 *.swp
 *trace.json
 **/personal-notes/
+
+# esbuild benchmark bundle
+tools/bench/bench-cli.mjs
