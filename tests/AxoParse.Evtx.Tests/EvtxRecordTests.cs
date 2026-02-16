@@ -71,6 +71,28 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
         testOutputHelper.WriteLine($"[security.evtx chunk 0] Validated Size==SizeCopy for {count} records");
     }
 
+    /// <summary>
+    /// Verifies that WrittenTimeUtc returns a valid UTC DateTime derived from the FILETIME value.
+    /// </summary>
+    [Fact]
+    public void WrittenTimeUtcReturnsValidDateTime()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        int chunkStart = FileHeaderSize;
+
+        ReadOnlySpan<byte> recordData = data.AsSpan(chunkStart + ChunkHeaderSize);
+        EvtxRecord? record = EvtxRecord.ParseEvtxRecord(recordData, chunkStart + ChunkHeaderSize);
+
+        Assert.NotNull(record);
+        DateTime writtenTime = record.Value.WrittenTimeUtc;
+        Assert.Equal(DateTimeKind.Utc, writtenTime.Kind);
+        Assert.True(writtenTime.Year >= 2000 && writtenTime.Year <= 2100,
+            $"WrittenTimeUtc {writtenTime} should be a reasonable date");
+        Assert.Equal(DateTime.FromFileTimeUtc((long)record.Value.WrittenTime), writtenTime);
+
+        testOutputHelper.WriteLine($"Record {record.Value.EventRecordId} WrittenTimeUtc: {writtenTime:O}");
+    }
+
     [Fact]
     public void ParsesAllRecordsInFirstChunk()
     {

@@ -71,4 +71,38 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
             Assert.True(chunk.Templates.Count > 0, $"Chunk {i}: no templates");
         }
     }
+
+    /// <summary>
+    /// Verifies that GetEvent() returns an EvtxEvent matching the parallel array data.
+    /// </summary>
+    [Fact]
+    public void GetEventMatchesDirectIndexAccess()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data);
+
+        EvtxChunk chunk = parser.Chunks[0];
+        for (int i = 0; i < chunk.Records.Count; i++)
+        {
+            EvtxEvent evt = chunk.GetEvent(i);
+            Assert.Equal(chunk.Records[i], evt.Record);
+            Assert.Equal(chunk.ParsedXml[i], evt.Xml);
+            Assert.True(evt.IsSuccess);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that RenderDiagnostics is empty when all records in a clean file render successfully.
+    /// </summary>
+    [Fact]
+    public void RenderDiagnosticsEmptyOnCleanChunks()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data);
+
+        foreach (EvtxChunk chunk in parser.Chunks)
+        {
+            Assert.Empty(chunk.RenderDiagnostics);
+        }
+    }
 }

@@ -72,6 +72,12 @@ public class EvtxChunk
     public IReadOnlyList<byte[]>? ParsedJson { get; }
 
     /// <summary>
+    /// Diagnostic messages for events where BinXml rendering failed, keyed by record index.
+    /// Empty if all events rendered successfully.
+    /// </summary>
+    public IReadOnlyDictionary<int, string> RenderDiagnostics { get; }
+
+    /// <summary>
     /// Constructs an EvtxChunk from pre-parsed components.
     /// </summary>
     /// <param name="header">Parsed chunk header.</param>
@@ -79,35 +85,66 @@ public class EvtxChunk
     /// <param name="records">Parsed event records.</param>
     /// <param name="parsedXml">Rendered XML strings (empty array when using JSON output).</param>
     /// <param name="parsedJson">Rendered JSON byte arrays, or null when using XML output.</param>
+    /// <param name="renderDiagnostics">Diagnostic messages for failed renders, keyed by record index.</param>
     private EvtxChunk(EvtxChunkHeader header, Dictionary<uint, BinXmlTemplateDefinition> templates,
-                      List<EvtxRecord> records, string[] parsedXml, byte[][]? parsedJson = null)
+                      List<EvtxRecord> records, string[] parsedXml, byte[][]? parsedJson = null,
+                      Dictionary<int, string>? renderDiagnostics = null)
     {
         Header = header;
         Templates = templates;
         Records = records;
         ParsedXml = parsedXml;
         ParsedJson = parsedJson;
+        RenderDiagnostics = renderDiagnostics ?? new Dictionary<int, string>();
     }
 
     /// <summary>
-    /// Walks event records within a chunk's data area, resilient to mid-chunk corruption.
-    /// Scans from the end of the 512-byte chunk header up to the free-space boundary,
+    /// Returns the <see cref="EvtxEvent"/> at the specified index within this chunk,
+    /// pairing record metadata with rendered output and any diagnostic info.
+    /// </summary>
+    /// <param name="index">Zero-based index into <see cref="Records"/>.</param>
+    /// <returns>The event at the given index.</returns>
+    public EvtxEvent GetEvent(int index)
+    {
+        EvtxRecord record = Records[index];
+        RenderDiagnostics.TryGetValue(index, out string? diagnostic);
+
+        if (ParsedJson is not null)
+        {
+            return new EvtxEvent(
+                Record: record,
+                Xml: string.Empty,
+                Json: ParsedJson[index],
+                Diagnostic: diagnostic);
+        }
+
+        return new EvtxEvent(
+            Record: record,
+            Xml: ParsedXml[index],
+            Json: ReadOnlyMemory<byte>.Empty,
+            Diagnostic: diagnostic);
+    }
+
+    /// <summary>
+    /// Walks event records within a chunk data region, resilient to mid-chunk corruption.
+    /// Scans from offset 512 (end of chunk header) up to <paramref name="dataEnd"/>,
     /// skipping non-record regions (4-byte aligned scan) and records that fail size/integrity
     /// validation. Zero-filled or corrupt regions are walked through — valid records after
-    /// a corrupted gap are still recovered (unlike the previous behavior which broke on zero magic).
+    /// a corrupted gap are still recovered.
     /// </summary>
     /// <param name="chunkData">Full 64KB chunk span.</param>
-    /// <param name="header">Parsed chunk header (provides record count estimate and free-space offset).</param>
     /// <param name="chunkFileOffset">Absolute file offset of this chunk.</param>
+    /// <param name="dataEnd">Upper scan boundary (exclusive). Use <see cref="EvtxChunkHeader.FreeSpaceOffset"/> for normal chunks, <c>chunkData.Length</c> for headerless recovery.</param>
+    /// <param name="capacityHint">Initial list capacity hint. Use expected record count when available, 0 for unknown.</param>
     /// <returns>List of successfully parsed records.</returns>
-    private static List<EvtxRecord> ReadRecords(ReadOnlySpan<byte> chunkData, EvtxChunkHeader header, int chunkFileOffset)
+    private static List<EvtxRecord> ReadRecords(ReadOnlySpan<byte> chunkData, int chunkFileOffset,
+                                                 uint dataEnd, int capacityHint = 0)
     {
-        uint freeSpaceEnd = Math.Min(header.FreeSpaceOffset, (uint)chunkData.Length);
-        int expectedRecords = (int)(header.LastEventRecordId - header.FirstEventRecordId + 1);
-        List<EvtxRecord> records = new List<EvtxRecord>(expectedRecords);
+        uint scanEnd = Math.Min(dataEnd, (uint)chunkData.Length);
+        List<EvtxRecord> records = new List<EvtxRecord>(capacityHint);
 
         int offset = ChunkHeaderSize;
-        while (offset + 28 <= freeSpaceEnd)
+        while (offset + 28 <= scanEnd)
         {
             ReadOnlySpan<byte> magic = chunkData.Slice(offset, 4);
 
@@ -132,39 +169,49 @@ public class EvtxChunk
     }
 
     /// <summary>
-    /// Scans a 64KB region for recoverable event records without requiring a valid chunk header.
-    /// Used for chunks with destroyed "ElfChnk\0" signatures where header parsing would fail.
+    /// Renders BinXml for all records, capturing diagnostics for any that fail.
     /// </summary>
-    /// <param name="chunkData">Full 64KB region span.</param>
-    /// <param name="chunkFileOffset">Absolute file offset of this region.</param>
-    /// <returns>List of successfully parsed records (may be empty).</returns>
-    private static List<EvtxRecord> ReadRecordsHeaderless(ReadOnlySpan<byte> chunkData, int chunkFileOffset)
+    /// <param name="records">Records to render.</param>
+    /// <param name="binXml">Configured BinXml parser for this chunk.</param>
+    /// <param name="format">Output format (XML or JSON).</param>
+    /// <returns>Rendered XML array, rendered JSON array (or null), and diagnostics for failed records.</returns>
+    private static (string[] xml, byte[][]? json, Dictionary<int, string> diagnostics)
+        RenderRecords(List<EvtxRecord> records, BinXmlParser binXml, OutputFormat format)
     {
-        List<EvtxRecord> records = new List<EvtxRecord>();
+        Dictionary<int, string> diagnostics = new();
 
-        int offset = ChunkHeaderSize;
-        while (offset + 28 <= chunkData.Length)
+        if (format == OutputFormat.Json)
         {
-            ReadOnlySpan<byte> magic = chunkData.Slice(offset, 4);
-
-            if (!magic.SequenceEqual("\x2a\x2a\x00\x00"u8))
+            byte[][] parsedJson = new byte[records.Count][];
+            for (int i = 0; i < records.Count; i++)
             {
-                offset += 4;
-                continue;
+                try
+                {
+                    parsedJson[i] = binXml.ParseRecordJson(records[i]);
+                }
+                catch (ArgumentOutOfRangeException ex)
+                {
+                    parsedJson[i] = Array.Empty<byte>();
+                    diagnostics[i] = $"BinXml render failed: {ex.Message}";
+                }
             }
-
-            EvtxRecord? record = EvtxRecord.ParseEvtxRecord(chunkData[offset..], chunkFileOffset + offset);
-            if (record == null)
-            {
-                offset += 4;
-                continue;
-            }
-
-            records.Add(record.Value);
-            offset += (int)record.Value.Size;
+            return (Array.Empty<string>(), parsedJson, diagnostics);
         }
 
-        return records;
+        string[] parsedXml = new string[records.Count];
+        for (int i = 0; i < records.Count; i++)
+        {
+            try
+            {
+                parsedXml[i] = binXml.ParseRecord(records[i]);
+            }
+            catch (ArgumentOutOfRangeException ex)
+            {
+                parsedXml[i] = string.Empty;
+                diagnostics[i] = $"BinXml render failed: {ex.Message}";
+            }
+        }
+        return (parsedXml, null, diagnostics);
     }
 
     /// <summary>
@@ -182,55 +229,51 @@ public class EvtxChunk
                                                 OutputFormat format = OutputFormat.Xml)
     {
         ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, ChunkSize);
-        List<EvtxRecord> records = ReadRecordsHeaderless(chunkData, chunkFileOffset);
+        List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, (uint)chunkData.Length);
         if (records.Count == 0)
             return null;
 
         Dictionary<uint, BinXmlTemplateDefinition> templates = new();
         BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache);
 
-        // Parse BinXml and filter out records that fail (missing templates, corrupt data).
-        // Only records that produce non-empty output are kept.
-        List<EvtxRecord> validRecords = new List<EvtxRecord>(records.Count);
+        // Render and filter — only keep records that produce non-empty output.
+        // Diagnostic indices must be remapped since filtering changes the record list positions.
+        (string[] xml, byte[][]? json, Dictionary<int, string> rawDiagnostics) = RenderRecords(records, binXml, format);
 
-        if (format == OutputFormat.Json)
+        List<EvtxRecord> validRecords = new List<EvtxRecord>(records.Count);
+        Dictionary<int, string> remappedDiagnostics = new();
+        if (json is not null)
         {
-            List<byte[]> jsonResults = new List<byte[]>(records.Count);
+            List<byte[]> validJson = new List<byte[]>(records.Count);
             for (int i = 0; i < records.Count; i++)
             {
-                try
+                if (json[i].Length > 0)
                 {
-                    byte[] json = binXml.ParseRecordJson(records[i]);
-                    if (json.Length > 0)
-                    {
-                        validRecords.Add(records[i]);
-                        jsonResults.Add(json);
-                    }
+                    if (rawDiagnostics.TryGetValue(i, out string? msg))
+                        remappedDiagnostics[validRecords.Count] = msg;
+                    validRecords.Add(records[i]);
+                    validJson.Add(json[i]);
                 }
-                catch (ArgumentOutOfRangeException) { }
             }
             if (validRecords.Count == 0)
                 return null;
-            return new EvtxChunk(default, templates, validRecords, Array.Empty<string>(), jsonResults.ToArray());
+            return new EvtxChunk(default, templates, validRecords, Array.Empty<string>(), validJson.ToArray(), remappedDiagnostics);
         }
 
-        List<string> xmlResults = new List<string>(records.Count);
+        List<string> validXml = new List<string>(records.Count);
         for (int i = 0; i < records.Count; i++)
         {
-            try
+            if (!string.IsNullOrEmpty(xml[i]))
             {
-                string xml = binXml.ParseRecord(records[i]);
-                if (!string.IsNullOrEmpty(xml))
-                {
-                    validRecords.Add(records[i]);
-                    xmlResults.Add(xml);
-                }
+                if (rawDiagnostics.TryGetValue(i, out string? msg))
+                    remappedDiagnostics[validRecords.Count] = msg;
+                validRecords.Add(records[i]);
+                validXml.Add(xml[i]);
             }
-            catch (ArgumentOutOfRangeException) { }
         }
         if (validRecords.Count == 0)
             return null;
-        return new EvtxChunk(default, templates, validRecords, xmlResults.ToArray());
+        return new EvtxChunk(default, templates, validRecords, validXml.ToArray(), null, remappedDiagnostics);
     }
 
     /// <summary>
@@ -253,41 +296,13 @@ public class EvtxChunk
             BinXmlTemplateDefinition.PreloadFromChunk(chunkData,
                 MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128)), chunkFileOffset);
 
-        List<EvtxRecord> records = ReadRecords(chunkData, header, chunkFileOffset);
+        int expectedRecords = (int)(header.LastEventRecordId - header.FirstEventRecordId + 1);
+        List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, header.FreeSpaceOffset, expectedRecords);
 
-        // Parse BinXml for each record
         BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache);
+        (string[] xml, byte[][]? json, Dictionary<int, string> diagnostics) = RenderRecords(records, binXml, format);
 
-        if (format == OutputFormat.Json)
-        {
-            byte[][] parsedJson = new byte[records.Count][];
-            for (int i = 0; i < records.Count; i++)
-            {
-                try
-                {
-                    parsedJson[i] = binXml.ParseRecordJson(records[i]);
-                }
-                catch (ArgumentOutOfRangeException)
-                {
-                    parsedJson[i] = Array.Empty<byte>();
-                }
-            }
-            return new EvtxChunk(header, templates, records, Array.Empty<string>(), parsedJson);
-        }
-
-        string[] parsedXml = new string[records.Count];
-        for (int i = 0; i < records.Count; i++)
-        {
-            try
-            {
-                parsedXml[i] = binXml.ParseRecord(records[i]);
-            }
-            catch (ArgumentOutOfRangeException)
-            {
-                parsedXml[i] = "";
-            }
-        }
-        return new EvtxChunk(header, templates, records, parsedXml);
+        return new EvtxChunk(header, templates, records, xml, json, diagnostics);
     }
 
     /// <summary>
@@ -304,7 +319,8 @@ public class EvtxChunk
             BinXmlTemplateDefinition.PreloadFromChunk(chunkData,
                 MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128)), chunkFileOffset);
 
-        List<EvtxRecord> records = ReadRecords(chunkData, header, chunkFileOffset);
+        int expectedRecords = (int)(header.LastEventRecordId - header.FirstEventRecordId + 1);
+        List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, header.FreeSpaceOffset, expectedRecords);
 
         return new EvtxChunk(header, templates, records, Array.Empty<string>());
     }

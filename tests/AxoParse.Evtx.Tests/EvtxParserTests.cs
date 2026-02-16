@@ -70,4 +70,88 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
             $"[sample_with_a_bad_chunk_magic.evtx] Parsed {parser.Chunks.Count} valid chunks, {parser.TotalRecords} records");
     }
 
+    /// <summary>
+    /// Verifies that GetEvents() returns the same total record count as TotalRecords.
+    /// </summary>
+    [Fact]
+    public void GetEventsReturnsAllRecords()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data);
+
+        int eventCount = 0;
+        foreach (EvtxEvent evt in parser.GetEvents())
+        {
+            eventCount++;
+            Assert.False(string.IsNullOrEmpty(evt.Xml));
+        }
+
+        Assert.Equal(parser.TotalRecords, eventCount);
+        testOutputHelper.WriteLine($"GetEvents() yielded {eventCount} events matching TotalRecords");
+    }
+
+    /// <summary>
+    /// Verifies that GetEvents() with JSON format populates Json and leaves Xml empty.
+    /// </summary>
+    [Fact]
+    public void GetEventsJsonPopulatesJsonField()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data, format: OutputFormat.Json);
+
+        bool found = false;
+        foreach (EvtxEvent evt in parser.GetEvents())
+        {
+            Assert.Equal(string.Empty, evt.Xml);
+            Assert.True(evt.Json.Length > 0);
+            Assert.True(evt.IsSuccess);
+            found = true;
+            break;
+        }
+        Assert.True(found);
+    }
+
+    /// <summary>
+    /// Verifies that GetEvents() preserves record ordering across chunks (single-threaded).
+    /// </summary>
+    [Fact]
+    public void GetEventsPreservesChunkOrder()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+
+        ulong previousId = 0;
+        foreach (EvtxEvent evt in parser.GetEvents())
+        {
+            Assert.True(evt.Record.EventRecordId > previousId,
+                $"Record {evt.Record.EventRecordId} should be > {previousId}");
+            previousId = evt.Record.EventRecordId;
+        }
+    }
+
+    /// <summary>
+    /// Verifies that a pre-cancelled token throws OperationCanceledException immediately.
+    /// </summary>
+    [Fact]
+    public void CancellationTokenCancelsParsing()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        CancellationTokenSource cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() =>
+            EvtxParser.Parse(data, cancellationToken: cts.Token));
+    }
+
+    /// <summary>
+    /// Verifies that the Diagnostics collection is empty for a clean parse with no issues.
+    /// </summary>
+    [Fact]
+    public void DiagnosticsEmptyOnCleanParse()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data);
+
+        Assert.Empty(parser.Diagnostics);
+    }
 }

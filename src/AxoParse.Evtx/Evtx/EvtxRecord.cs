@@ -48,6 +48,11 @@ public readonly record struct EvtxRecord(
     uint SizeCopy)
 {
     /// <summary>
+    /// Converts the FILETIME <see cref="WrittenTime"/> to a UTC <see cref="DateTime"/>.
+    /// </summary>
+    public DateTime WrittenTimeUtc => DateTime.FromFileTimeUtc((long)WrittenTime);
+
+    /// <summary>
     /// Returns the event data as a span into the original file buffer.
     /// </summary>
     /// <param name="fileData">The complete EVTX file bytes.</param>
