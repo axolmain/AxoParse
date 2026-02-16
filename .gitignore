@@ -483,6 +483,7 @@ $RECYCLE.BIN/
 # Vim temporary swap files
 *.swp
 *trace.json
+*.nettrace
 **/personal-notes/
 
 # esbuild benchmark bundle
@@ -491,3 +492,6 @@ demos/AxoParse.React/public/wasm/
 demos/AxoParse.React/dist/            
 demos/AxoParse.Web/publish/                                                                                                                                                                       
 demos/publishclear/
+
+# npm package — WASM framework populated by CI
+packages/axoparse-wasm/_framework/
