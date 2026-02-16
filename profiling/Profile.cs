@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using AxoParse.Evtx;
 using AxoParse.Evtx.Evtx;
 
 string file = args.Length > 0 ? args[0] : "tests/data/security_big_sample.evtx";
