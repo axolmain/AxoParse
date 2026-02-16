@@ -178,7 +178,7 @@ public class EvtxChunk
     /// <param name="format">Output format for rendered event records.</param>
     /// <returns>A recovered <see cref="EvtxChunk"/> with rendered output, or null if no records found.</returns>
     internal static EvtxChunk? ParseHeaderless(byte[] fileData, int chunkFileOffset,
-                                                ConcurrentDictionary<Guid, CompiledTemplate?> compiledCache,
+                                                Dictionary<Guid, CompiledTemplate?> compiledCache,
                                                 OutputFormat format = OutputFormat.Xml)
     {
         ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, ChunkSize);
@@ -243,7 +243,7 @@ public class EvtxChunk
     /// <param name="format">Output format for rendered event records.</param>
     /// <returns>A fully parsed <see cref="EvtxChunk"/> with rendered output.</returns>
     internal static EvtxChunk Parse(ReadOnlySpan<byte> chunkData, int chunkFileOffset,
-                                    byte[] fileData, ConcurrentDictionary<Guid, CompiledTemplate?> compiledCache,
+                                    byte[] fileData, Dictionary<Guid, CompiledTemplate?> compiledCache,
                                     OutputFormat format = OutputFormat.Xml)
     {
         EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
@@ -315,12 +315,13 @@ public class EvtxChunk
     /// </summary>
     /// <param name="fileData">Complete EVTX file bytes.</param>
     /// <param name="chunkFileOffset">Absolute byte offset of this chunk within the EVTX file.</param>
-    /// <param name="compiledCache">Thread-safe cache of compiled templates shared across chunks.</param>
+    /// <param name="compiledCache">Thread-local cache of compiled templates.</param>
     /// <param name="format">Output format for rendered event records.</param>
     /// <returns>A fully parsed <see cref="EvtxChunk"/> with rendered output.</returns>
-    internal static EvtxChunk Parse(byte[] fileData, int chunkFileOffset,
-                                    ConcurrentDictionary<Guid, CompiledTemplate?> compiledCache,
-                                    OutputFormat format = OutputFormat.Xml)
+    internal static EvtxChunk Parse(byte[] fileData,
+                                    int chunkFileOffset,
+                                    Dictionary<Guid, CompiledTemplate?> compiledCache,
+                                    OutputFormat format)
     {
         ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, ChunkSize);
         return Parse(chunkData, chunkFileOffset, fileData, compiledCache, format);

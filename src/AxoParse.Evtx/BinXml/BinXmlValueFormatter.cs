@@ -92,6 +92,24 @@ internal static class BinXmlValueFormatter
     }
 
     /// <summary>
+    /// Reads a length-prefixed UTF-16LE string as a span, avoiding a heap allocation.
+    /// The returned span points directly into <paramref name="data"/> and is only valid
+    /// while the underlying buffer is alive.
+    /// </summary>
+    /// <param name="data">BinXml byte stream.</param>
+    /// <param name="pos">Current read position; advanced past the 2-byte length prefix and string bytes.</param>
+    /// <returns>A <see cref="ReadOnlySpan{T}"/> over the decoded characters.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static ReadOnlySpan<char> ReadUnicodeTextString(ReadOnlySpan<byte> data, ref int pos)
+    {
+        ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
+        pos += 2;
+        ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(data.Slice(pos, numChars * 2));
+        pos += numChars * 2;
+        return chars;
+    }
+
+    /// <summary>
     /// Appends text to the string builder with XML entity escaping (&amp;, &lt;, &gt;, &quot;, &apos;).
     /// Uses a fast path for text containing no special characters. Replaces unpaired surrogates with U+FFFD.
     /// </summary>

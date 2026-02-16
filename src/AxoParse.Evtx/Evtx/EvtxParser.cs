@@ -93,10 +93,24 @@ public class EvtxParser
         int parallelism = maxThreads > 0 ? maxThreads : -1;
         Parallel.For(0, validCount,
             new ParallelOptions { MaxDegreeOfParallelism = parallelism },
-            i =>
+            () => new Dictionary<Guid, CompiledTemplate?>(), // thread local
+            (i, state, localCache) =>
             {
-                results[i] = EvtxChunk.Parse(fileData, validOffsets[i], compiledCache, format);
+                results[i] = EvtxChunk.Parse(
+                    fileData,
+                    validOffsets[i],
+                    localCache,
+                    format);
+
+                return localCache;
+            },
+            localCache =>
+            {
+                // merge into global cache once per thread
+                foreach (var kv in localCache)
+                    compiledCache.TryAdd(kv.Key, kv.Value);
             });
+
 
         // Phase 3 (sequential): collect results from valid chunks
         List<EvtxChunk> chunks = new List<EvtxChunk>(validCount);
@@ -125,9 +139,16 @@ public class EvtxParser
             EvtxChunk?[] recovered = new EvtxChunk?[invalidCount];
             Parallel.For(0, invalidCount,
                 new ParallelOptions { MaxDegreeOfParallelism = parallelism },
-                i =>
+                () => new Dictionary<Guid, CompiledTemplate?>(),
+                (i, state, localCache) =>
                 {
-                    recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i], compiledCache, format);
+                    recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i], localCache, format);
+                    return localCache;
+                },
+                localCache =>
+                {
+                    foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
+                        compiledCache.TryAdd(kv.Key, kv.Value);
                 });
 
             for (int i = 0; i < invalidCount; i++)

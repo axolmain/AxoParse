@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -34,7 +34,7 @@ internal sealed partial class BinXmlParser
     /// Process-wide cache of compiled templates keyed by template GUID.
     /// Shared across chunks to avoid recompiling identical templates.
     /// </summary>
-    private readonly ConcurrentDictionary<Guid, CompiledTemplate?> _compiledCache;
+    private readonly Dictionary<Guid, CompiledTemplate?> _compiledCache;
 
     /// <summary>
     /// Per-chunk cache of element/attribute names keyed by chunk-relative offset.
@@ -54,7 +54,7 @@ internal sealed partial class BinXmlParser
         byte[] fileData,
         int chunkFileOffset,
         Dictionary<uint, BinXmlTemplateDefinition> templates,
-        ConcurrentDictionary<Guid, CompiledTemplate?> compiledCache)
+        Dictionary<Guid, CompiledTemplate?> compiledCache)
     {
         _fileData = fileData;
         _chunkFileOffset = chunkFileOffset;
@@ -301,72 +301,102 @@ internal sealed partial class BinXmlParser
     /// <param name="pos">Current read position; advanced past the entire template instance data.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <returns>Parsed template instance data for downstream rendering.</returns>
-    private TemplateInstanceData ReadTemplateInstanceData(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase)
+    private TemplateInstanceData ReadTemplateInstanceData(
+    ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase)
+{
+    int p = pos;
+
+    // token + unknown1 + unknown2
+    p += 6;
+
+    // defDataOffset
+    uint defDataOffset =
+        BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(p, 4));
+    p += 4;
+
+    uint currentChunkRelOffset = (uint)(binxmlChunkBase + p);
+
+    Guid templateGuid = default;
+    uint dataSize = 0;
+
+    if (defDataOffset == currentChunkRelOffset)
     {
-        pos++; // consume 0x0C token
-        pos++; // unknown1
-        pos += 4; // unknown2
-        uint defDataOffset = MemoryMarshal.Read<uint>(data[pos..]);
-        pos += 4;
+        // inline
+        p += 4; // next def offset
 
-        // Determine inline vs back-reference
-        uint currentChunkRelOffset = (uint)(binxmlChunkBase + pos);
-        bool isInline = defDataOffset == currentChunkRelOffset;
+        templateGuid = new Guid(data.Slice(p, 16));
+        p += 16;
 
-        Guid templateGuid = default;
-        uint dataSize = 0;
+        dataSize =
+            BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(p, 4));
+        p += 4;
 
-        if (isInline)
-        {
-            pos += 4; // next def offset
-            templateGuid = MemoryMarshal.Read<Guid>(data[pos..]);
-            pos += 16;
-            dataSize = MemoryMarshal.Read<uint>(data[pos..]);
-            pos += 4;
-            pos += (int)dataSize; // skip template body (already preloaded)
-        }
-        else
-        {
-            // Back-reference: look up from preloaded templates
-            if (_templates.TryGetValue(defDataOffset, out BinXmlTemplateDefinition def))
-            {
-                templateGuid = def.Guid;
-                dataSize = def.DataSize;
-            }
-            else if (defDataOffset + 24 <= EvtxChunk.ChunkSize)
-            {
-                // Fallback: read directly from chunk
-                ReadOnlySpan<byte> chunkData = _fileData.AsSpan(_chunkFileOffset, EvtxChunk.ChunkSize);
-                templateGuid = MemoryMarshal.Read<Guid>(chunkData[((int)defDataOffset + 4)..]);
-                dataSize = MemoryMarshal.Read<uint>(chunkData[((int)defDataOffset + 20)..]);
-            }
-        }
-
-        // Read substitution descriptors and values
-        uint numValues = MemoryMarshal.Read<uint>(data[pos..]);
-        pos += 4;
-
-        int descStart = pos;
-        ReadOnlySpan<SubstitutionDescriptor> descriptors =
-            MemoryMarshal.Cast<byte, SubstitutionDescriptor>(data.Slice(descStart, (int)numValues * 4));
-        pos += (int)numValues * 4;
-
-        int numVals = (int)numValues;
-        int[] valueOffsets = new int[numVals];
-        int[] valueSizes = new int[numVals];
-        byte[] valueTypes = new byte[numVals];
-
-        int dataBaseFileOffset = _chunkFileOffset + binxmlChunkBase;
-        for (int i = 0; i < numVals; i++)
-        {
-            valueOffsets[i] = dataBaseFileOffset + pos;
-            valueSizes[i] = descriptors[i].Size;
-            valueTypes[i] = descriptors[i].Type;
-            pos += descriptors[i].Size;
-        }
-
-        return new TemplateInstanceData(templateGuid, dataSize, defDataOffset, valueOffsets, valueSizes, valueTypes);
+        p += (int)dataSize;
     }
+    else if (_templates.TryGetValue(defDataOffset, out var def))
+    {
+        templateGuid = def.Guid;
+        dataSize = def.DataSize;
+    }
+    else if (defDataOffset + 24 <= EvtxChunk.ChunkSize)
+    {
+        // fallback read
+        ReadOnlySpan<byte> chunkData =
+            _fileData.AsSpan(_chunkFileOffset, EvtxChunk.ChunkSize);
+
+        int baseOffset = (int)defDataOffset;
+
+        templateGuid = new Guid(chunkData.Slice(baseOffset + 4, 16));
+
+        dataSize = BinaryPrimitives.ReadUInt32LittleEndian(
+            chunkData.Slice(baseOffset + 20, 4));
+    }
+
+    // numValues
+    uint numValues =
+        BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(p, 4));
+    p += 4;
+
+    int numVals = (int)numValues;
+
+    // descriptor block
+    int descriptorBytes = numVals * 4;
+    ReadOnlySpan<byte> descBytes = data.Slice(p, descriptorBytes);
+    p += descriptorBytes;
+
+    int[] valueOffsets = new int[numVals];
+    int[] valueSizes = new int[numVals];
+    byte[] valueTypes = new byte[numVals];
+
+    int dataBaseFileOffset = _chunkFileOffset + binxmlChunkBase;
+
+    for (int i = 0; i < numVals; i++)
+    {
+        uint raw =
+            BinaryPrimitives.ReadUInt32LittleEndian(
+                descBytes.Slice(i * 4, 4));
+
+        int size = (int)(raw & 0x00FFFFFF);
+        byte type = (byte)(raw >> 24);
+
+        valueOffsets[i] = dataBaseFileOffset + p;
+        valueSizes[i] = size;
+        valueTypes[i] = type;
+
+        p += size;
+    }
+
+    pos = p;
+
+    return new TemplateInstanceData(
+        templateGuid,
+        dataSize,
+        defDataOffset,
+        valueOffsets,
+        valueSizes,
+        valueTypes);
+}
+
 
     /// <summary>
     /// Parses a TemplateInstance token (0x0C) into XML output.
@@ -387,8 +417,12 @@ internal sealed partial class BinXmlParser
         if (tplBodyFileOffset + (int)tid.DataSize > _fileData.Length) return;
 
         // Check compiled cache (GetOrAdd may invoke factory concurrently for same key — harmless)
-        CompiledTemplate? compiled = _compiledCache.GetOrAdd(tid.TemplateGuid,
-            _ => CompileTemplate((int)tid.DefDataOffset, (int)tid.DataSize));
+        if (!_compiledCache.TryGetValue(tid.TemplateGuid, out CompiledTemplate? compiled))
+        {
+            compiled = CompileTemplate((int)tid.DefDataOffset, (int)tid.DataSize);
+            _compiledCache[tid.TemplateGuid] = compiled;
+        }
+
 
         if (compiled != null)
         {

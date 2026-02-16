@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
@@ -106,24 +107,46 @@ internal sealed partial class BinXmlParser
     /// <param name="pos">Current read position; advanced past the entire template instance.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="w">UTF-8 JSON writer that receives the output.</param>
-    private void ParseTemplateInstanceJson(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, Utf8JsonWriter w)
+    private void ParseTemplateInstanceJson(
+        ReadOnlySpan<byte> data,
+        ref int pos,
+        int binxmlChunkBase,
+        Utf8JsonWriter w)
     {
-        TemplateInstanceData tid = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase);
+        TemplateInstanceData tid =
+            ReadTemplateInstanceData(data, ref pos, binxmlChunkBase);
 
-        if (tid.DataSize == 0) return;
+        if (tid.DataSize == 0)
+            return;
 
-        int tplBodyFileOffset = _chunkFileOffset + (int)tid.DefDataOffset + 24;
-        if (tplBodyFileOffset + (int)tid.DataSize > _fileData.Length) return;
+        int tplBodyFileOffset =
+            _chunkFileOffset + (int)tid.DefDataOffset + 24;
 
-        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)tid.DataSize);
+        if ((uint)(tplBodyFileOffset + tid.DataSize) > (uint)_fileData.Length)
+            return;
+
+        ReadOnlySpan<byte> tplBody =
+            _fileData.AsSpan(tplBodyFileOffset, (int)tid.DataSize);
+
         int tplPos = 0;
         int tplChunkBase = (int)tid.DefDataOffset + 24;
 
-        if (tplBody.Length >= 4 && tplBody[0] == BinXmlToken.FragmentHeader)
+        if (tplBody.Length >= 4 &&
+            tplBody[0] == BinXmlToken.FragmentHeader)
+        {
             tplPos += 4;
+        }
 
-        ParseContentJson(tplBody, ref tplPos, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, tplChunkBase, w);
+        ParseContentJson(
+            tplBody,
+            ref tplPos,
+            tid.ValueOffsets,
+            tid.ValueSizes,
+            tid.ValueTypes,
+            tplChunkBase,
+            w);
     }
+
 
     /// <summary>
     /// JSON variant of <see cref="ParseContent"/>. Walks content tokens and writes JSON values
@@ -138,108 +161,154 @@ internal sealed partial class BinXmlParser
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="w">UTF-8 JSON writer that receives the output.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
-    private void ParseContentJson(ReadOnlySpan<byte> data, ref int pos,
-                                  int[]? valueOffsets, int[]? valueSizes, byte[]? valueTypes,
-                                  int binxmlChunkBase, Utf8JsonWriter w, int depth = 0)
-    {
-        while (pos < data.Length)
-        {
-            byte tok = data[pos];
-            byte baseTok = (byte)(tok & ~BinXmlToken.HasMoreDataFlag);
+    private void ParseContentJson(
+    ReadOnlySpan<byte> data,
+    ref int pos,
+    int[]? valueOffsets,
+    int[]? valueSizes,
+    byte[]? valueTypes,
+    int binxmlChunkBase,
+    Utf8JsonWriter w,
+    int depth = 0)
+{
+    int length = data.Length;
 
-            if (baseTok == BinXmlToken.Eof ||
-                baseTok == BinXmlToken.CloseStartElement ||
-                baseTok == BinXmlToken.CloseEmptyElement ||
-                baseTok == BinXmlToken.EndElement ||
-                baseTok == BinXmlToken.Attribute)
+    while (pos < length)
+    {
+        byte tok = data[pos];
+        byte baseTok = (byte)(tok & ~BinXmlToken.HasMoreDataFlag);
+
+        // Break tokens
+        if (baseTok == BinXmlToken.Eof ||
+            baseTok == BinXmlToken.CloseStartElement ||
+            baseTok == BinXmlToken.CloseEmptyElement ||
+            baseTok == BinXmlToken.EndElement ||
+            baseTok == BinXmlToken.Attribute)
+        {
+            break;
+        }
+
+        switch (baseTok)
+        {
+            case BinXmlToken.OpenStartElement:
+                WriteElementJson(
+                    data, ref pos,
+                    valueOffsets, valueSizes, valueTypes,
+                    binxmlChunkBase, w, depth + 1);
                 break;
 
-            switch (baseTok)
+            case BinXmlToken.Value:
             {
-                case BinXmlToken.OpenStartElement:
-                    WriteElementJson(data, ref pos, valueOffsets, valueSizes, valueTypes, binxmlChunkBase, w, depth + 1);
-                    break;
-                case BinXmlToken.Value:
-                {
-                    pos++;
-                    pos++; // value type
-                    string str = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
-                    w.WriteStringValue(str);
-                    break;
-                }
-                case BinXmlToken.NormalSubstitution:
-                {
-                    pos++;
-                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
-                    pos += 2;
-                    pos++; // subValType
-                    if (valueOffsets != null && subId < valueOffsets.Length)
-                        WriteValueJson(valueSizes![subId], valueTypes![subId], valueOffsets[subId], binxmlChunkBase,
-                            w);
-                    break;
-                }
-                case BinXmlToken.OptionalSubstitution:
-                {
-                    pos++;
-                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
-                    pos += 2;
-                    pos++; // subValType
-                    if (valueOffsets != null && subId < valueOffsets.Length)
-                    {
-                        byte valType = valueTypes![subId];
-                        int valSize = valueSizes![subId];
-                        if (valType != BinXmlValueType.Null && valSize > 0)
-                            WriteValueJson(valSize, valType, valueOffsets[subId], binxmlChunkBase, w);
-                    }
-
-                    break;
-                }
-                case BinXmlToken.CharRef:
-                {
-                    pos++;
-                    ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
-                    pos += 2;
-                    w.WriteStringValue(char.ConvertFromUtf32(charVal));
-                    break;
-                }
-                case BinXmlToken.EntityRef:
-                {
-                    pos++;
-                    uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
-                    pos += 4;
-                    string entityName = ReadName(nameOff);
-                    // Resolve common XML entities
-                    string resolved = entityName switch
-                    {
-                        "amp" => "&",
-                        "lt" => "<",
-                        "gt" => ">",
-                        "quot" => "\"",
-                        "apos" => "'",
-                        _ => $"&{entityName};"
-                    };
-                    w.WriteStringValue(resolved);
-                    break;
-                }
-                case BinXmlToken.CDataSection:
-                {
-                    pos++;
-                    string cdataStr = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
-                    w.WriteStringValue(cdataStr);
-                    break;
-                }
-                case BinXmlToken.TemplateInstance:
-                    ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, w);
-                    break;
-                case BinXmlToken.FragmentHeader:
-                    ParseFragmentJson(data, ref pos, binxmlChunkBase, w);
-                    break;
-                default:
-                    pos++;
-                    break;
+                pos += 2; // token + value type
+                ReadOnlySpan<char> chars =
+                    BinXmlValueFormatter.ReadUnicodeTextString(data, ref pos);
+                w.WriteStringValue(chars);
+                break;
             }
+
+            case BinXmlToken.NormalSubstitution:
+            case BinXmlToken.OptionalSubstitution:
+            {
+                bool optional =
+                    baseTok == BinXmlToken.OptionalSubstitution;
+
+                pos++;
+
+                ushort subId =
+                    BinaryPrimitives.ReadUInt16LittleEndian(
+                        data.Slice(pos, 2));
+                pos += 2;
+
+                pos++; // subValType
+
+                if (valueOffsets != null &&
+                    subId < valueOffsets.Length)
+                {
+                    int valSize = valueSizes![subId];
+                    byte valType = valueTypes![subId];
+
+                    if (!optional ||
+                        (valType != BinXmlValueType.Null &&
+                         valSize > 0))
+                    {
+                        WriteValueJson(
+                            valSize,
+                            valType,
+                            valueOffsets[subId],
+                            binxmlChunkBase,
+                            w);
+                    }
+                }
+
+                break;
+            }
+
+            case BinXmlToken.CharRef:
+            {
+                pos++;
+
+                ushort charVal =
+                    BinaryPrimitives.ReadUInt16LittleEndian(
+                        data.Slice(pos, 2));
+                pos += 2;
+
+                w.WriteStringValue(char.ConvertFromUtf32(charVal));
+                break;
+            }
+
+            case BinXmlToken.EntityRef:
+            {
+                pos++;
+
+                uint nameOff =
+                    BinaryPrimitives.ReadUInt32LittleEndian(
+                        data.Slice(pos, 4));
+                pos += 4;
+
+                string entityName = ReadName(nameOff);
+
+                string resolved = entityName switch
+                {
+                    "amp"  => "&",
+                    "lt"   => "<",
+                    "gt"   => ">",
+                    "quot" => "\"",
+                    "apos" => "'",
+                    _      => $"&{entityName};"
+                };
+
+                w.WriteStringValue(resolved);
+                break;
+            }
+
+            case BinXmlToken.CDataSection:
+            {
+                pos++;
+
+                ReadOnlySpan<char> cdataChars =
+                    BinXmlValueFormatter.ReadUnicodeTextString(data, ref pos);
+
+                w.WriteStringValue(cdataChars);
+                break;
+            }
+
+            case BinXmlToken.TemplateInstance:
+                ParseTemplateInstanceJson(
+                    data, ref pos, binxmlChunkBase, w);
+                break;
+
+            case BinXmlToken.FragmentHeader:
+                ParseFragmentJson(
+                    data, ref pos, binxmlChunkBase, w);
+                break;
+
+            default:
+                pos++;
+                break;
         }
     }
+}
+
 
     /// <summary>
     /// Classification result for an element's children — determines JSON representation.
@@ -832,9 +901,9 @@ internal sealed partial class BinXmlParser
             {
                 pos++;
                 pos++; // value type
-                string str = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
-                if (str.Length > 0)
-                    w.WriteString("#text", str);
+                ReadOnlySpan<char> textChars = BinXmlValueFormatter.ReadUnicodeTextString(data, ref pos);
+                if (textChars.Length > 0)
+                    w.WriteString("#text", textChars);
             }
             else if (baseTok == BinXmlToken.NormalSubstitution || baseTok == BinXmlToken.OptionalSubstitution)
             {
