@@ -9,16 +9,7 @@ namespace AxoParse.Evtx;
 /// </summary>
 public sealed class WevtCache
 {
-    /// <summary>
-    /// Compiled templates keyed by GUID. First-in wins for duplicate GUIDs.
-    /// Null values indicate templates that were extracted but failed compilation.
-    /// </summary>
-    private readonly ConcurrentDictionary<Guid, CompiledTemplate?> _templates = new();
-
-    /// <summary>
-    /// Total number of template GUIDs in the cache (including those that failed compilation).
-    /// </summary>
-    public int Count => _templates.Count;
+    #region Properties
 
     /// <summary>
     /// Number of templates that were successfully compiled into <see cref="CompiledTemplate"/> objects.
@@ -38,6 +29,50 @@ public sealed class WevtCache
             }
             return count;
         }
+    }
+
+    /// <summary>
+    /// Total number of template GUIDs in the cache (including those that failed compilation).
+    /// </summary>
+    public int Count => _templates.Count;
+
+    #endregion
+
+    #region Public Methods
+
+    /// <summary>
+    /// Scans a directory for PE files matching a glob pattern and adds all WEVT templates found.
+    /// </summary>
+    /// <param name="directory">Directory to scan.</param>
+    /// <param name="pattern">File glob pattern (default: "*.dll").</param>
+    /// <returns>Total number of new templates added across all matching files.</returns>
+    public int AddFromDirectory(string directory, string pattern = "*.dll")
+    {
+        int total = 0;
+        foreach (string file in Directory.EnumerateFiles(directory, pattern))
+        {
+            try
+            {
+                total += AddFromFile(file);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                           or ArgumentException or IndexOutOfRangeException or InvalidOperationException)
+            {
+                // Skip files that can't be read or aren't valid PE binaries
+            }
+        }
+        return total;
+    }
+
+    /// <summary>
+    /// Reads a PE file from disk and adds its WEVT templates to the cache.
+    /// </summary>
+    /// <param name="filePath">Path to a PE binary (DLL or EXE).</param>
+    /// <returns>Number of new templates added to the cache.</returns>
+    public int AddFromFile(string filePath)
+    {
+        byte[] peData = File.ReadAllBytes(filePath);
+        return AddFromPeData(peData);
     }
 
     /// <summary>
@@ -66,40 +101,9 @@ public sealed class WevtCache
         return added;
     }
 
-    /// <summary>
-    /// Reads a PE file from disk and adds its WEVT templates to the cache.
-    /// </summary>
-    /// <param name="filePath">Path to a PE binary (DLL or EXE).</param>
-    /// <returns>Number of new templates added to the cache.</returns>
-    public int AddFromFile(string filePath)
-    {
-        byte[] peData = File.ReadAllBytes(filePath);
-        return AddFromPeData(peData);
-    }
+    #endregion
 
-    /// <summary>
-    /// Scans a directory for PE files matching a glob pattern and adds all WEVT templates found.
-    /// </summary>
-    /// <param name="directory">Directory to scan.</param>
-    /// <param name="pattern">File glob pattern (default: "*.dll").</param>
-    /// <returns>Total number of new templates added across all matching files.</returns>
-    public int AddFromDirectory(string directory, string pattern = "*.dll")
-    {
-        int total = 0;
-        foreach (string file in Directory.EnumerateFiles(directory, pattern))
-        {
-            try
-            {
-                total += AddFromFile(file);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-                                           or ArgumentException or IndexOutOfRangeException or InvalidOperationException)
-            {
-                // Skip files that can't be read or aren't valid PE binaries
-            }
-        }
-        return total;
-    }
+    #region Non-Public Methods
 
     /// <summary>
     /// Pre-populates a parser's compiled template cache with WEVT templates.
@@ -115,4 +119,16 @@ public sealed class WevtCache
             targetCache.TryAdd(kvp.Key, kvp.Value);
         }
     }
+
+    #endregion
+
+    #region Non-Public Fields
+
+    /// <summary>
+    /// Compiled templates keyed by GUID. First-in wins for duplicate GUIDs.
+    /// Null values indicate templates that were extracted but failed compilation.
+    /// </summary>
+    private readonly ConcurrentDictionary<Guid, CompiledTemplate?> _templates = new();
+
+    #endregion
 }

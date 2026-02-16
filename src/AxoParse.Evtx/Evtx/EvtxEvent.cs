@@ -14,8 +14,12 @@ public readonly record struct EvtxEvent(
     ReadOnlyMemory<byte> Json,
     string? Diagnostic)
 {
+    #region Properties
+
     /// <summary>
     /// True if the event rendered successfully without errors.
     /// </summary>
     public bool IsSuccess => Diagnostic is null;
+
+    #endregion
 }

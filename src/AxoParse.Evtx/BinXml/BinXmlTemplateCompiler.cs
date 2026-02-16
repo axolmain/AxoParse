@@ -9,37 +9,7 @@ namespace AxoParse.Evtx;
 /// </summary>
 internal sealed partial class BinXmlParser
 {
-    /// <summary>
-    /// Compiles a template body into a <see cref="CompiledTemplate"/> of interleaved string parts
-    /// and substitution slot IDs. Returns null if the template contains nested templates or
-    /// other constructs that prevent static compilation.
-    /// </summary>
-    /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
-    /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>
-    /// <returns>A compiled template, or null if the template cannot be statically compiled.</returns>
-    private CompiledTemplate? CompileTemplate(int defDataOffset, int dataSize)
-    {
-        int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
-        if (tplBodyFileOffset + dataSize > _fileData.Length) return null;
-
-        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, dataSize);
-        int tplChunkBase = defDataOffset + 24;
-
-        List<string> parts = new() { string.Empty };
-        List<int> subIds = new();
-        List<bool> isOptional = new();
-        bool bail = false;
-
-        int pos = 0;
-        // Skip fragment header
-        if (tplBody.Length >= 4 && tplBody[0] == BinXmlToken.FragmentHeader)
-            pos += 4;
-
-        CompileContent(tplBody, ref pos, tplChunkBase, parts, subIds, isOptional, ref bail);
-
-        if (bail) return null;
-        return new CompiledTemplate(parts.ToArray(), subIds.ToArray(), isOptional.ToArray());
-    }
+    #region Non-Public Methods
 
     /// <summary>
     /// Walks BinXml content tokens, appending static XML text to the last entry in <paramref name="parts"/>
@@ -63,11 +33,11 @@ internal sealed partial class BinXmlParser
             byte tok = data[pos];
             byte baseTok = (byte)(tok & ~BinXmlToken.HasMoreDataFlag);
 
-            if (baseTok == BinXmlToken.Eof ||
-                baseTok == BinXmlToken.CloseStartElement ||
-                baseTok == BinXmlToken.CloseEmptyElement ||
-                baseTok == BinXmlToken.EndElement ||
-                baseTok == BinXmlToken.Attribute)
+            if ((baseTok == BinXmlToken.Eof) ||
+                (baseTok == BinXmlToken.CloseStartElement) ||
+                (baseTok == BinXmlToken.CloseEmptyElement) ||
+                (baseTok == BinXmlToken.EndElement) ||
+                (baseTok == BinXmlToken.Attribute))
                 break;
 
             switch (baseTok)
@@ -210,7 +180,7 @@ internal sealed partial class BinXmlParser
             parts[^1] += ">";
             CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, ref bail, depth + 1);
             if (bail) return;
-            if (pos < data.Length && data[pos] == BinXmlToken.EndElement)
+            if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
             parts[^1] += $"</{elemName}>";
         }
@@ -219,4 +189,38 @@ internal sealed partial class BinXmlParser
             parts[^1] += "/>";
         }
     }
+
+    /// <summary>
+    /// Compiles a template body into a <see cref="CompiledTemplate"/> of interleaved string parts
+    /// and substitution slot IDs. Returns null if the template contains nested templates or
+    /// other constructs that prevent static compilation.
+    /// </summary>
+    /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
+    /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>
+    /// <returns>A compiled template, or null if the template cannot be statically compiled.</returns>
+    private CompiledTemplate? CompileTemplate(int defDataOffset, int dataSize)
+    {
+        int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
+        if (tplBodyFileOffset + dataSize > _fileData.Length) return null;
+
+        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, dataSize);
+        int tplChunkBase = defDataOffset + 24;
+
+        List<string> parts = new() { string.Empty };
+        List<int> subIds = new();
+        List<bool> isOptional = new();
+        bool bail = false;
+
+        int pos = 0;
+        // Skip fragment header
+        if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
+            pos += 4;
+
+        CompileContent(tplBody, ref pos, tplChunkBase, parts, subIds, isOptional, ref bail);
+
+        if (bail) return null;
+        return new CompiledTemplate(parts.ToArray(), subIds.ToArray(), isOptional.ToArray());
+    }
+
+    #endregion
 }

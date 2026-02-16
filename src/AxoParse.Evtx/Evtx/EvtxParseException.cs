@@ -7,10 +7,7 @@ namespace AxoParse.Evtx;
 /// </summary>
 public sealed class EvtxParseException : Exception
 {
-    /// <summary>
-    /// The specific validation failure that caused this exception.
-    /// </summary>
-    public EvtxParseError ErrorCode { get; }
+    #region Constructors And Destructors
 
     /// <summary>
     /// Creates an EvtxParseException with the specified error code and message.
@@ -22,4 +19,15 @@ public sealed class EvtxParseException : Exception
     {
         ErrorCode = errorCode;
     }
+
+    #endregion
+
+    #region Properties
+
+    /// <summary>
+    /// The specific validation failure that caused this exception.
+    /// </summary>
+    public EvtxParseError ErrorCode { get; }
+
+    #endregion
 }

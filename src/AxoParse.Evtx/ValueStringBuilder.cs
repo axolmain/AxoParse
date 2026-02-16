@@ -9,20 +9,7 @@ namespace AxoParse.Evtx;
 /// </summary>
 internal ref struct ValueStringBuilder : IDisposable
 {
-    /// <summary>
-    /// Pooled array backing the builder once the initial stackalloc buffer is outgrown; null while using the initial buffer.
-    /// </summary>
-    private char[]? _arrayToReturnToPool;
-
-    /// <summary>
-    /// Active character buffer — either the caller-supplied stackalloc span or a pooled array.
-    /// </summary>
-    private Span<char> _chars;
-
-    /// <summary>
-    /// Current write position (number of characters appended so far).
-    /// </summary>
-    private int _pos;
+    #region Constructors And Destructors
 
     /// <summary>
     /// Initialises the builder with a caller-supplied buffer (typically stackalloc).
@@ -36,10 +23,18 @@ internal ref struct ValueStringBuilder : IDisposable
         _pos = 0;
     }
 
+    #endregion
+
+    #region Properties
+
     /// <summary>
     /// Number of characters written to the builder.
     /// </summary>
     public int Length => _pos;
+
+    #endregion
+
+    #region Public Methods
 
     /// <summary>
     /// Appends a single character, growing the buffer if necessary.
@@ -126,6 +121,20 @@ internal ref struct ValueStringBuilder : IDisposable
     public ReadOnlySpan<char> AsSpan() => _chars[.._pos];
 
     /// <summary>
+    /// Returns any pooled array to <see cref="ArrayPool{T}"/> and resets the builder.
+    /// Must be called when the builder is no longer needed to avoid pool exhaustion.
+    /// </summary>
+    public void Dispose()
+    {
+        char[]? toReturn = _arrayToReturnToPool;
+        this = default;
+        if (toReturn != null)
+        {
+            ArrayPool<char>.Shared.Return(toReturn);
+        }
+    }
+
+    /// <summary>
     /// Allocates a new string from the written portion of the buffer.
     /// </summary>
     /// <returns>A string containing all appended characters.</returns>
@@ -134,16 +143,9 @@ internal ref struct ValueStringBuilder : IDisposable
         return _chars[.._pos].ToString();
     }
 
-    /// <summary>
-    /// Grows the buffer by at least one character and appends <paramref name="c"/>. Called when the inline fast-path overflows.
-    /// </summary>
-    /// <param name="c">The character to append after growing.</param>
-    [MethodImpl(MethodImplOptions.NoInlining)]
-    private void GrowAndAppend(char c)
-    {
-        Grow(1);
-        _chars[_pos++] = c;
-    }
+    #endregion
+
+    #region Non-Public Methods
 
     /// <summary>
     /// Replaces the current buffer with a larger one rented from <see cref="ArrayPool{T}"/>,
@@ -166,16 +168,34 @@ internal ref struct ValueStringBuilder : IDisposable
     }
 
     /// <summary>
-    /// Returns any pooled array to <see cref="ArrayPool{T}"/> and resets the builder.
-    /// Must be called when the builder is no longer needed to avoid pool exhaustion.
+    /// Grows the buffer by at least one character and appends <paramref name="c"/>. Called when the inline fast-path overflows.
     /// </summary>
-    public void Dispose()
+    /// <param name="c">The character to append after growing.</param>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void GrowAndAppend(char c)
     {
-        char[]? toReturn = _arrayToReturnToPool;
-        this = default;
-        if (toReturn != null)
-        {
-            ArrayPool<char>.Shared.Return(toReturn);
-        }
+        Grow(1);
+        _chars[_pos++] = c;
     }
+
+    #endregion
+
+    #region Non-Public Fields
+
+    /// <summary>
+    /// Pooled array backing the builder once the initial stackalloc buffer is outgrown; null while using the initial buffer.
+    /// </summary>
+    private char[]? _arrayToReturnToPool;
+
+    /// <summary>
+    /// Active character buffer — either the caller-supplied stackalloc span or a pooled array.
+    /// </summary>
+    private Span<char> _chars;
+
+    /// <summary>
+    /// Current write position (number of characters appended so far).
+    /// </summary>
+    private int _pos;
+
+    #endregion
 }

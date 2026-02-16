@@ -2,20 +2,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxEventTests
 {
-    /// <summary>
-    /// Verifies that IsSuccess returns true when Diagnostic is null (successful render).
-    /// </summary>
-    [Fact]
-    public void IsSuccessReturnsTrueWhenNoDiagnostic()
-    {
-        EvtxEvent evt = new EvtxEvent(
-            Record: default,
-            Xml: "<Event/>",
-            Json: ReadOnlyMemory<byte>.Empty,
-            Diagnostic: null);
-
-        Assert.True(evt.IsSuccess);
-    }
+    #region Public Methods
 
     /// <summary>
     /// Verifies that IsSuccess returns false when a diagnostic message is present.
@@ -31,4 +18,21 @@ public class EvtxEventTests
 
         Assert.False(evt.IsSuccess);
     }
+
+    /// <summary>
+    /// Verifies that IsSuccess returns true when Diagnostic is null (successful render).
+    /// </summary>
+    [Fact]
+    public void IsSuccessReturnsTrueWhenNoDiagnostic()
+    {
+        EvtxEvent evt = new EvtxEvent(
+            Record: default,
+            Xml: "<Event/>",
+            Json: ReadOnlyMemory<byte>.Empty,
+            Diagnostic: null);
+
+        Assert.True(evt.IsSuccess);
+    }
+
+    #endregion
 }

@@ -4,90 +4,32 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxParserTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    #region Public Methods
 
+    /// <summary>
+    /// Verifies that a pre-cancelled token throws OperationCanceledException immediately.
+    /// </summary>
     [Fact]
-    public void ParsesSecurityEvtxFull()
+    public void CancellationTokenCancelsParsing()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        CancellationTokenSource cts = new CancellationTokenSource();
+        cts.Cancel();
 
-        Stopwatch sw = Stopwatch.StartNew();
-        EvtxParser parser = EvtxParser.Parse(data);
-        sw.Stop();
-
-        Assert.True(parser.Chunks.Count > 0);
-        Assert.True(parser.TotalRecords > 0);
-        Assert.Equal(3, parser.FileHeader.MajorFormatVersion);
-
-        testOutputHelper.WriteLine($"[security.evtx] Full parse in {sw.Elapsed.TotalMilliseconds:F2}ms");
-        testOutputHelper.WriteLine($"  Chunks: {parser.Chunks.Count}, Records: {parser.TotalRecords}");
-    }
-
-    [Fact]
-    public void ParsesAllTestFiles()
-    {
-        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
-        Stopwatch sw = new Stopwatch();
-
-        testOutputHelper.WriteLine($"Full parse of {evtxFiles.Length} files:");
-
-        foreach (string file in evtxFiles)
-        {
-            byte[] data = File.ReadAllBytes(file);
-            string name = Path.GetFileName(file);
-
-            sw.Restart();
-            EvtxParser parser = EvtxParser.Parse(data);
-            sw.Stop();
-
-            testOutputHelper.WriteLine(
-                $"  [{name}] {sw.Elapsed.TotalMilliseconds,8:F2}ms | {parser.Chunks.Count} chunks | {parser.TotalRecords} records");
-        }
-    }
-
-    [Fact]
-    public void TotalRecordsMatchesChunkSum()
-    {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
-
-        int sum = 0;
-        foreach (EvtxChunk chunk in parser.Chunks)
-            sum += chunk.Records.Count;
-
-        Assert.Equal(sum, parser.TotalRecords);
-    }
-
-    [Fact]
-    public void HandlesBadChunkMagicGracefully()
-    {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "sample_with_a_bad_chunk_magic.evtx"));
-
-        EvtxParser parser = EvtxParser.Parse(data);
-
-        // Should skip bad chunks without throwing
-        testOutputHelper.WriteLine(
-            $"[sample_with_a_bad_chunk_magic.evtx] Parsed {parser.Chunks.Count} valid chunks, {parser.TotalRecords} records");
+        Assert.Throws<OperationCanceledException>(() =>
+            EvtxParser.Parse(data, cancellationToken: cts.Token));
     }
 
     /// <summary>
-    /// Verifies that GetEvents() returns the same total record count as TotalRecords.
+    /// Verifies that the Diagnostics collection is empty for a clean parse with no issues.
     /// </summary>
     [Fact]
-    public void GetEventsReturnsAllRecords()
+    public void DiagnosticsEmptyOnCleanParse()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
-        int eventCount = 0;
-        foreach (EvtxEvent evt in parser.GetEvents())
-        {
-            eventCount++;
-            Assert.False(string.IsNullOrEmpty(evt.Xml));
-        }
-
-        Assert.Equal(parser.TotalRecords, eventCount);
-        testOutputHelper.WriteLine($"GetEvents() yielded {eventCount} events matching TotalRecords");
+        Assert.Empty(parser.Diagnostics);
     }
 
     /// <summary>
@@ -130,28 +72,94 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Verifies that a pre-cancelled token throws OperationCanceledException immediately.
+    /// Verifies that GetEvents() returns the same total record count as TotalRecords.
     /// </summary>
     [Fact]
-    public void CancellationTokenCancelsParsing()
-    {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        CancellationTokenSource cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        Assert.Throws<OperationCanceledException>(() =>
-            EvtxParser.Parse(data, cancellationToken: cts.Token));
-    }
-
-    /// <summary>
-    /// Verifies that the Diagnostics collection is empty for a clean parse with no issues.
-    /// </summary>
-    [Fact]
-    public void DiagnosticsEmptyOnCleanParse()
+    public void GetEventsReturnsAllRecords()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
-        Assert.Empty(parser.Diagnostics);
+        int eventCount = 0;
+        foreach (EvtxEvent evt in parser.GetEvents())
+        {
+            eventCount++;
+            Assert.False(string.IsNullOrEmpty(evt.Xml));
+        }
+
+        Assert.Equal(parser.TotalRecords, eventCount);
+        testOutputHelper.WriteLine($"GetEvents() yielded {eventCount} events matching TotalRecords");
     }
+
+    [Fact]
+    public void HandlesBadChunkMagicGracefully()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "sample_with_a_bad_chunk_magic.evtx"));
+
+        EvtxParser parser = EvtxParser.Parse(data);
+
+        // Should skip bad chunks without throwing
+        testOutputHelper.WriteLine(
+            $"[sample_with_a_bad_chunk_magic.evtx] Parsed {parser.Chunks.Count} valid chunks, {parser.TotalRecords} records");
+    }
+
+    [Fact]
+    public void ParsesAllTestFiles()
+    {
+        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        Stopwatch sw = new Stopwatch();
+
+        testOutputHelper.WriteLine($"Full parse of {evtxFiles.Length} files:");
+
+        foreach (string file in evtxFiles)
+        {
+            byte[] data = File.ReadAllBytes(file);
+            string name = Path.GetFileName(file);
+
+            sw.Restart();
+            EvtxParser parser = EvtxParser.Parse(data);
+            sw.Stop();
+
+            testOutputHelper.WriteLine(
+                $"  [{name}] {sw.Elapsed.TotalMilliseconds,8:F2}ms | {parser.Chunks.Count} chunks | {parser.TotalRecords} records");
+        }
+    }
+
+    [Fact]
+    public void ParsesSecurityEvtxFull()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+
+        Stopwatch sw = Stopwatch.StartNew();
+        EvtxParser parser = EvtxParser.Parse(data);
+        sw.Stop();
+
+        Assert.True(parser.Chunks.Count > 0);
+        Assert.True(parser.TotalRecords > 0);
+        Assert.Equal(3, parser.FileHeader.MajorFormatVersion);
+
+        testOutputHelper.WriteLine($"[security.evtx] Full parse in {sw.Elapsed.TotalMilliseconds:F2}ms");
+        testOutputHelper.WriteLine($"  Chunks: {parser.Chunks.Count}, Records: {parser.TotalRecords}");
+    }
+
+    [Fact]
+    public void TotalRecordsMatchesChunkSum()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data);
+
+        int sum = 0;
+        foreach (EvtxChunk chunk in parser.Chunks)
+            sum += chunk.Records.Count;
+
+        Assert.Equal(sum, parser.TotalRecords);
+    }
+
+    #endregion
+
+    #region Non-Public Fields
+
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
+
+    #endregion
 }

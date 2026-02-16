@@ -59,6 +59,8 @@ public readonly record struct EvtxFileHeader(
     HeaderFlags FileFlags,
     uint Checksum)
 {
+    #region Public Methods
+
     /// <summary>
     /// Parses the first 128 bytes of a raw EVTX file into an <see cref="EvtxFileHeader"/>.
     /// Validates the 8-byte "ElfFile\0" magic signature at offset 0.
@@ -86,4 +88,6 @@ public readonly record struct EvtxFileHeader(
             Checksum: BinaryPrimitives.ReadUInt32LittleEndian(data[124..])
         );
     }
+
+    #endregion
 }

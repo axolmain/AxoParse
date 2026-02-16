@@ -1,4 +1,6 @@
 @page "/"
+@using System.Diagnostics
+@using System.Text
 @using AxoParse.Evtx
 @using AxoParse.Web.Models
 
@@ -6,9 +8,13 @@
 
 @if (!string.IsNullOrEmpty(errorMessage))
 {
-    <div class="mx-4 mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-800 flex items-center justify-between" role="alert">
+    <div
+        class="mx-4 mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-800 flex items-center justify-between"
+        role="alert">
         <span>@errorMessage</span>
-        <button class="ml-4 text-red-400 hover:text-red-600 cursor-pointer" @onclick="() => errorMessage = null">&times;</button>
+        <button class="ml-4 text-red-400 hover:text-red-600 cursor-pointer" @onclick="() => errorMessage = null">
+            &times;
+        </button>
     </div>
 }
 
@@ -16,9 +22,10 @@
 {
     <div class="flex-1 flex flex-col items-center justify-center">
         <h2 class="mb-6 text-2xl font-semibold text-gray-800">Upload an EVTX file</h2>
-        <label class="inline-flex items-center px-6 py-3 rounded-lg bg-indigo-600 text-white font-medium cursor-pointer hover:bg-indigo-700 transition-colors">
+        <label
+            class="inline-flex items-center px-6 py-3 rounded-lg bg-indigo-600 text-white font-medium cursor-pointer hover:bg-indigo-700 transition-colors">
             Choose .evtx file
-            <InputFile OnChange="OnFileSelected" accept=".evtx" class="hidden" />
+            <InputFile OnChange="OnFileSelected" accept=".evtx" class="hidden"/>
         </label>
         <small class="mt-3 text-gray-400 text-sm">Max 500 MB</small>
     </div>
@@ -32,35 +39,41 @@ else if (isParsing)
 }
 else if (parseResult is not null)
 {
-    <div class="px-4 py-3 bg-white border-b border-gray-200 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm shrink-0">
+    <div
+        class="px-4 py-3 bg-white border-b border-gray-200 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm shrink-0">
         <div><span class="font-semibold text-gray-600">File:</span> @parseResult.Value.FileName</div>
-        <div><span class="font-semibold text-gray-600">Records:</span> @parseResult.Value.TotalRecords.ToString("N0")</div>
+        <div><span class="font-semibold text-gray-600">Records:</span> @parseResult.Value.TotalRecords.ToString("N0")
+        </div>
         <div><span class="font-semibold text-gray-600">Chunks:</span> @parseResult.Value.ChunkCount</div>
         <div><span class="font-semibold text-gray-600">Parse time:</span> @parseResult.Value.ParseTimeMs ms</div>
 
         <div class="ml-auto flex items-center gap-2">
             <div class="relative" @onclick:stopPropagation="true">
-                <button class="px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-                        @onclick="() => showColumnDropdown = !showColumnDropdown">
+                <button
+                    class="px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                    @onclick="() => showColumnDropdown = !showColumnDropdown">
                     Columns
                 </button>
                 @if (showColumnDropdown)
                 {
-                    <div class="absolute right-0 top-full mt-1 z-10 min-w-[180px] rounded-lg bg-white border border-gray-200 shadow-lg p-2">
+                    <div
+                        class="absolute right-0 top-full mt-1 z-10 min-w-[180px] rounded-lg bg-white border border-gray-200 shadow-lg p-2">
                         @foreach (ColumnDef col in AllColumns)
                         {
-                            <label class="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm">
+                            <label
+                                class="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm">
                                 <input type="checkbox" checked="@visibleColumns[col.Key]"
                                        class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                                       @onchange="() => ToggleColumn(col.Key)" />
+                                       @onchange="() => ToggleColumn(col.Key)"/>
                                 @col.Label
                             </label>
                         }
                     </div>
                 }
             </div>
-            <button class="px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-                    @onclick="Reset">
+            <button
+                class="px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                @onclick="Reset">
                 Upload another
             </button>
         </div>
@@ -69,27 +82,75 @@ else if (parseResult is not null)
     <div class="vgrid-wrapper">
         <div class="vgrid-scroll" style="--grid-cols: @GridTemplateColumns">
             <div class="vgrid-header">
-                @if (visibleColumns["RecordId"])  { <div class="vgrid-cell">Record ID</div> }
-                @if (visibleColumns["Timestamp"]) { <div class="vgrid-cell">Timestamp</div> }
-                @if (visibleColumns["EventId"])   { <div class="vgrid-cell">Event ID</div> }
-                @if (visibleColumns["Level"])     { <div class="vgrid-cell">Level</div> }
-                @if (visibleColumns["Provider"])  { <div class="vgrid-cell">Provider</div> }
-                @if (visibleColumns["Computer"])  { <div class="vgrid-cell">Computer</div> }
-                @if (visibleColumns["Channel"])   { <div class="vgrid-cell">Channel</div> }
-                @if (visibleColumns["EventData"]) { <div class="vgrid-cell">Event Data</div> }
+                @if (visibleColumns["RecordId"])
+                {
+                    <div class="vgrid-cell">Record ID</div>
+                }
+                @if (visibleColumns["Timestamp"])
+                {
+                    <div class="vgrid-cell">Timestamp</div>
+                }
+                @if (visibleColumns["EventId"])
+                {
+                    <div class="vgrid-cell">Event ID</div>
+                }
+                @if (visibleColumns["Level"])
+                {
+                    <div class="vgrid-cell">Level</div>
+                }
+                @if (visibleColumns["Provider"])
+                {
+                    <div class="vgrid-cell">Provider</div>
+                }
+                @if (visibleColumns["Computer"])
+                {
+                    <div class="vgrid-cell">Computer</div>
+                }
+                @if (visibleColumns["Channel"])
+                {
+                    <div class="vgrid-cell">Channel</div>
+                }
+                @if (visibleColumns["EventData"])
+                {
+                    <div class="vgrid-cell">Event Data</div>
+                }
             </div>
 
             <div class="vgrid-body">
                 <Virtualize Items="parseResult.Value.Records" Context="record" ItemSize="29" OverscanCount="20">
                     <div class="vgrid-row @(record.RecordId % 2 == 0 ? "vgrid-row-even" : "vgrid-row-odd")">
-                        @if (visibleColumns["RecordId"])  { <div class="vgrid-cell">@record.RecordId</div> }
-                        @if (visibleColumns["Timestamp"]) { <div class="vgrid-cell">@record.Timestamp</div> }
-                        @if (visibleColumns["EventId"])   { <div class="vgrid-cell">@record.EventId</div> }
-                        @if (visibleColumns["Level"])     { <div class="vgrid-cell">@record.LevelText</div> }
-                        @if (visibleColumns["Provider"])  { <div class="vgrid-cell">@record.Provider</div> }
-                        @if (visibleColumns["Computer"])  { <div class="vgrid-cell">@record.Computer</div> }
-                        @if (visibleColumns["Channel"])   { <div class="vgrid-cell">@record.Channel</div> }
-                        @if (visibleColumns["EventData"]) { <div class="vgrid-cell" title="@record.EventData">@record.EventData</div> }
+                        @if (visibleColumns["RecordId"])
+                        {
+                            <div class="vgrid-cell">@record.RecordId</div>
+                        }
+                        @if (visibleColumns["Timestamp"])
+                        {
+                            <div class="vgrid-cell">@record.Timestamp</div>
+                        }
+                        @if (visibleColumns["EventId"])
+                        {
+                            <div class="vgrid-cell">@record.EventId</div>
+                        }
+                        @if (visibleColumns["Level"])
+                        {
+                            <div class="vgrid-cell">@record.LevelText</div>
+                        }
+                        @if (visibleColumns["Provider"])
+                        {
+                            <div class="vgrid-cell">@record.Provider</div>
+                        }
+                        @if (visibleColumns["Computer"])
+                        {
+                            <div class="vgrid-cell">@record.Computer</div>
+                        }
+                        @if (visibleColumns["Channel"])
+                        {
+                            <div class="vgrid-cell">@record.Channel</div>
+                        }
+                        @if (visibleColumns["EventData"])
+                        {
+                            <div class="vgrid-cell" title="@record.EventData">@record.EventData</div>
+                        }
                     </div>
                 </Virtualize>
             </div>
@@ -97,11 +158,8 @@ else if (parseResult is not null)
     </div>
 }
 
-@using System.Text
-
 @code {
     private const long MaxFileSize = 500L * 1024 * 1024;
-
     private bool isParsing;
     private bool showColumnDropdown;
     private string? fileName;
@@ -114,13 +172,13 @@ else if (parseResult is not null)
     /// </summary>
     private static readonly Dictionary<string, string> ColumnWidths = new(8)
     {
-        ["RecordId"]  = "90px",
+        ["RecordId"] = "90px",
         ["Timestamp"] = "200px",
-        ["EventId"]   = "80px",
-        ["Level"]     = "90px",
-        ["Provider"]  = "minmax(120px, 1fr)",
-        ["Computer"]  = "minmax(120px, 1fr)",
-        ["Channel"]   = "minmax(100px, 1fr)",
+        ["EventId"] = "80px",
+        ["Level"] = "90px",
+        ["Provider"] = "minmax(120px, 1fr)",
+        ["Computer"] = "minmax(120px, 1fr)",
+        ["Channel"] = "minmax(100px, 1fr)",
         ["EventData"] = "minmax(300px, 3fr)",
     };
 
@@ -155,13 +213,13 @@ else if (parseResult is not null)
     /// </summary>
     private static readonly ColumnDef[] AllColumns =
     [
-        new("RecordId",  "Record ID",  true),
-        new("Timestamp", "Timestamp",  true),
-        new("EventId",   "Event ID",   true),
-        new("Level",     "Level",      true),
-        new("Provider",  "Provider",   true),
-        new("Computer",  "Computer",   true),
-        new("Channel",   "Channel",    false),
+        new("RecordId", "Record ID", true),
+        new("Timestamp", "Timestamp", true),
+        new("EventId", "Event ID", true),
+        new("Level", "Level", true),
+        new("Provider", "Provider", true),
+        new("Computer", "Computer", true),
+        new("Channel", "Channel", false),
         new("EventData", "Event Data", true),
     ];
 
@@ -219,7 +277,7 @@ else if (parseResult is not null)
             // Yield so the spinner renders before the synchronous parse blocks the UI thread
             await Task.Yield();
 
-            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            Stopwatch sw = Stopwatch.StartNew();
             EvtxParser parsed = EvtxParser.Parse(data, maxThreads: 1);
             sw.Stop();
 
@@ -258,4 +316,5 @@ else if (parseResult is not null)
         errorMessage = null;
         fileName = null;
     }
+
 }

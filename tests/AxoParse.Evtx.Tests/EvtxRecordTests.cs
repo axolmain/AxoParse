@@ -4,11 +4,43 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    #region Public Methods
 
-    private const int FileHeaderSize = 4096;
-    private const int ChunkSize = 65536;
-    private const int ChunkHeaderSize = 512;
+    [Fact]
+    public void ParsesAllRecordsInFirstChunk()
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        int chunkStart = FileHeaderSize;
+        EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(data.AsSpan(chunkStart, ChunkSize));
+
+        Stopwatch sw = new Stopwatch();
+        int offset = ChunkHeaderSize;
+        List<EvtxRecord> records = new List<EvtxRecord>();
+
+        ReadOnlySpan<byte> span = data.AsSpan(chunkStart, ChunkSize);
+        while (offset < ChunkSize - 28)
+        {
+            if (!span.Slice(offset, 4).SequenceEqual("\x2a\x2a\x00\x00"u8))
+                break;
+
+            sw.Start();
+            EvtxRecord? record = EvtxRecord.ParseEvtxRecord(span[offset..], chunkStart + offset);
+            sw.Stop();
+
+            Assert.NotNull(record);
+            records.Add(record.Value);
+            offset += (int)record.Value.Size;
+        }
+
+        Assert.True(records.Count > 0);
+        for (int i = 1; i < records.Count; i++)
+            Assert.Equal(records[i - 1].EventRecordId + 1, records[i].EventRecordId);
+
+        testOutputHelper.WriteLine(
+            $"[security.evtx chunk 0] Parsed {records.Count} records in {sw.Elapsed.TotalMicroseconds:F1}µs total");
+        testOutputHelper.WriteLine($"  IDs: {records[0].EventRecordId}–{records[^1].EventRecordId}");
+        testOutputHelper.WriteLine($"  Avg: {sw.Elapsed.TotalMicroseconds / records.Count:F2}µs/record");
+    }
 
     [Fact]
     public void ParsesFirstRecordOfSecurityEvtx()
@@ -86,46 +118,21 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
         Assert.NotNull(record);
         DateTime writtenTime = record.Value.WrittenTimeUtc;
         Assert.Equal(DateTimeKind.Utc, writtenTime.Kind);
-        Assert.True(writtenTime.Year >= 2000 && writtenTime.Year <= 2100,
+        Assert.True((writtenTime.Year >= 2000) && (writtenTime.Year <= 2100),
             $"WrittenTimeUtc {writtenTime} should be a reasonable date");
         Assert.Equal(DateTime.FromFileTimeUtc((long)record.Value.WrittenTime), writtenTime);
 
         testOutputHelper.WriteLine($"Record {record.Value.EventRecordId} WrittenTimeUtc: {writtenTime:O}");
     }
 
-    [Fact]
-    public void ParsesAllRecordsInFirstChunk()
-    {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        int chunkStart = FileHeaderSize;
-        EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(data.AsSpan(chunkStart, ChunkSize));
+    #endregion
 
-        Stopwatch sw = new Stopwatch();
-        int offset = ChunkHeaderSize;
-        List<EvtxRecord> records = new List<EvtxRecord>();
+    #region Non-Public Fields
 
-        ReadOnlySpan<byte> span = data.AsSpan(chunkStart, ChunkSize);
-        while (offset < ChunkSize - 28)
-        {
-            if (!span.Slice(offset, 4).SequenceEqual("\x2a\x2a\x00\x00"u8))
-                break;
+    private const int ChunkHeaderSize = 512;
+    private const int ChunkSize = 65536;
+    private const int FileHeaderSize = 4096;
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
-            sw.Start();
-            EvtxRecord? record = EvtxRecord.ParseEvtxRecord(span[offset..], chunkStart + offset);
-            sw.Stop();
-
-            Assert.NotNull(record);
-            records.Add(record.Value);
-            offset += (int)record.Value.Size;
-        }
-
-        Assert.True(records.Count > 0);
-        for (int i = 1; i < records.Count; i++)
-            Assert.Equal(records[i - 1].EventRecordId + 1, records[i].EventRecordId);
-
-        testOutputHelper.WriteLine(
-            $"[security.evtx chunk 0] Parsed {records.Count} records in {sw.Elapsed.TotalMicroseconds:F1}µs total");
-        testOutputHelper.WriteLine($"  IDs: {records[0].EventRecordId}–{records[^1].EventRecordId}");
-        testOutputHelper.WriteLine($"  Avg: {sw.Elapsed.TotalMicroseconds / records.Count:F2}µs/record");
-    }
+    #endregion
 }

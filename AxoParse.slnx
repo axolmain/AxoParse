@@ -1,8 +1,8 @@
 <Solution>
-  <Project Path="src/AxoParse.Evtx/AxoParse.Evtx.csproj" />
-  <Project Path="src/AxoParse.Browser/AxoParse.Browser.csproj" />
-  <Project Path="demos/AxoParse.Web/AxoParse.Web.csproj" />
-  <Project Path="profiling\AxoParse.Evtx.Profile.csproj" />
-  <Project Path="src/AxoParse.Bench/AxoParse.Bench.csproj" />
-  <Project Path="tests/AxoParse.Evtx.Tests/AxoParse.Evtx.Tests.csproj" />
+    <Project Path="src/AxoParse.Evtx/AxoParse.Evtx.csproj"/>
+    <Project Path="src/AxoParse.Browser/AxoParse.Browser.csproj"/>
+    <Project Path="demos/AxoParse.Web/AxoParse.Web.csproj"/>
+    <Project Path="profiling\AxoParse.Evtx.Profile.csproj"/>
+    <Project Path="src/AxoParse.Bench/AxoParse.Bench.csproj"/>
+    <Project Path="tests/AxoParse.Evtx.Tests/AxoParse.Evtx.Tests.csproj"/>
 </Solution>

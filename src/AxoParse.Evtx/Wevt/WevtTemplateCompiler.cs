@@ -10,10 +10,7 @@ namespace AxoParse.Evtx;
 /// </summary>
 internal static class WevtTemplateCompiler
 {
-    /// <summary>
-    /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.
-    /// </summary>
-    private const int MaxRecursionDepth = 64;
+    #region Non-Public Methods
 
     /// <summary>
     /// Compiles a WEVT BinXML fragment into a <see cref="CompiledTemplate"/>.
@@ -46,35 +43,6 @@ internal static class WevtTemplateCompiler
     }
 
     /// <summary>
-    /// Reads a WEVT inline name structure at the current position.
-    /// Layout: hash(2) + numChars(2) + numChars*2 UTF-16LE bytes + nul(2) = 6 + numChars*2 bytes.
-    /// </summary>
-    /// <param name="data">BinXml byte stream.</param>
-    /// <param name="pos">Current read position; advanced past the inline name.</param>
-    /// <returns>The name string, or null if bounds check fails.</returns>
-    private static string? ReadWevtInlineName(ReadOnlySpan<byte> data, ref int pos)
-    {
-        // hash(2) + numChars(2) = minimum 4 bytes before the string
-        if (pos + 4 > data.Length)
-            return null;
-
-        pos += 2; // skip hash
-        ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
-        pos += 2;
-
-        int stringBytes = numChars * 2;
-        // string bytes + 2 byte nul terminator
-        if (pos + stringBytes + 2 > data.Length)
-            return null;
-
-        ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(data.Slice(pos, stringBytes));
-        pos += stringBytes;
-        pos += 2; // nul terminator
-
-        return new string(chars);
-    }
-
-    /// <summary>
     /// Walks WEVT BinXml content tokens, appending static XML text to the last entry in
     /// <paramref name="parts"/> and recording substitution slots. Mirrors
     /// <see cref="BinXmlParser"/>.CompileContent but uses WEVT inline name encoding.
@@ -95,11 +63,11 @@ internal static class WevtTemplateCompiler
             byte tok = data[pos];
             byte baseTok = (byte)(tok & ~BinXmlToken.HasMoreDataFlag);
 
-            if (baseTok == BinXmlToken.Eof ||
-                baseTok == BinXmlToken.CloseStartElement ||
-                baseTok == BinXmlToken.CloseEmptyElement ||
-                baseTok == BinXmlToken.EndElement ||
-                baseTok == BinXmlToken.Attribute)
+            if ((baseTok == BinXmlToken.Eof) ||
+                (baseTok == BinXmlToken.CloseStartElement) ||
+                (baseTok == BinXmlToken.CloseEmptyElement) ||
+                (baseTok == BinXmlToken.EndElement) ||
+                (baseTok == BinXmlToken.Attribute))
                 break;
 
             switch (baseTok)
@@ -250,7 +218,7 @@ internal static class WevtTemplateCompiler
             parts[^1] += ">";
             CompileContentWevt(data, ref pos, parts, subIds, isOptional, ref bail, depth + 1);
             if (bail) return;
-            if (pos < data.Length && data[pos] == BinXmlToken.EndElement)
+            if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
             parts[^1] += $"</{elemName}>";
         }
@@ -259,4 +227,44 @@ internal static class WevtTemplateCompiler
             parts[^1] += "/>";
         }
     }
+
+    /// <summary>
+    /// Reads a WEVT inline name structure at the current position.
+    /// Layout: hash(2) + numChars(2) + numChars*2 UTF-16LE bytes + nul(2) = 6 + numChars*2 bytes.
+    /// </summary>
+    /// <param name="data">BinXml byte stream.</param>
+    /// <param name="pos">Current read position; advanced past the inline name.</param>
+    /// <returns>The name string, or null if bounds check fails.</returns>
+    private static string? ReadWevtInlineName(ReadOnlySpan<byte> data, ref int pos)
+    {
+        // hash(2) + numChars(2) = minimum 4 bytes before the string
+        if (pos + 4 > data.Length)
+            return null;
+
+        pos += 2; // skip hash
+        ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
+        pos += 2;
+
+        int stringBytes = numChars * 2;
+        // string bytes + 2 byte nul terminator
+        if (pos + stringBytes + 2 > data.Length)
+            return null;
+
+        ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(data.Slice(pos, stringBytes));
+        pos += stringBytes;
+        pos += 2; // nul terminator
+
+        return new string(chars);
+    }
+
+    #endregion
+
+    #region Non-Public Fields
+
+    /// <summary>
+    /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.
+    /// </summary>
+    private const int MaxRecursionDepth = 64;
+
+    #endregion
 }

@@ -5,9 +5,13 @@ namespace AxoParse.Evtx.Tests;
 /// </summary>
 internal static class TestPaths
 {
+    #region Non-Public Fields
+
     /// <summary>
     /// Absolute path to the test data directory containing .evtx sample files.
     /// </summary>
     internal static readonly string TestDataDir = Path.GetFullPath(
         Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+
+    #endregion
 }

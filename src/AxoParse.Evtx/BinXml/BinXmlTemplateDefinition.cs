@@ -43,11 +43,7 @@ public readonly record struct BinXmlTemplateDefinition(
     uint DataSize,
     int DataFileOffset)
 {
-    /// <summary>
-    /// Returns the template body as a span into the original file buffer.
-    /// </summary>
-    public ReadOnlySpan<byte> GetData(byte[] fileData) =>
-        fileData.AsSpan(DataFileOffset, (int)DataSize);
+    #region Public Methods
 
     /// <summary>
     /// Parses a template definition from chunk data at the given chunk-relative offset.
@@ -103,4 +99,12 @@ public readonly record struct BinXmlTemplateDefinition(
 
         return cache;
     }
+
+    /// <summary>
+    /// Returns the template body as a span into the original file buffer.
+    /// </summary>
+    public ReadOnlySpan<byte> GetData(byte[] fileData) =>
+        fileData.AsSpan(DataFileOffset, (int)DataSize);
+
+    #endregion
 }

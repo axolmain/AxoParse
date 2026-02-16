@@ -7,31 +7,7 @@ namespace AxoParse.Evtx;
 /// </summary>
 public class EvtxParser
 {
-    /// <summary>
-    /// The complete EVTX file bytes. Retained so parsed records can lazily reference event data via spans.
-    /// </summary>
-    public ReadOnlyMemory<byte> RawData { get; }
-
-    /// <summary>
-    /// Parsed EVTX file header (first 4096 bytes) containing version info, chunk count, and flags.
-    /// </summary>
-    public EvtxFileHeader FileHeader { get; }
-
-    /// <summary>
-    /// All successfully parsed 64KB chunks from the file, in file order.
-    /// </summary>
-    public IReadOnlyList<EvtxChunk> Chunks { get; }
-
-    /// <summary>
-    /// Total number of event records across all parsed chunks.
-    /// </summary>
-    public int TotalRecords { get; }
-
-    /// <summary>
-    /// Parser-level diagnostic messages (e.g. chunks skipped due to invalid checksums).
-    /// Empty if no issues were encountered during parsing.
-    /// </summary>
-    public IReadOnlyList<string> Diagnostics { get; }
+    #region Constructors And Destructors
 
     /// <summary>
     /// Constructs an EvtxParser result from pre-parsed components.
@@ -51,21 +27,39 @@ public class EvtxParser
         Diagnostics = diagnostics;
     }
 
+    #endregion
+
+    #region Properties
+
     /// <summary>
-    /// Enumerates all parsed events across all chunks in file order.
-    /// Each event pairs record metadata with rendered output and optional diagnostic info.
+    /// All successfully parsed 64KB chunks from the file, in file order.
     /// </summary>
-    /// <returns>All parsed events flattened across chunks.</returns>
-    public IEnumerable<EvtxEvent> GetEvents()
-    {
-        foreach (EvtxChunk chunk in Chunks)
-        {
-            for (int i = 0; i < chunk.Records.Count; i++)
-            {
-                yield return chunk.GetEvent(i);
-            }
-        }
-    }
+    public IReadOnlyList<EvtxChunk> Chunks { get; }
+
+    /// <summary>
+    /// Parser-level diagnostic messages (e.g. chunks skipped due to invalid checksums).
+    /// Empty if no issues were encountered during parsing.
+    /// </summary>
+    public IReadOnlyList<string> Diagnostics { get; }
+
+    /// <summary>
+    /// Parsed EVTX file header (first 4096 bytes) containing version info, chunk count, and flags.
+    /// </summary>
+    public EvtxFileHeader FileHeader { get; }
+
+    /// <summary>
+    /// The complete EVTX file bytes. Retained so parsed records can lazily reference event data via spans.
+    /// </summary>
+    public ReadOnlyMemory<byte> RawData { get; }
+
+    /// <summary>
+    /// Total number of event records across all parsed chunks.
+    /// </summary>
+    public int TotalRecords { get; }
+
+    #endregion
+
+    #region Public Methods
 
     /// <summary>
     /// Parses an entire EVTX file from a byte array.
@@ -143,7 +137,6 @@ public class EvtxParser
                     compiledCache.TryAdd(kv.Key, kv.Value);
             });
 
-
         // Phase 3 (sequential): collect results from valid chunks
         cancellationToken.ThrowIfCancellationRequested();
         List<EvtxChunk> chunks = new List<EvtxChunk>(validCount);
@@ -197,4 +190,21 @@ public class EvtxParser
         return new EvtxParser(fileData, fileHeader, chunks, totalRecords, diagnostics);
     }
 
+    /// <summary>
+    /// Enumerates all parsed events across all chunks in file order.
+    /// Each event pairs record metadata with rendered output and optional diagnostic info.
+    /// </summary>
+    /// <returns>All parsed events flattened across chunks.</returns>
+    public IEnumerable<EvtxEvent> GetEvents()
+    {
+        foreach (EvtxChunk chunk in Chunks)
+        {
+            for (int i = 0; i < chunk.Records.Count; i++)
+            {
+                yield return chunk.GetEvent(i);
+            }
+        }
+    }
+
+    #endregion
 }

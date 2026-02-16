@@ -5,23 +5,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
-
-    [Fact]
-    public void FirstRecordStartsWithEventXmlns()
-    {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
-
-        Assert.True(parser.Chunks.Count > 0);
-        Assert.True(parser.Chunks[0].ParsedXml.Count > 0);
-
-        string xml = parser.Chunks[0].ParsedXml[0];
-        testOutputHelper.WriteLine($"First record XML ({xml.Length} chars):");
-        testOutputHelper.WriteLine(xml.Length > 500 ? xml[..500] + "..." : xml);
-
-        Assert.StartsWith("<Event xmlns=", xml);
-    }
+    #region Public Methods
 
     [Fact]
     public void AllRecordsNonEmpty()
@@ -45,29 +29,19 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
-    public void ParsesAllTestFilesWithoutExceptions()
+    public void FirstRecordStartsWithEventXmlns()
     {
-        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
-        Stopwatch sw = new Stopwatch();
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data);
 
-        testOutputHelper.WriteLine($"BinXml parse of {evtxFiles.Length} files:");
+        Assert.True(parser.Chunks.Count > 0);
+        Assert.True(parser.Chunks[0].ParsedXml.Count > 0);
 
-        foreach (string file in evtxFiles)
-        {
-            byte[] data = File.ReadAllBytes(file);
-            string name = Path.GetFileName(file);
+        string xml = parser.Chunks[0].ParsedXml[0];
+        testOutputHelper.WriteLine($"First record XML ({xml.Length} chars):");
+        testOutputHelper.WriteLine(xml.Length > 500 ? xml[..500] + "..." : xml);
 
-            sw.Restart();
-            EvtxParser parser = EvtxParser.Parse(data);
-            sw.Stop();
-
-            int xmlCount = 0;
-            foreach (EvtxChunk chunk in parser.Chunks)
-                xmlCount += chunk.ParsedXml.Count;
-
-            testOutputHelper.WriteLine(
-                $"  [{name}] {sw.Elapsed.TotalMilliseconds,8:F2}ms | {parser.TotalRecords} records | {xmlCount} XML");
-        }
+        Assert.StartsWith("<Event xmlns=", xml);
     }
 
     [Fact]
@@ -96,12 +70,30 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         }
     }
 
-    private static string[] FlattenXml(EvtxParser parser)
+    [Fact]
+    public void ParsesAllTestFilesWithoutExceptions()
     {
-        List<string> all = new();
-        foreach (EvtxChunk chunk in parser.Chunks)
-            all.AddRange(chunk.ParsedXml);
-        return all.ToArray();
+        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        Stopwatch sw = new Stopwatch();
+
+        testOutputHelper.WriteLine($"BinXml parse of {evtxFiles.Length} files:");
+
+        foreach (string file in evtxFiles)
+        {
+            byte[] data = File.ReadAllBytes(file);
+            string name = Path.GetFileName(file);
+
+            sw.Restart();
+            EvtxParser parser = EvtxParser.Parse(data);
+            sw.Stop();
+
+            int xmlCount = 0;
+            foreach (EvtxChunk chunk in parser.Chunks)
+                xmlCount += chunk.ParsedXml.Count;
+
+            testOutputHelper.WriteLine(
+                $"  [{name}] {sw.Elapsed.TotalMilliseconds,8:F2}ms | {parser.TotalRecords} records | {xmlCount} XML");
+        }
     }
 
     /// <summary>
@@ -182,4 +174,24 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
                 $"  [{Path.GetFileName(file)}] {recordCount} records encode to UTF-8 without error");
         }
     }
+
+    #endregion
+
+    #region Non-Public Methods
+
+    private static string[] FlattenXml(EvtxParser parser)
+    {
+        List<string> all = new();
+        foreach (EvtxChunk chunk in parser.Chunks)
+            all.AddRange(chunk.ParsedXml);
+        return all.ToArray();
+    }
+
+    #endregion
+
+    #region Non-Public Fields
+
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
+
+    #endregion
 }

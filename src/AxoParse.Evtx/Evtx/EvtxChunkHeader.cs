@@ -30,6 +30,8 @@ public readonly record struct EvtxChunkHeader(
     ChunkFlags Flags,
     uint Checksum)
 {
+    #region Public Methods
+
     /// <summary>
     /// Parses the 512-byte chunk header, verifying the "ElfChnk\0" signature and reading
     /// record range, offsets, checksums, and flags from their respective positions.
@@ -59,17 +61,6 @@ public readonly record struct EvtxChunkHeader(
     }
 
     /// <summary>
-    /// Validates the chunk header checksum: CRC32(bytes[0..120]) XOR CRC32(bytes[128..512]).
-    /// </summary>
-    /// <param name="chunkData">Full 64KB chunk data.</param>
-    /// <returns>True if the computed checksum matches the stored value.</returns>
-    public bool ValidateHeaderChecksum(ReadOnlySpan<byte> chunkData)
-    {
-        uint crc = Crc32.Compute(chunkData[..120]) ^ Crc32.Compute(chunkData[128..512]);
-        return crc == Checksum;
-    }
-
-    /// <summary>
     /// Validates the event records data checksum: CRC32(bytes[512..FreeSpaceOffset]).
     /// </summary>
     /// <param name="chunkData">Full 64KB chunk data.</param>
@@ -81,4 +72,17 @@ public readonly record struct EvtxChunkHeader(
         uint crc = Crc32.Compute(chunkData[512..(int)clampedEnd]);
         return crc == EventRecordsChecksum;
     }
+
+    /// <summary>
+    /// Validates the chunk header checksum: CRC32(bytes[0..120]) XOR CRC32(bytes[128..512]).
+    /// </summary>
+    /// <param name="chunkData">Full 64KB chunk data.</param>
+    /// <returns>True if the computed checksum matches the stored value.</returns>
+    public bool ValidateHeaderChecksum(ReadOnlySpan<byte> chunkData)
+    {
+        uint crc = Crc32.Compute(chunkData[..120]) ^ Crc32.Compute(chunkData[128..512]);
+        return crc == Checksum;
+    }
+
+    #endregion
 }

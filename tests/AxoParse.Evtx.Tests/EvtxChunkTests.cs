@@ -4,52 +4,25 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    #region Public Methods
 
-    private const int FileHeaderSize = 4096;
-
-    private static (byte[] fileData, int chunkFileOffset) GetChunkInfo(string filename, int chunkIndex = 0)
-    {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, filename));
-        int offset = FileHeaderSize + chunkIndex * EvtxChunk.ChunkSize;
-        return (data, offset);
-    }
-
+    /// <summary>
+    /// Verifies that GetEvent() returns an EvtxEvent matching the parallel array data.
+    /// </summary>
     [Fact]
-    public void ParsesFirstChunkOfSecurityEvtx()
+    public void GetEventMatchesDirectIndexAccess()
     {
-        var (fileData, chunkOffset) = GetChunkInfo("security.evtx");
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data);
 
-        Stopwatch sw = Stopwatch.StartNew();
-        EvtxChunk chunk = EvtxChunk.Parse(fileData.AsSpan(chunkOffset, EvtxChunk.ChunkSize), chunkOffset);
-        sw.Stop();
-
-        Assert.True(chunk.Records.Count > 0);
-        Assert.True(chunk.Templates.Count > 0);
-        Assert.Equal(128u, chunk.Header.HeaderSize);
-
-        testOutputHelper.WriteLine($"[security.evtx chunk 0] Parsed in {sw.Elapsed.TotalMicroseconds:F1}µs");
-        testOutputHelper.WriteLine($"  Records: {chunk.Records.Count}, Templates: {chunk.Templates.Count}");
-    }
-
-    [Fact]
-    public void RecordsAreSequential()
-    {
-        var (fileData, chunkOffset) = GetChunkInfo("security.evtx");
-        EvtxChunk chunk = EvtxChunk.Parse(fileData.AsSpan(chunkOffset, EvtxChunk.ChunkSize), chunkOffset);
-
-        for (int i = 1; i < chunk.Records.Count; i++)
-            Assert.Equal(chunk.Records[i - 1].EventRecordId + 1, chunk.Records[i].EventRecordId);
-    }
-
-    [Fact]
-    public void RecordCountMatchesHeader()
-    {
-        var (fileData, chunkOffset) = GetChunkInfo("security.evtx");
-        EvtxChunk chunk = EvtxChunk.Parse(fileData.AsSpan(chunkOffset, EvtxChunk.ChunkSize), chunkOffset);
-
-        ulong expected = chunk.Header.LastEventRecordId - chunk.Header.FirstEventRecordId + 1;
-        Assert.Equal((int)expected, chunk.Records.Count);
+        EvtxChunk chunk = parser.Chunks[0];
+        for (int i = 0; i < chunk.Records.Count; i++)
+        {
+            EvtxEvent evt = chunk.GetEvent(i);
+            Assert.Equal(chunk.Records[i], evt.Record);
+            Assert.Equal(chunk.ParsedXml[i], evt.Xml);
+            Assert.True(evt.IsSuccess);
+        }
     }
 
     /// <summary>
@@ -72,23 +45,41 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
         }
     }
 
-    /// <summary>
-    /// Verifies that GetEvent() returns an EvtxEvent matching the parallel array data.
-    /// </summary>
     [Fact]
-    public void GetEventMatchesDirectIndexAccess()
+    public void ParsesFirstChunkOfSecurityEvtx()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
+        (byte[] fileData, int chunkOffset) = GetChunkInfo("security.evtx");
 
-        EvtxChunk chunk = parser.Chunks[0];
-        for (int i = 0; i < chunk.Records.Count; i++)
-        {
-            EvtxEvent evt = chunk.GetEvent(i);
-            Assert.Equal(chunk.Records[i], evt.Record);
-            Assert.Equal(chunk.ParsedXml[i], evt.Xml);
-            Assert.True(evt.IsSuccess);
-        }
+        Stopwatch sw = Stopwatch.StartNew();
+        EvtxChunk chunk = EvtxChunk.Parse(fileData.AsSpan(chunkOffset, EvtxChunk.ChunkSize), chunkOffset);
+        sw.Stop();
+
+        Assert.True(chunk.Records.Count > 0);
+        Assert.True(chunk.Templates.Count > 0);
+        Assert.Equal(128u, chunk.Header.HeaderSize);
+
+        testOutputHelper.WriteLine($"[security.evtx chunk 0] Parsed in {sw.Elapsed.TotalMicroseconds:F1}µs");
+        testOutputHelper.WriteLine($"  Records: {chunk.Records.Count}, Templates: {chunk.Templates.Count}");
+    }
+
+    [Fact]
+    public void RecordCountMatchesHeader()
+    {
+        (byte[] fileData, int chunkOffset) = GetChunkInfo("security.evtx");
+        EvtxChunk chunk = EvtxChunk.Parse(fileData.AsSpan(chunkOffset, EvtxChunk.ChunkSize), chunkOffset);
+
+        ulong expected = chunk.Header.LastEventRecordId - chunk.Header.FirstEventRecordId + 1;
+        Assert.Equal((int)expected, chunk.Records.Count);
+    }
+
+    [Fact]
+    public void RecordsAreSequential()
+    {
+        (byte[] fileData, int chunkOffset) = GetChunkInfo("security.evtx");
+        EvtxChunk chunk = EvtxChunk.Parse(fileData.AsSpan(chunkOffset, EvtxChunk.ChunkSize), chunkOffset);
+
+        for (int i = 1; i < chunk.Records.Count; i++)
+            Assert.Equal(chunk.Records[i - 1].EventRecordId + 1, chunk.Records[i].EventRecordId);
     }
 
     /// <summary>
@@ -105,4 +96,24 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
             Assert.Empty(chunk.RenderDiagnostics);
         }
     }
+
+    #endregion
+
+    #region Non-Public Methods
+
+    private static (byte[] fileData, int chunkFileOffset) GetChunkInfo(string filename, int chunkIndex = 0)
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, filename));
+        int offset = FileHeaderSize + chunkIndex * EvtxChunk.ChunkSize;
+        return (data, offset);
+    }
+
+    #endregion
+
+    #region Non-Public Fields
+
+    private const int FileHeaderSize = 4096;
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
+
+    #endregion
 }

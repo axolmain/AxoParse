@@ -17,43 +17,7 @@ internal readonly record struct WevtTemplate(Guid Guid, byte[] BinXmlData);
 /// </summary>
 internal static class WevtManifest
 {
-    /// <summary>
-    /// CRIM header: 16 bytes.
-    /// Offset 0: "CRIM" magic (4), size (4), major_version (2), minor_version (2), provider_count (4).
-    /// </summary>
-    private const int CrimHeaderSize = 16;
-
-    /// <summary>
-    /// Provider descriptor: 20 bytes.
-    /// GUID (16) + data offset from CRIM start (4).
-    /// </summary>
-    private const int ProviderDescriptorSize = 20;
-
-    /// <summary>
-    /// WEVT provider header: 20 bytes.
-    /// "WEVT" magic (4), size (4), message_id (4), descriptor_count (4), unknown2_count (4).
-    /// </summary>
-    private const int WevtHeaderSize = 20;
-
-    /// <summary>
-    /// Element descriptor within WEVT: 8 bytes.
-    /// element_offset (4) + unknown (4).
-    /// </summary>
-    private const int ElementDescriptorSize = 8;
-
-    /// <summary>
-    /// TTBL header: 12 bytes.
-    /// "TTBL" magic (4), size (4), count (4).
-    /// </summary>
-    private const int TtblHeaderSize = 12;
-
-    /// <summary>
-    /// TEMP header: 40 bytes.
-    /// "TEMP" magic (4), size (4), item_descriptor_count (4), item_name_count (4),
-    /// template_items_offset (4), event_type (4), GUID (16).
-    /// BinXML starts at offset 40.
-    /// </summary>
-    private const int TempHeaderSize = 40;
+    #region Non-Public Methods
 
     /// <summary>
     /// Parses a CRIM manifest blob and extracts all TEMP template definitions.
@@ -89,6 +53,63 @@ internal static class WevtManifest
     }
 
     /// <summary>
+    /// Parses a TTBL (template table) block and extracts all TEMP entries.
+    /// </summary>
+    /// <param name="data">Full CRIM blob.</param>
+    /// <param name="offset">Absolute offset of the TTBL header within <paramref name="data"/>.</param>
+    /// <param name="templates">Accumulator for extracted templates.</param>
+    private static void ParseTtbl(ReadOnlySpan<byte> data, int offset, List<WevtTemplate> templates)
+    {
+        if (offset + TtblHeaderSize > data.Length)
+            return;
+
+        uint count = MemoryMarshal.Read<uint>(data[(offset + 8)..]);
+
+        int pos = offset + TtblHeaderSize;
+        for (uint t = 0; t < count; t++)
+        {
+            if (pos + TempHeaderSize > data.Length)
+                break;
+
+            if (!data.Slice(pos, 4).SequenceEqual("TEMP"u8))
+                break;
+
+            uint tempSize = MemoryMarshal.Read<uint>(data[(pos + 4)..]);
+            if ((tempSize < TempHeaderSize) || (pos + (int)tempSize > data.Length))
+                break;
+
+            uint itemDescriptorCount = MemoryMarshal.Read<uint>(data[(pos + 8)..]);
+            uint templateItemsOffset = MemoryMarshal.Read<uint>(data[(pos + 16)..]);
+            Guid guid = MemoryMarshal.Read<Guid>(data[(pos + 24)..]);
+
+            // BinXML starts at byte 40 within the TEMP entry (after the header).
+            // templateItemsOffset is absolute (from CRIM start) — convert to relative within the TEMP entry.
+            // BinXML ends where the item descriptor table begins, or at end-of-TEMP if no items.
+            int binXmlStart = pos + TempHeaderSize;
+            int binXmlEnd;
+            if ((itemDescriptorCount > 0) && (templateItemsOffset > (uint)pos))
+            {
+                // Convert absolute CRIM offset to absolute data offset, clamped to TEMP boundary
+                int itemsRel = (int)(templateItemsOffset - (uint)pos);
+                binXmlEnd = pos + Math.Min(itemsRel, (int)tempSize);
+            }
+            else
+            {
+                binXmlEnd = pos + (int)tempSize;
+            }
+
+            int binXmlLen = binXmlEnd - binXmlStart;
+            if (binXmlLen > 0)
+            {
+                byte[] binXml = data.Slice(binXmlStart, binXmlLen).ToArray();
+                templates.Add(new WevtTemplate(guid, binXml));
+            }
+
+            pos += (int)tempSize;
+        }
+    }
+
+    /// <summary>
     /// Parses a WEVT provider block, scanning its element descriptors for TTBL entries.
     /// </summary>
     /// <param name="data">Full CRIM blob.</param>
@@ -113,7 +134,7 @@ internal static class WevtManifest
 
             uint elementOffset = MemoryMarshal.Read<uint>(data[elemDescOffset..]);
 
-            if (elementOffset + 4 <= (uint)data.Length &&
+            if ((elementOffset + 4 <= (uint)data.Length) &&
                 data.Slice((int)elementOffset, 4).SequenceEqual("TTBL"u8))
             {
                 ParseTtbl(data, (int)elementOffset, templates);
@@ -121,60 +142,47 @@ internal static class WevtManifest
         }
     }
 
+    #endregion
+
+    #region Non-Public Fields
+
     /// <summary>
-    /// Parses a TTBL (template table) block and extracts all TEMP entries.
+    /// CRIM header: 16 bytes.
+    /// Offset 0: "CRIM" magic (4), size (4), major_version (2), minor_version (2), provider_count (4).
     /// </summary>
-    /// <param name="data">Full CRIM blob.</param>
-    /// <param name="offset">Absolute offset of the TTBL header within <paramref name="data"/>.</param>
-    /// <param name="templates">Accumulator for extracted templates.</param>
-    private static void ParseTtbl(ReadOnlySpan<byte> data, int offset, List<WevtTemplate> templates)
-    {
-        if (offset + TtblHeaderSize > data.Length)
-            return;
+    private const int CrimHeaderSize = 16;
 
-        uint count = MemoryMarshal.Read<uint>(data[(offset + 8)..]);
+    /// <summary>
+    /// Element descriptor within WEVT: 8 bytes.
+    /// element_offset (4) + unknown (4).
+    /// </summary>
+    private const int ElementDescriptorSize = 8;
 
-        int pos = offset + TtblHeaderSize;
-        for (uint t = 0; t < count; t++)
-        {
-            if (pos + TempHeaderSize > data.Length)
-                break;
+    /// <summary>
+    /// Provider descriptor: 20 bytes.
+    /// GUID (16) + data offset from CRIM start (4).
+    /// </summary>
+    private const int ProviderDescriptorSize = 20;
 
-            if (!data.Slice(pos, 4).SequenceEqual("TEMP"u8))
-                break;
+    /// <summary>
+    /// TEMP header: 40 bytes.
+    /// "TEMP" magic (4), size (4), item_descriptor_count (4), item_name_count (4),
+    /// template_items_offset (4), event_type (4), GUID (16).
+    /// BinXML starts at offset 40.
+    /// </summary>
+    private const int TempHeaderSize = 40;
 
-            uint tempSize = MemoryMarshal.Read<uint>(data[(pos + 4)..]);
-            if (tempSize < TempHeaderSize || pos + (int)tempSize > data.Length)
-                break;
+    /// <summary>
+    /// TTBL header: 12 bytes.
+    /// "TTBL" magic (4), size (4), count (4).
+    /// </summary>
+    private const int TtblHeaderSize = 12;
 
-            uint itemDescriptorCount = MemoryMarshal.Read<uint>(data[(pos + 8)..]);
-            uint templateItemsOffset = MemoryMarshal.Read<uint>(data[(pos + 16)..]);
-            Guid guid = MemoryMarshal.Read<Guid>(data[(pos + 24)..]);
+    /// <summary>
+    /// WEVT provider header: 20 bytes.
+    /// "WEVT" magic (4), size (4), message_id (4), descriptor_count (4), unknown2_count (4).
+    /// </summary>
+    private const int WevtHeaderSize = 20;
 
-            // BinXML starts at byte 40 within the TEMP entry (after the header).
-            // templateItemsOffset is absolute (from CRIM start) — convert to relative within the TEMP entry.
-            // BinXML ends where the item descriptor table begins, or at end-of-TEMP if no items.
-            int binXmlStart = pos + TempHeaderSize;
-            int binXmlEnd;
-            if (itemDescriptorCount > 0 && templateItemsOffset > (uint)pos)
-            {
-                // Convert absolute CRIM offset to absolute data offset, clamped to TEMP boundary
-                int itemsRel = (int)(templateItemsOffset - (uint)pos);
-                binXmlEnd = pos + Math.Min(itemsRel, (int)tempSize);
-            }
-            else
-            {
-                binXmlEnd = pos + (int)tempSize;
-            }
-
-            int binXmlLen = binXmlEnd - binXmlStart;
-            if (binXmlLen > 0)
-            {
-                byte[] binXml = data.Slice(binXmlStart, binXmlLen).ToArray();
-                templates.Add(new WevtTemplate(guid, binXml));
-            }
-
-            pos += (int)tempSize;
-        }
-    }
+    #endregion
 }

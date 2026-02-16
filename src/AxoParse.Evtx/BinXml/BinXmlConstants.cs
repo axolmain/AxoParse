@@ -7,39 +7,7 @@ namespace AxoParse.Evtx;
 /// </summary>
 internal static class BinXmlToken
 {
-    /// <summary>
-    /// End of file.
-    /// </summary>
-    public const byte Eof = 0x00;
-
-    /// <summary>
-    /// Open start element tag.
-    /// Indicates the start of a start element, correlates to '&lt;' in '&lt;Event&gt;'.
-    /// </summary>
-    public const byte OpenStartElement = 0x01;
-
-    /// <summary>
-    /// Close start element tag.
-    /// Indicates the end of a start element, correlates to '&gt;' in '&lt;Event&gt;'.
-    /// </summary>
-    public const byte CloseStartElement = 0x02;
-
-    /// <summary>
-    /// Close empty element tag.
-    /// Indicates the end of a start element, correlates to '/&gt;' in '&lt;Event/&gt;'.
-    /// </summary>
-    public const byte CloseEmptyElement = 0x03;
-
-    /// <summary>
-    /// Close end element tag.
-    /// Indicates the end of element, correlates to '&lt;/Event&gt;'.
-    /// </summary>
-    public const byte EndElement = 0x04;
-
-    /// <summary>
-    /// Value (0x05 / 0x45 with has-more-data flag).
-    /// </summary>
-    public const byte Value = 0x05;
+    #region Fields
 
     /// <summary>
     /// Attribute (0x06 / 0x46 with has-more-data flag).
@@ -57,36 +25,32 @@ internal static class BinXmlToken
     public const byte CharRef = 0x08;
 
     /// <summary>
+    /// Close empty element tag.
+    /// Indicates the end of a start element, correlates to '/&gt;' in '&lt;Event/&gt;'.
+    /// </summary>
+    public const byte CloseEmptyElement = 0x03;
+
+    /// <summary>
+    /// Close start element tag.
+    /// Indicates the end of a start element, correlates to '&gt;' in '&lt;Event&gt;'.
+    /// </summary>
+    public const byte CloseStartElement = 0x02;
+
+    /// <summary>
+    /// Close end element tag.
+    /// Indicates the end of element, correlates to '&lt;/Event&gt;'.
+    /// </summary>
+    public const byte EndElement = 0x04;
+
+    /// <summary>
     /// Entity reference (0x09 / 0x49 with has-more-data flag).
     /// </summary>
     public const byte EntityRef = 0x09;
 
     /// <summary>
-    /// Processing instructions (PI) target.
-    /// XML processing instructions.
+    /// End of file.
     /// </summary>
-    public const byte PiTarget = 0x0A;
-
-    /// <summary>
-    /// Processing instructions (PI) data.
-    /// XML processing instructions.
-    /// </summary>
-    public const byte PiData = 0x0B;
-
-    /// <summary>
-    /// Template instance.
-    /// </summary>
-    public const byte TemplateInstance = 0x0C;
-
-    /// <summary>
-    /// Normal substitution.
-    /// </summary>
-    public const byte NormalSubstitution = 0x0D;
-
-    /// <summary>
-    /// Optional substitution.
-    /// </summary>
-    public const byte OptionalSubstitution = 0x0E;
+    public const byte Eof = 0x00;
 
     /// <summary>
     /// Fragment header token.
@@ -97,6 +61,46 @@ internal static class BinXmlToken
     /// Flag OR'd with base token to indicate has-more-data variant (0x40).
     /// </summary>
     public const byte HasMoreDataFlag = 0x40;
+
+    /// <summary>
+    /// Normal substitution.
+    /// </summary>
+    public const byte NormalSubstitution = 0x0D;
+
+    /// <summary>
+    /// Open start element tag.
+    /// Indicates the start of a start element, correlates to '&lt;' in '&lt;Event&gt;'.
+    /// </summary>
+    public const byte OpenStartElement = 0x01;
+
+    /// <summary>
+    /// Optional substitution.
+    /// </summary>
+    public const byte OptionalSubstitution = 0x0E;
+
+    /// <summary>
+    /// Processing instructions (PI) data.
+    /// XML processing instructions.
+    /// </summary>
+    public const byte PiData = 0x0B;
+
+    /// <summary>
+    /// Processing instructions (PI) target.
+    /// XML processing instructions.
+    /// </summary>
+    public const byte PiTarget = 0x0A;
+
+    /// <summary>
+    /// Template instance.
+    /// </summary>
+    public const byte TemplateInstance = 0x0C;
+
+    /// <summary>
+    /// Value (0x05 / 0x45 with has-more-data flag).
+    /// </summary>
+    public const byte Value = 0x05;
+
+    #endregion
 }
 
 /// <summary>
@@ -104,16 +108,7 @@ internal static class BinXmlToken
 /// </summary>
 internal static class BinXmlValueType
 {
-    /// <summary>
-    /// NULL or empty.
-    /// </summary>
-    public const byte Null = 0x00;
-
-    /// <summary>
-    /// Unicode string.
-    /// Stored as UTF-16 little-endian without an end-of-string character.
-    /// </summary>
-    public const byte String = 0x01;
+    #region Fields
 
     /// <summary>
     /// ASCII string.
@@ -122,54 +117,20 @@ internal static class BinXmlValueType
     public const byte AnsiString = 0x02;
 
     /// <summary>
-    /// 8-bit integer signed.
+    /// Flag OR'd with base type to indicate an array (0x80).
+    /// Binary data and binary XML fragment types are not supported as arrays.
     /// </summary>
-    public const byte Int8 = 0x03;
+    public const byte ArrayFlag = 0x80;
 
     /// <summary>
-    /// 8-bit integer unsigned.
+    /// Binary data.
     /// </summary>
-    public const byte UInt8 = 0x04;
+    public const byte Binary = 0x0E;
 
     /// <summary>
-    /// 16-bit integer signed.
+    /// Binary XML fragment.
     /// </summary>
-    public const byte Int16 = 0x05;
-
-    /// <summary>
-    /// 16-bit integer unsigned.
-    /// </summary>
-    public const byte UInt16 = 0x06;
-
-    /// <summary>
-    /// 32-bit integer signed.
-    /// </summary>
-    public const byte Int32 = 0x07;
-
-    /// <summary>
-    /// 32-bit integer unsigned.
-    /// </summary>
-    public const byte UInt32 = 0x08;
-
-    /// <summary>
-    /// 64-bit integer signed.
-    /// </summary>
-    public const byte Int64 = 0x09;
-
-    /// <summary>
-    /// 64-bit integer unsigned.
-    /// </summary>
-    public const byte UInt64 = 0x0A;
-
-    /// <summary>
-    /// Floating point 32-bit (single precision).
-    /// </summary>
-    public const byte Float = 0x0B;
-
-    /// <summary>
-    /// Floating point 64-bit (double precision).
-    /// </summary>
-    public const byte Double = 0x0C;
+    public const byte BinXml = 0x21;
 
     /// <summary>
     /// Boolean.
@@ -178,21 +139,19 @@ internal static class BinXmlValueType
     public const byte Bool = 0x0D;
 
     /// <summary>
-    /// Binary data.
+    /// Floating point 64-bit (double precision).
     /// </summary>
-    public const byte Binary = 0x0E;
+    public const byte Double = 0x0C;
 
     /// <summary>
-    /// GUID.
-    /// Stored in little-endian.
+    /// EvtHandle. Usage unknown.
     /// </summary>
-    public const byte Guid = 0x0F;
+    public const byte EvtHandle = 0x20;
 
     /// <summary>
-    /// Size type.
-    /// Either 32 or 64-bits. Should be paired with HexInt32 or HexInt64.
+    /// EvtXml. Usage unknown.
     /// </summary>
-    public const byte SizeT = 0x10;
+    public const byte EvtXml = 0x23;
 
     /// <summary>
     /// FILETIME (64-bit).
@@ -201,15 +160,15 @@ internal static class BinXmlValueType
     public const byte FileTime = 0x11;
 
     /// <summary>
-    /// System time (128-bit).
-    /// Stored in little-endian.
+    /// Floating point 32-bit (single precision).
     /// </summary>
-    public const byte SystemTime = 0x12;
+    public const byte Float = 0x0B;
 
     /// <summary>
-    /// NT Security Identifier (SID).
+    /// GUID.
+    /// Stored in little-endian.
     /// </summary>
-    public const byte Sid = 0x13;
+    public const byte Guid = 0x0F;
 
     /// <summary>
     /// 32-bit integer hexadecimal.
@@ -224,25 +183,74 @@ internal static class BinXmlValueType
     public const byte HexInt64 = 0x15;
 
     /// <summary>
-    /// EvtHandle. Usage unknown.
+    /// 16-bit integer signed.
     /// </summary>
-    public const byte EvtHandle = 0x20;
+    public const byte Int16 = 0x05;
 
     /// <summary>
-    /// Binary XML fragment.
+    /// 32-bit integer signed.
     /// </summary>
-    public const byte BinXml = 0x21;
+    public const byte Int32 = 0x07;
 
     /// <summary>
-    /// EvtXml. Usage unknown.
+    /// 64-bit integer signed.
     /// </summary>
-    public const byte EvtXml = 0x23;
+    public const byte Int64 = 0x09;
 
     /// <summary>
-    /// Flag OR'd with base type to indicate an array (0x80).
-    /// Binary data and binary XML fragment types are not supported as arrays.
+    /// 8-bit integer signed.
     /// </summary>
-    public const byte ArrayFlag = 0x80;
+    public const byte Int8 = 0x03;
+
+    /// <summary>
+    /// NULL or empty.
+    /// </summary>
+    public const byte Null = 0x00;
+
+    /// <summary>
+    /// NT Security Identifier (SID).
+    /// </summary>
+    public const byte Sid = 0x13;
+
+    /// <summary>
+    /// Size type.
+    /// Either 32 or 64-bits. Should be paired with HexInt32 or HexInt64.
+    /// </summary>
+    public const byte SizeT = 0x10;
+
+    /// <summary>
+    /// Unicode string.
+    /// Stored as UTF-16 little-endian without an end-of-string character.
+    /// </summary>
+    public const byte String = 0x01;
+
+    /// <summary>
+    /// System time (128-bit).
+    /// Stored in little-endian.
+    /// </summary>
+    public const byte SystemTime = 0x12;
+
+    /// <summary>
+    /// 16-bit integer unsigned.
+    /// </summary>
+    public const byte UInt16 = 0x06;
+
+    /// <summary>
+    /// 32-bit integer unsigned.
+    /// </summary>
+    public const byte UInt32 = 0x08;
+
+    /// <summary>
+    /// 64-bit integer unsigned.
+    /// </summary>
+    public const byte UInt64 = 0x0A;
+
+    /// <summary>
+    /// 8-bit integer unsigned.
+    /// </summary>
+    public const byte UInt8 = 0x04;
+
+    #endregion
 }
 
 /// <summary>

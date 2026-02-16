@@ -47,17 +47,16 @@ public readonly record struct EvtxRecord(
     int EventDataLength,
     uint SizeCopy)
 {
+    #region Properties
+
     /// <summary>
     /// Converts the FILETIME <see cref="WrittenTime"/> to a UTC <see cref="DateTime"/>.
     /// </summary>
     public DateTime WrittenTimeUtc => DateTime.FromFileTimeUtc((long)WrittenTime);
 
-    /// <summary>
-    /// Returns the event data as a span into the original file buffer.
-    /// </summary>
-    /// <param name="fileData">The complete EVTX file bytes.</param>
-    /// <returns>A read-only span covering the BinXml event data for this record.</returns>
-    public ReadOnlySpan<byte> GetEventData(byte[] fileData) => fileData.AsSpan(EventDataFileOffset, EventDataLength);
+    #endregion
+
+    #region Public Methods
 
     /// <summary>
     /// Parses a record from a span into chunk data. Caller must verify record magic beforehand.
@@ -71,7 +70,7 @@ public readonly record struct EvtxRecord(
     {
         RecordHeaderLayout header = MemoryMarshal.Read<RecordHeaderLayout>(data);
 
-        if (header.Size < 28 || header.Size > (uint)data.Length)
+        if ((header.Size < 28) || (header.Size > (uint)data.Length))
             return null;
 
         // Trailing size copy must match header size (EVTX integrity check)
@@ -90,4 +89,13 @@ public readonly record struct EvtxRecord(
             SizeCopy: sizeCopy
         );
     }
+
+    /// <summary>
+    /// Returns the event data as a span into the original file buffer.
+    /// </summary>
+    /// <param name="fileData">The complete EVTX file bytes.</param>
+    /// <returns>A read-only span covering the BinXml event data for this record.</returns>
+    public ReadOnlySpan<byte> GetEventData(byte[] fileData) => fileData.AsSpan(EventDataFileOffset, EventDataLength);
+
+    #endregion
 }

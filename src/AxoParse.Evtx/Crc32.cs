@@ -6,10 +6,24 @@ namespace AxoParse.Evtx;
 /// </summary>
 internal static class Crc32
 {
+    #region Public Methods
+
     /// <summary>
-    /// Precomputed 256-entry CRC32 lookup table using the reflected IEEE 802.3 polynomial (0xEDB88320).
+    /// Computes CRC32 over the given data span.
     /// </summary>
-    private static readonly uint[] Table = InitTable();
+    /// <param name="data">Input bytes to checksum.</param>
+    /// <returns>The CRC32 value.</returns>
+    public static uint Compute(ReadOnlySpan<byte> data)
+    {
+        uint crc = 0xFFFFFFFFu;
+        for (int i = 0; i < data.Length; i++)
+            crc = Table[(byte)(crc ^ data[i])] ^ (crc >> 8);
+        return crc ^ 0xFFFFFFFFu;
+    }
+
+    #endregion
+
+    #region Non-Public Methods
 
     /// <summary>
     /// Builds the 256-entry CRC32 lookup table by computing the remainder for each possible byte value.
@@ -28,16 +42,14 @@ internal static class Crc32
         return table;
     }
 
+    #endregion
+
+    #region Non-Public Fields
+
     /// <summary>
-    /// Computes CRC32 over the given data span.
+    /// Precomputed 256-entry CRC32 lookup table using the reflected IEEE 802.3 polynomial (0xEDB88320).
     /// </summary>
-    /// <param name="data">Input bytes to checksum.</param>
-    /// <returns>The CRC32 value.</returns>
-    public static uint Compute(ReadOnlySpan<byte> data)
-    {
-        uint crc = 0xFFFFFFFFu;
-        for (int i = 0; i < data.Length; i++)
-            crc = Table[(byte)(crc ^ data[i])] ^ (crc >> 8);
-        return crc ^ 0xFFFFFFFFu;
-    }
+    private static readonly uint[] Table = InitTable();
+
+    #endregion
 }
