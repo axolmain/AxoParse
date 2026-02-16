@@ -68,10 +68,10 @@ public readonly record struct EvtxFileHeader(
     public static EvtxFileHeader ParseEvtxFileHeader(ReadOnlySpan<byte> data)
     {
         if (data.Length < 128)
-            throw new InvalidDataException("EVTX header too short");
+            throw new EvtxParseException(EvtxParseError.FileHeaderTooShort, "EVTX header too short");
 
         if (!data[..8].SequenceEqual("ElfFile\0"u8))
-            throw new InvalidDataException("Invalid EVTX signature");
+            throw new EvtxParseException(EvtxParseError.InvalidFileSignature, "Invalid EVTX signature");
 
         return new EvtxFileHeader(
             FirstChunkNumber: BinaryPrimitives.ReadUInt64LittleEndian(data[8..]),

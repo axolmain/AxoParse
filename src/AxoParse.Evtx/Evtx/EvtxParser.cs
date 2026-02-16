@@ -5,7 +5,7 @@ namespace AxoParse.Evtx;
 /// <summary>
 /// Top-level orchestrator. Parses the file header, slices chunks, and collects all parsed data.
 /// </summary>
-public class EvtxParser : IDisposable
+public class EvtxParser
 {
     /// <summary>
     /// The complete EVTX file bytes. Retained so parsed records can lazily reference event data via spans.
@@ -98,7 +98,7 @@ public class EvtxParser : IDisposable
                 results[i] = EvtxChunk.Parse(fileData, validOffsets[i], compiledCache, format);
             });
 
-        // Phase 3 (sequential): collect results
+        // Phase 3 (sequential): collect results from valid chunks
         List<EvtxChunk> chunks = new List<EvtxChunk>(validCount);
         int totalRecords = 0;
         for (int i = 0; i < validCount; i++)
@@ -107,12 +107,40 @@ public class EvtxParser : IDisposable
             totalRecords += results[i].Records.Count;
         }
 
+        // Phase 4 (parallel): attempt recovery on chunks with bad/missing headers
+        int[] invalidOffsets = new int[chunkCount - validCount];
+        int invalidCount = 0;
+        for (int i = 0; i < chunkCount; i++)
+        {
+            int offset = chunkStart + i * EvtxChunk.ChunkSize;
+            if (offset + EvtxChunk.ChunkSize > fileData.Length)
+                break;
+            if (span.Slice(offset, 8).SequenceEqual("ElfChnk\0"u8))
+                continue;
+            invalidOffsets[invalidCount++] = offset;
+        }
+
+        if (invalidCount > 0)
+        {
+            EvtxChunk?[] recovered = new EvtxChunk?[invalidCount];
+            Parallel.For(0, invalidCount,
+                new ParallelOptions { MaxDegreeOfParallelism = parallelism },
+                i =>
+                {
+                    recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i], compiledCache, format);
+                });
+
+            for (int i = 0; i < invalidCount; i++)
+            {
+                if (recovered[i] != null)
+                {
+                    chunks.Add(recovered[i]!);
+                    totalRecords += recovered[i]!.Records.Count;
+                }
+            }
+        }
+
         return new EvtxParser(fileData, fileHeader, chunks, totalRecords);
     }
 
-    /// <summary>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</summary>
-    public void Dispose()
-    {
-        throw new NotImplementedException();
-    }
 }

@@ -15,7 +15,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         EvtxParser parser = EvtxParser.Parse(data);
 
         Assert.True(parser.Chunks.Count > 0);
-        Assert.True(parser.Chunks[0].ParsedXml.Length > 0);
+        Assert.True(parser.Chunks[0].ParsedXml.Count > 0);
 
         string xml = parser.Chunks[0].ParsedXml[0];
         testOutputHelper.WriteLine($"First record XML ({xml.Length} chars):");
@@ -33,8 +33,8 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         int totalRecords = 0;
         foreach (EvtxChunk chunk in parser.Chunks)
         {
-            Assert.Equal(chunk.Records.Count, chunk.ParsedXml.Length);
-            for (int i = 0; i < chunk.ParsedXml.Length; i++)
+            Assert.Equal(chunk.Records.Count, chunk.ParsedXml.Count);
+            for (int i = 0; i < chunk.ParsedXml.Count; i++)
             {
                 Assert.False(string.IsNullOrEmpty(chunk.ParsedXml[i]),
                     $"Record {chunk.Records[i].EventRecordId} produced empty XML");
@@ -64,7 +64,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
 
             int xmlCount = 0;
             foreach (EvtxChunk chunk in parser.Chunks)
-                xmlCount += chunk.ParsedXml.Length;
+                xmlCount += chunk.ParsedXml.Count;
 
             testOutputHelper.WriteLine(
                 $"  [{name}] {sw.Elapsed.TotalMilliseconds,8:F2}ms | {parser.TotalRecords} records | {xmlCount} XML");
@@ -85,7 +85,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
 
         int xmlCount = 0;
         foreach (EvtxChunk chunk in parser.Chunks)
-            xmlCount += chunk.ParsedXml.Length;
+            xmlCount += chunk.ParsedXml.Count;
 
         testOutputHelper.WriteLine(
             $"[security_big_sample.evtx] Full parse + BinXml in {sw.Elapsed.TotalMilliseconds:F2}ms");
@@ -137,7 +137,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         int count = 0;
         foreach (EvtxChunk chunk in parser.Chunks)
         {
-            for (int i = 0; i < chunk.ParsedXml.Length && count < 5; i++, count++)
+            for (int i = 0; i < chunk.ParsedXml.Count && count < 5; i++, count++)
             {
                 testOutputHelper.WriteLine($"\n--- Record {chunk.Records[i].EventRecordId} ---");
                 testOutputHelper.WriteLine(chunk.ParsedXml[i]);
@@ -210,7 +210,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
             int recordCount = 0;
             foreach (EvtxChunk chunk in parser.Chunks)
             {
-                for (int i = 0; i < chunk.ParsedXml.Length; i++)
+                for (int i = 0; i < chunk.ParsedXml.Count; i++)
                 {
                     string xml = chunk.ParsedXml[i];
                     // Encoding to UTF-8 must not throw

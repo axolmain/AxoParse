@@ -45,12 +45,12 @@ internal static class BinXmlValueFormatter
     }
 
     /// <summary>
-    /// Renders a 16-byte GUID in braced lowercase hex format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}.
+    /// Formats a 16-byte GUID in braced lowercase hex format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}.
     /// First three components (Data1/Data2/Data3) are little-endian; last 8 bytes are big-endian.
     /// </summary>
     /// <param name="b">16-byte span containing the raw GUID.</param>
     /// <param name="vsb">String builder that receives the formatted GUID.</param>
-    internal static void RenderGuid(ReadOnlySpan<byte> b, ref ValueStringBuilder vsb)
+    internal static void FormatGuid(ReadOnlySpan<byte> b, ref ValueStringBuilder vsb)
     {
         uint d1 = MemoryMarshal.Read<uint>(b);
         ushort d2 = MemoryMarshal.Read<ushort>(b[4..]);

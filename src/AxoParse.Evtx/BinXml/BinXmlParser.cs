@@ -235,17 +235,73 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Parses a TemplateInstance token (0x0C). Reads the template definition offset to determine
-    /// inline vs back-reference, then reads substitution descriptors and value data.
-    /// Uses the compiled template cache for fast rendering; falls back to full tree walk on cache miss.
-    /// Layout: 1 token + 1 unknown + 4 unknown + 4 defDataOffset [+ 24-byte inline header + body] + 4 numValues + descriptors + values.
+    /// Parsed data from a TemplateInstance token (0x0C), shared between XML and JSON output paths.
+    /// Contains the template identity and all substitution value metadata needed for rendering.
+    /// </summary>
+    private readonly struct TemplateInstanceData
+    {
+        /// <summary>
+        /// GUID identifying the template definition (used as compiled cache key).
+        /// </summary>
+        public readonly Guid TemplateGuid;
+
+        /// <summary>
+        /// Byte size of the template body (after the 24-byte definition header).
+        /// </summary>
+        public readonly uint DataSize;
+
+        /// <summary>
+        /// Chunk-relative offset of the template definition (before the 24-byte header).
+        /// </summary>
+        public readonly uint DefDataOffset;
+
+        /// <summary>
+        /// Absolute file offsets of each substitution value within <see cref="_fileData"/>.
+        /// </summary>
+        public readonly int[] ValueOffsets;
+
+        /// <summary>
+        /// Byte sizes of each substitution value.
+        /// </summary>
+        public readonly int[] ValueSizes;
+
+        /// <summary>
+        /// BinXml value type codes for each substitution.
+        /// </summary>
+        public readonly byte[] ValueTypes;
+
+        /// <summary>
+        /// Initialises a new template instance data result.
+        /// </summary>
+        /// <param name="templateGuid">Template GUID.</param>
+        /// <param name="dataSize">Template body size in bytes.</param>
+        /// <param name="defDataOffset">Chunk-relative definition offset.</param>
+        /// <param name="valueOffsets">Absolute file offsets of substitution values.</param>
+        /// <param name="valueSizes">Byte sizes of substitution values.</param>
+        /// <param name="valueTypes">BinXml value type codes.</param>
+        public TemplateInstanceData(Guid templateGuid, uint dataSize, uint defDataOffset,
+                                    int[] valueOffsets, int[] valueSizes, byte[] valueTypes)
+        {
+            TemplateGuid = templateGuid;
+            DataSize = dataSize;
+            DefDataOffset = defDataOffset;
+            ValueOffsets = valueOffsets;
+            ValueSizes = valueSizes;
+            ValueTypes = valueTypes;
+        }
+    }
+
+    /// <summary>
+    /// Reads the format-agnostic data from a TemplateInstance token (0x0C): template definition
+    /// identity, substitution descriptors, and value metadata. Shared by both XML and JSON paths.
+    /// Layout: 1 token + 1 unknown + 4 unknown + 4 defDataOffset [+ 24-byte inline header + body]
+    /// + 4 numValues + descriptors + values.
     /// </summary>
     /// <param name="data">BinXml byte stream.</param>
-    /// <param name="pos">Current read position; advanced past the entire template instance on return.</param>
+    /// <param name="pos">Current read position; advanced past the entire template instance data.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
-    /// <param name="vsb">String builder that receives the rendered XML output.</param>
-    private void ParseTemplateInstance(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                       ref ValueStringBuilder vsb)
+    /// <returns>Parsed template instance data for downstream rendering.</returns>
+    private TemplateInstanceData ReadTemplateInstanceData(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase)
     {
         pos++; // consume 0x0C token
         pos++; // unknown1
@@ -295,13 +351,11 @@ internal sealed partial class BinXmlParser
             MemoryMarshal.Cast<byte, SubstitutionDescriptor>(data.Slice(descStart, (int)numValues * 4));
         pos += (int)numValues * 4;
 
-        // Use arrays for value metadata (avoids ref safety issues with stackalloc + ref struct)
         int numVals = (int)numValues;
         int[] valueOffsets = new int[numVals];
         int[] valueSizes = new int[numVals];
         byte[] valueTypes = new byte[numVals];
 
-        // Convert span-relative pos to absolute file offset for RenderValue
         int dataBaseFileOffset = _chunkFileOffset + binxmlChunkBase;
         for (int i = 0; i < numVals; i++)
         {
@@ -311,32 +365,47 @@ internal sealed partial class BinXmlParser
             pos += descriptors[i].Size;
         }
 
-        // Lookup/compile template
-        if (dataSize == 0) return;
+        return new TemplateInstanceData(templateGuid, dataSize, defDataOffset, valueOffsets, valueSizes, valueTypes);
+    }
 
-        int tplBodyFileOffset = _chunkFileOffset + (int)defDataOffset + 24;
-        if (tplBodyFileOffset + (int)dataSize > _fileData.Length) return;
+    /// <summary>
+    /// Parses a TemplateInstance token (0x0C) into XML output.
+    /// Uses the compiled template cache for fast writing; falls back to full tree walk on cache miss.
+    /// </summary>
+    /// <param name="data">BinXml byte stream.</param>
+    /// <param name="pos">Current read position; advanced past the entire template instance on return.</param>
+    /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
+    /// <param name="vsb">String builder that receives the rendered XML output.</param>
+    private void ParseTemplateInstance(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+                                       ref ValueStringBuilder vsb)
+    {
+        TemplateInstanceData tid = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase);
+
+        if (tid.DataSize == 0) return;
+
+        int tplBodyFileOffset = _chunkFileOffset + (int)tid.DefDataOffset + 24;
+        if (tplBodyFileOffset + (int)tid.DataSize > _fileData.Length) return;
 
         // Check compiled cache (GetOrAdd may invoke factory concurrently for same key — harmless)
-        CompiledTemplate? compiled = _compiledCache.GetOrAdd(templateGuid,
-            _ => CompileTemplate((int)defDataOffset, (int)dataSize));
+        CompiledTemplate? compiled = _compiledCache.GetOrAdd(tid.TemplateGuid,
+            _ => CompileTemplate((int)tid.DefDataOffset, (int)tid.DataSize));
 
         if (compiled != null)
         {
-            RenderCompiled(compiled, valueOffsets, valueSizes, valueTypes, binxmlChunkBase, ref vsb);
+            WriteCompiled(compiled, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, binxmlChunkBase, ref vsb);
         }
         else
         {
             // Fallback: parse template body with substitutions
-            ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)dataSize);
+            ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)tid.DataSize);
             int tplPos = 0;
-            int tplChunkBase = (int)defDataOffset + 24;
+            int tplChunkBase = (int)tid.DefDataOffset + 24;
 
             // Skip fragment header
             if (tplBody.Length >= 4 && tplBody[0] == BinXmlToken.FragmentHeader)
                 tplPos += 4;
 
-            ParseContent(tplBody, ref tplPos, valueOffsets, valueSizes, valueTypes, tplChunkBase, ref vsb);
+            ParseContent(tplBody, ref tplPos, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, tplChunkBase, ref vsb);
         }
     }
 
@@ -438,6 +507,9 @@ internal sealed partial class BinXmlParser
     /// character/entity references, CDATA sections) until a break token is encountered.
     /// Break tokens: EOF (0x00), CloseStartElement (0x02), CloseEmptyElement (0x03),
     /// EndElement (0x04), Attribute (0x06).
+    /// When <paramref name="resolveEntities"/> is true, produces plain text output suitable for
+    /// JSON: character references emit the literal character, entity references are resolved to
+    /// their character values, Value tokens are not XML-escaped, and CDATA sections emit raw text.
     /// </summary>
     /// <param name="data">BinXml byte stream.</param>
     /// <param name="pos">Current read position; advanced past all consumed content tokens.</param>
@@ -445,11 +517,13 @@ internal sealed partial class BinXmlParser
     /// <param name="valueSizes">Byte sizes of substitution values.</param>
     /// <param name="valueTypes">BinXml value type codes for each substitution.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
-    /// <param name="vsb">String builder that receives the rendered XML output.</param>
+    /// <param name="vsb">String builder that receives the output.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
+    /// <param name="resolveEntities">When true, produces plain text (no XML escaping/wrapping).</param>
     private void ParseContent(ReadOnlySpan<byte> data, ref int pos,
                               int[]? valueOffsets, int[]? valueSizes, byte[]? valueTypes,
-                              int binxmlChunkBase, ref ValueStringBuilder vsb, int depth = 0)
+                              int binxmlChunkBase, ref ValueStringBuilder vsb, int depth = 0,
+                              bool resolveEntities = false)
     {
         while (pos < data.Length)
         {
@@ -474,7 +548,10 @@ internal sealed partial class BinXmlParser
                     pos++; // consume token
                     pos++; // value type
                     string str = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
-                    BinXmlValueFormatter.AppendXmlEscaped(ref vsb, str.AsSpan());
+                    if (resolveEntities)
+                        vsb.Append(str);
+                    else
+                        BinXmlValueFormatter.AppendXmlEscaped(ref vsb, str.AsSpan());
                     break;
                 }
                 case BinXmlToken.NormalSubstitution:
@@ -485,7 +562,7 @@ internal sealed partial class BinXmlParser
                     pos++; // subValType
                     if (valueOffsets != null && subId < valueOffsets.Length)
                     {
-                        RenderValue(valueSizes![subId], valueTypes![subId], valueOffsets[subId], binxmlChunkBase,
+                        WriteValue(valueSizes![subId], valueTypes![subId], valueOffsets[subId], binxmlChunkBase,
                             ref vsb);
                     }
 
@@ -503,7 +580,7 @@ internal sealed partial class BinXmlParser
                         int valSize = valueSizes![subId];
                         if (valType != BinXmlValueType.Null && valSize > 0)
                         {
-                            RenderValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
+                            WriteValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
                         }
                     }
 
@@ -514,9 +591,16 @@ internal sealed partial class BinXmlParser
                     pos++; // consume token
                     ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
-                    vsb.Append("&#");
-                    vsb.AppendFormatted(charVal);
-                    vsb.Append(';');
+                    if (resolveEntities)
+                    {
+                        vsb.Append((char)charVal);
+                    }
+                    else
+                    {
+                        vsb.Append("&#");
+                        vsb.AppendFormatted(charVal);
+                        vsb.Append(';');
+                    }
                     break;
                 }
                 case BinXmlToken.EntityRef:
@@ -525,18 +609,41 @@ internal sealed partial class BinXmlParser
                     uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
                     pos += 4;
                     string entityName = ReadName(nameOff);
-                    vsb.Append('&');
-                    vsb.Append(entityName);
-                    vsb.Append(';');
+                    if (resolveEntities)
+                    {
+                        string resolved = entityName switch
+                        {
+                            "amp" => "&",
+                            "lt" => "<",
+                            "gt" => ">",
+                            "quot" => "\"",
+                            "apos" => "'",
+                            _ => $"&{entityName};"
+                        };
+                        vsb.Append(resolved);
+                    }
+                    else
+                    {
+                        vsb.Append('&');
+                        vsb.Append(entityName);
+                        vsb.Append(';');
+                    }
                     break;
                 }
                 case BinXmlToken.CDataSection:
                 {
                     pos++; // consume token
                     string cdataStr = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
-                    vsb.Append("<![CDATA[");
-                    vsb.Append(cdataStr);
-                    vsb.Append("]]>");
+                    if (resolveEntities)
+                    {
+                        vsb.Append(cdataStr);
+                    }
+                    else
+                    {
+                        vsb.Append("<![CDATA[");
+                        vsb.Append(cdataStr);
+                        vsb.Append("]]>");
+                    }
                     break;
                 }
                 case BinXmlToken.TemplateInstance:
@@ -553,7 +660,7 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Renders a compiled template by interleaving its static XML parts with rendered substitution values.
+    /// Writes a compiled template by interleaving its static XML parts with formatted substitution values.
     /// </summary>
     /// <param name="compiled">Pre-compiled template containing static parts and substitution metadata.</param>
     /// <param name="valueOffsets">File offsets of each substitution value.</param>
@@ -561,7 +668,7 @@ internal sealed partial class BinXmlParser
     /// <param name="valueTypes">BinXml value type codes for each substitution.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
     /// <param name="vsb">String builder that receives the rendered XML output.</param>
-    private void RenderCompiled(CompiledTemplate compiled,
+    private void WriteCompiled(CompiledTemplate compiled,
                                 int[] valueOffsets, int[] valueSizes, byte[] valueTypes,
                                 int binxmlChunkBase, ref ValueStringBuilder vsb)
     {
@@ -575,7 +682,7 @@ internal sealed partial class BinXmlParser
                 int valSize = valueSizes[subId];
                 if (!compiled.IsOptional[i] || (valType != BinXmlValueType.Null && valSize > 0))
                 {
-                    RenderValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
+                    WriteValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
                 }
             }
 
@@ -584,7 +691,7 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Renders a single BinXml substitution value as XML text.
+    /// Writes a single BinXml substitution value as XML text.
     /// Dispatches on value type to produce the appropriate string representation
     /// (numeric, GUID, SID, FILETIME, hex, embedded BinXml, etc.).
     /// </summary>
@@ -593,7 +700,7 @@ internal sealed partial class BinXmlParser
     /// <param name="fileOffset">Absolute byte offset of the value data within <see cref="_fileData"/>.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml (type 0x21) resolution.</param>
     /// <param name="vsb">String builder that receives the rendered text.</param>
-    private void RenderValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueStringBuilder vsb)
+    private void WriteValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueStringBuilder vsb)
     {
         if (size == 0) return;
         ReadOnlySpan<byte> valueBytes = _fileData.AsSpan(fileOffset, size);
@@ -601,7 +708,7 @@ internal sealed partial class BinXmlParser
         // Array flag
         if ((valueType & BinXmlValueType.ArrayFlag) != 0)
         {
-            RenderArray(valueBytes, (byte)(valueType & 0x7F), fileOffset, binxmlChunkBase, ref vsb);
+            WriteArray(valueBytes, (byte)(valueType & 0x7F), fileOffset, binxmlChunkBase, ref vsb);
             return;
         }
 
@@ -688,7 +795,7 @@ internal sealed partial class BinXmlParser
             case BinXmlValueType.Guid:
             {
                 if (size < 16) break;
-                BinXmlValueFormatter.RenderGuid(valueBytes, ref vsb);
+                BinXmlValueFormatter.FormatGuid(valueBytes, ref vsb);
                 break;
             }
 
@@ -757,7 +864,7 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Renders an array-typed value (type code has bit 0x80 set) as comma-separated XML text.
+    /// Writes an array-typed value (type code has bit 0x80 set) as comma-separated XML text.
     /// String arrays (base type 0x01) are null-terminated UTF-16LE concatenated;
     /// fixed-size types are rendered by splitting on element size.
     /// </summary>
@@ -766,7 +873,7 @@ internal sealed partial class BinXmlParser
     /// <param name="fileOffset">Absolute byte offset of the value data within <see cref="_fileData"/>.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset for nested value rendering.</param>
     /// <param name="vsb">String builder that receives the comma-separated rendered elements.</param>
-    private void RenderArray(ReadOnlySpan<byte> valueBytes, byte baseType, int fileOffset,
+    private void WriteArray(ReadOnlySpan<byte> valueBytes, byte baseType, int fileOffset,
                              int binxmlChunkBase, ref ValueStringBuilder vsb)
     {
         // String arrays: null-terminated UTF-16LE strings concatenated
@@ -801,7 +908,7 @@ internal sealed partial class BinXmlParser
             for (int i = 0; i + elemSize <= valueBytes.Length; i += elemSize)
             {
                 if (!first) vsb.Append(", ");
-                RenderValue(elemSize, baseType, fileOffset + i, binxmlChunkBase, ref vsb);
+                WriteValue(elemSize, baseType, fileOffset + i, binxmlChunkBase, ref vsb);
                 first = false;
             }
 

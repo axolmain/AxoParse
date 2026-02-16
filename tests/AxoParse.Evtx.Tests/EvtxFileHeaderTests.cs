@@ -43,18 +43,26 @@ public class EvtxFileHeaderTests(ITestOutputHelper testOutputHelper)
         testOutputHelper.WriteLine($"  Flags: {header.FileFlags}");
     }
 
+    /// <summary>
+    /// Verifies that data shorter than 128 bytes throws EvtxParseException with FileHeaderTooShort.
+    /// </summary>
     [Fact]
     public void ThrowsOnTruncatedData()
     {
         byte[] data = new byte[64];
-        Assert.Throws<InvalidDataException>(() => EvtxFileHeader.ParseEvtxFileHeader(data));
+        EvtxParseException ex = Assert.Throws<EvtxParseException>(() => EvtxFileHeader.ParseEvtxFileHeader(data));
+        Assert.Equal(EvtxParseError.FileHeaderTooShort, ex.ErrorCode);
     }
 
+    /// <summary>
+    /// Verifies that data with a wrong magic signature throws EvtxParseException with InvalidFileSignature.
+    /// </summary>
     [Fact]
     public void ThrowsOnBadSignature()
     {
         byte[] data = new byte[4096];
-        Assert.Throws<InvalidDataException>(() => EvtxFileHeader.ParseEvtxFileHeader(data));
+        EvtxParseException ex = Assert.Throws<EvtxParseException>(() => EvtxFileHeader.ParseEvtxFileHeader(data));
+        Assert.Equal(EvtxParseError.InvalidFileSignature, ex.ErrorCode);
     }
 
     [Fact]

@@ -31,18 +31,26 @@ public class EvtxChunkHeaderTests(ITestOutputHelper testOutputHelper)
         testOutputHelper.WriteLine($"  FreeSpace: {chunk.FreeSpaceOffset}, Flags: {chunk.Flags}");
     }
 
+    /// <summary>
+    /// Verifies that data shorter than 512 bytes throws EvtxParseException with ChunkHeaderTooShort.
+    /// </summary>
     [Fact]
     public void ThrowsOnTruncatedData()
     {
         byte[] data = new byte[256];
-        Assert.Throws<InvalidDataException>(() => EvtxChunkHeader.ParseEvtxChunkHeader(data));
+        EvtxParseException ex = Assert.Throws<EvtxParseException>(() => EvtxChunkHeader.ParseEvtxChunkHeader(data));
+        Assert.Equal(EvtxParseError.ChunkHeaderTooShort, ex.ErrorCode);
     }
 
+    /// <summary>
+    /// Verifies that data with a wrong magic signature throws EvtxParseException with InvalidChunkSignature.
+    /// </summary>
     [Fact]
     public void ThrowsOnBadSignature()
     {
         byte[] data = new byte[512];
-        Assert.Throws<InvalidDataException>(() => EvtxChunkHeader.ParseEvtxChunkHeader(data));
+        EvtxParseException ex = Assert.Throws<EvtxParseException>(() => EvtxChunkHeader.ParseEvtxChunkHeader(data));
+        Assert.Equal(EvtxParseError.InvalidChunkSignature, ex.ErrorCode);
     }
 
     [Fact]

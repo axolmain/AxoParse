@@ -39,10 +39,10 @@ public readonly record struct EvtxChunkHeader(
     public static EvtxChunkHeader ParseEvtxChunkHeader(ReadOnlySpan<byte> data)
     {
         if (data.Length < 512)
-            throw new InvalidDataException("Chunk header too short");
+            throw new EvtxParseException(EvtxParseError.ChunkHeaderTooShort, "Chunk header too short");
 
         if (!data[..8].SequenceEqual("ElfChnk\0"u8))
-            throw new InvalidDataException("Invalid Chunk signature");
+            throw new EvtxParseException(EvtxParseError.InvalidChunkSignature, "Invalid Chunk signature");
 
         return new EvtxChunkHeader(
             FirstEventRecordNumber: BinaryPrimitives.ReadUInt64LittleEndian(data[8..]),
