@@ -28,6 +28,9 @@ jobs:
         run: npm ci
         working-directory: demos/AxoParse.Web
 
+      - name: Install .NET workloads
+        run: dotnet workload restore
+
       - name: Build
         run: dotnet build
 
