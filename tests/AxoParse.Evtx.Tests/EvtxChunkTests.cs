@@ -4,8 +4,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
     private const int FileHeaderSize = 4096;
 
@@ -53,25 +52,23 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
         Assert.Equal((int)expected, chunk.Records.Count);
     }
 
+    /// <summary>
+    /// Verifies that every chunk in security.evtx parses with at least one record and one template.
+    /// </summary>
     [Fact]
     public void ParsesAllChunksInSecurityEvtx()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(data);
-        Stopwatch sw = new Stopwatch();
-
-        testOutputHelper.WriteLine($"Parsing {fileHeader.NumberOfChunks} full chunks:");
 
         for (int i = 0; i < fileHeader.NumberOfChunks; i++)
         {
             int offset = FileHeaderSize + i * EvtxChunk.ChunkSize;
 
-            sw.Restart();
             EvtxChunk chunk = EvtxChunk.Parse(data.AsSpan(offset, EvtxChunk.ChunkSize), offset);
-            sw.Stop();
 
-            testOutputHelper.WriteLine(
-                $"  [chunk {i}] {sw.Elapsed.TotalMicroseconds,8:F1}µs | {chunk.Records.Count} records | {chunk.Templates.Count} templates");
+            Assert.True(chunk.Records.Count > 0, $"Chunk {i}: no records");
+            Assert.True(chunk.Templates.Count > 0, $"Chunk {i}: no templates");
         }
     }
 }

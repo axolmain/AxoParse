@@ -40,37 +40,6 @@ get_formatted() {
   " "$1" "$2"
 }
 
-# Time a shell command string and print elapsed seconds.
-measure_cmd_once_seconds() {
-  node -e "
-    const {execSync} = require('child_process');
-    const start = process.hrtime.bigint();
-    try { execSync(process.argv[1], {stdio: 'pipe', shell: true}); }
-    catch(e) { process.exit(e.status || 1); }
-    const ns = Number(process.hrtime.bigint() - start);
-    console.log((ns / 1e9).toFixed(6));
-  " "$1"
-}
-
-# Format single-run seconds as "0.367s (ran once)" or "2m41.075s (ran once)".
-format_single_run() {
-  awk -v s="$1" 'BEGIN {
-    if (s >= 60.0) {
-      m = int(s / 60.0);
-      rem = s - (m * 60.0);
-      printf "%dm%.3fs (ran once)\n", m, rem
-    } else {
-      printf "%.3fs (ran once)\n", s
-    }
-  }'
-}
-
-# Build the pyevtx-rs benchmark command string for a given method and file.
-pyevtx_rs_cmd() {
-  local method="$1" file="$2"
-  printf "uv run --with evtx python -c 'import sys,collections;from evtx import PyEvtxParser;p=PyEvtxParser(sys.argv[1]);collections.deque((sys.stdout.write(r[\"data\"]+\"\\n\")for r in p.%s()),maxlen=0)' '%s' > /dev/null" "$method" "$file"
-}
-
 # Check if a parser name is in the PARSER_FILTER comma-separated list.
 parser_in_filter() {
   local name="$1" p
@@ -101,7 +70,7 @@ Options:
 
 Parser names for --parsers:
   rust, csharp, cs-wasm, rust-wasm, js,
-  libevtx, velocidex, 0xrawsec, pyevtx-rs
+  libevtx
 
 Environment variables:
   HYPERFINE_WARMUP    Default warmup runs (overridden by --warmup)

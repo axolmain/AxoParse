@@ -4,8 +4,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxChunkHeaderTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
     private const int FileHeaderSize = 4096;
     private const int ChunkSize = 65536;
@@ -53,26 +52,25 @@ public class EvtxChunkHeaderTests(ITestOutputHelper testOutputHelper)
         Assert.Equal(EvtxParseError.InvalidChunkSignature, ex.ErrorCode);
     }
 
+    /// <summary>
+    /// Verifies that every chunk in security.evtx parses without throwing and has valid structural invariants.
+    /// </summary>
     [Fact]
     public void ParsesAllChunksInSecurityEvtx()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(data);
-        Stopwatch sw = new Stopwatch();
-
-        testOutputHelper.WriteLine($"Parsing {fileHeader.NumberOfChunks} chunks:");
 
         for (int i = 0; i < fileHeader.NumberOfChunks; i++)
         {
             int offset = FileHeaderSize + i * ChunkSize;
             byte[] chunkData = data[offset..(offset + ChunkSize)];
 
-            sw.Restart();
             EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
-            sw.Stop();
 
-            testOutputHelper.WriteLine(
-                $"  [chunk {i}] {sw.Elapsed.TotalMicroseconds,8:F1}µs | records {chunk.FirstEventRecordNumber}–{chunk.LastEventRecordNumber} | flags {chunk.Flags}");
+            Assert.Equal(128u, chunk.HeaderSize);
+            Assert.True(chunk.LastEventRecordId >= chunk.FirstEventRecordId,
+                $"Chunk {i}: LastEventRecordId < FirstEventRecordId");
         }
     }
 }

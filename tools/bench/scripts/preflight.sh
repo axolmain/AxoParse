@@ -62,9 +62,6 @@ run_preflight() {
   HAS_CS_WASM=false
   HAS_RUST_WASM=false
   HAS_LIBEVTX=false
-  HAS_VELOCIDEX=false
-  HAS_0XRAWSEC=false
-  HAS_PYEVTX_RS=false
 
   if ! $NATIVE_ONLY; then
     # ── C# WASM ──
@@ -85,18 +82,6 @@ run_preflight() {
       log_success "Rust WASM benchmark ready"
     fi
 
-    # ── Go parsers ──
-    if command -v go &>/dev/null; then
-      if ! $NO_BUILD; then
-        fetch_and_build_velocidex || log_warn "Velocidex build failed"
-        fetch_and_build_0xrawsec || log_warn "0xrawsec build failed"
-      fi
-      [[ -x "$EXTERNAL_DIR/velocidex-evtx/dumpevtx" ]] && HAS_VELOCIDEX=true
-      [[ -x "$EXTERNAL_DIR/0xrawsec-evtx/evtxdump" ]] && HAS_0XRAWSEC=true
-    else
-      log_warn "go not found — skipping Velocidex and 0xrawsec benchmarks"
-    fi
-
     # ── libevtx (C) ──
     if command -v git &>/dev/null && command -v make &>/dev/null; then
       if ! $NO_BUILD; then
@@ -107,24 +92,13 @@ run_preflight() {
       log_warn "git/make not found — skipping libevtx benchmark"
     fi
 
-    # ── pyevtx-rs ──
-    if command -v uv &>/dev/null && command -v python3 &>/dev/null; then
-      if uv run --with evtx python -c 'import evtx' >/dev/null 2>&1; then
-        HAS_PYEVTX_RS=true
-        log_success "pyevtx-rs ready"
-      else
-        log_warn "pyevtx-rs install failed — skipping"
-      fi
-    else
-      log_warn "uv/python3 not found — skipping pyevtx-rs benchmarks"
-    fi
   else
     log_info "Running in --native-only mode (C# + Rust only)"
   fi
 
   # ── Apply --parsers filter (Rust native is always included as baseline) ──
   if [[ -n "${PARSER_FILTER:-}" ]]; then
-    local ALL_PARSERS=(csharp cs-wasm rust-wasm js libevtx velocidex 0xrawsec pyevtx-rs)
+    local ALL_PARSERS=(csharp cs-wasm rust-wasm js libevtx)
     for name in "${ALL_PARSERS[@]}"; do
       if ! parser_in_filter "$name"; then
         case "$name" in
@@ -133,9 +107,6 @@ run_preflight() {
           rust-wasm) HAS_RUST_WASM=false ;;
           js)        HAS_JS=false ;;
           libevtx)   HAS_LIBEVTX=false ;;
-          velocidex) HAS_VELOCIDEX=false ;;
-          0xrawsec)  HAS_0XRAWSEC=false ;;
-          pyevtx-rs) HAS_PYEVTX_RS=false ;;
         esac
       fi
     done

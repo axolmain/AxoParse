@@ -5,8 +5,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
     private const int FileHeaderSize = 4096;
     private const int ChunkSize = 65536;
@@ -90,19 +89,19 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
         testOutputHelper.WriteLine($"Total templates: {totalTemplates}, found via chaining: {chainedTemplates}");
     }
 
+    /// <summary>
+    /// Verifies that template preloading succeeds for every valid chunk across all test files.
+    /// </summary>
     [Fact]
     public void PreloadsFromAllTestFiles()
     {
         string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
-        Stopwatch sw = new Stopwatch();
+        Assert.True(evtxFiles.Length > 0, "No test .evtx files found");
 
         foreach (string file in evtxFiles)
         {
             byte[] data = File.ReadAllBytes(file);
             EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(data);
-            string name = Path.GetFileName(file);
-            int totalTemplates = 0;
-            double totalUs = 0;
 
             for (int ci = 0; ci < fileHeader.NumberOfChunks; ci++)
             {
@@ -114,17 +113,11 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
 
                 ReadOnlySpan<uint> tplPtrs = MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128));
 
-                sw.Restart();
                 Dictionary<uint, BinXmlTemplateDefinition> cache =
                     BinXmlTemplateDefinition.PreloadFromChunk(chunkData, tplPtrs, offset);
-                sw.Stop();
 
-                totalTemplates += cache.Count;
-                totalUs += sw.Elapsed.TotalMicroseconds;
+                Assert.True(cache.Count >= 0);
             }
-
-            testOutputHelper.WriteLine(
-                $"  [{name}] {fileHeader.NumberOfChunks} chunks, {totalTemplates} templates, {totalUs:F1}µs total");
         }
     }
 

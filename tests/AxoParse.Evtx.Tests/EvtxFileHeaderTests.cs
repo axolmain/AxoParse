@@ -4,8 +4,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxFileHeaderTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
     [Fact]
     public void ParsesSecurityEvtxHeader()

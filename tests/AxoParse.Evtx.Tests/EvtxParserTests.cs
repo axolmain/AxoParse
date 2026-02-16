@@ -4,8 +4,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxParserTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
     [Fact]
     public void ParsesSecurityEvtxFull()
@@ -71,20 +70,4 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
             $"[sample_with_a_bad_chunk_magic.evtx] Parsed {parser.Chunks.Count} valid chunks, {parser.TotalRecords} records");
     }
 
-    [Fact]
-    public void ParsesBigSampleWithTiming()
-    {
-        string path = Path.Combine(TestDataDir, "security_big_sample.evtx");
-        if (!File.Exists(path)) return;
-
-        byte[] data = File.ReadAllBytes(path);
-
-        Stopwatch sw = Stopwatch.StartNew();
-        EvtxParser parser = EvtxParser.Parse(data);
-        sw.Stop();
-
-        testOutputHelper.WriteLine($"[security_big_sample.evtx] Full parse in {sw.Elapsed.TotalMilliseconds:F2}ms");
-        testOutputHelper.WriteLine($"  Chunks: {parser.Chunks.Count}, Records: {parser.TotalRecords}");
-        testOutputHelper.WriteLine($"  Avg: {sw.Elapsed.TotalMicroseconds / parser.TotalRecords:F2}µs/record");
-    }
 }

@@ -6,7 +6,7 @@
 # Progress output goes to stderr (visible in real-time);
 # only the final markdown table row is printed to stdout (captured by caller).
 #
-# Execution & display order: C# → Rust → JS → libevtx (C) → Go → pyevtx-rs
+# Execution & display order: C# → Rust → JS → libevtx (C)
 
 # Run benchmarks for a single .evtx file in the specified format.
 # Usage: run_benchmark <format> <file> <file_label>
@@ -72,20 +72,6 @@ run_benchmark() {
     idx_libevtx=$next; ((next++))
   fi
 
-  # ── Go: velocidex (JSON only) ─────────────────────────────────────
-  local idx_velocidex=-1
-  if $HAS_VELOCIDEX && [[ "$fmt" == "json" ]]; then
-    cmds+=(--command-name "velocidex" "'$EXTERNAL_DIR/velocidex-evtx/dumpevtx' parse '$file' > /dev/null")
-    idx_velocidex=$next; ((next++))
-  fi
-
-  # ── Go: 0xrawsec (JSON only) ──────────────────────────────────────
-  local idx_0xrawsec=-1
-  if $HAS_0XRAWSEC && [[ "$fmt" == "json" ]]; then
-    cmds+=(--command-name "0xrawsec" "'$EXTERNAL_DIR/0xrawsec-evtx/evtxdump' '$file' > /dev/null")
-    idx_0xrawsec=$next; ((next++))
-  fi
-
   hyperfine --warmup "$WARMUP" --runs "$RUNS" --style basic \
     --ignore-failure \
     --export-json "$tmp_file" \
@@ -115,22 +101,6 @@ run_benchmark() {
   $HAS_RUST_WASM && append_result $idx_rust_wasm  "N/A (web only)"
   $HAS_JS        && append_result $idx_js
   $HAS_LIBEVTX   && append_result $idx_libevtx    "No support"
-  $HAS_VELOCIDEX && append_result $idx_velocidex   "No support"
-  $HAS_0XRAWSEC  && append_result $idx_0xrawsec    "No support"
-
-  # pyevtx-rs (single run, not in hyperfine)
-  if $HAS_PYEVTX_RS; then
-    local pyrs_method="records"
-    [[ "$fmt" == "json" ]] && pyrs_method="records_json"
-    echo "    pyevtx-rs $fmt_upper (single run)..." >&2
-    local pyrs_secs
-    if pyrs_secs=$(measure_cmd_once_seconds "$(pyevtx_rs_cmd "$pyrs_method" "$file")" 2>/dev/null); then
-      row="$row | $(format_single_run "$pyrs_secs")"
-      echo "      $(format_single_run "$pyrs_secs")" >&2
-    else
-      row="$row | ERR"
-    fi
-  fi
 
   echo "$row |"
 }

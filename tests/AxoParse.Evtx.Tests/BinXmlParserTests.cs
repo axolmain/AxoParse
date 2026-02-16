@@ -5,8 +5,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
     [Fact]
     public void FirstRecordStartsWithEventXmlns()
@@ -72,28 +71,6 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
-    public void BigSamplePerformance()
-    {
-        string path = Path.Combine(TestDataDir, "security_big_sample.evtx");
-        if (!File.Exists(path)) return;
-
-        byte[] data = File.ReadAllBytes(path);
-
-        Stopwatch sw = Stopwatch.StartNew();
-        EvtxParser parser = EvtxParser.Parse(data);
-        sw.Stop();
-
-        int xmlCount = 0;
-        foreach (EvtxChunk chunk in parser.Chunks)
-            xmlCount += chunk.ParsedXml.Count;
-
-        testOutputHelper.WriteLine(
-            $"[security_big_sample.evtx] Full parse + BinXml in {sw.Elapsed.TotalMilliseconds:F2}ms");
-        testOutputHelper.WriteLine($"  Chunks: {parser.Chunks.Count}, Records: {parser.TotalRecords}, XML: {xmlCount}");
-        testOutputHelper.WriteLine($"  Avg: {sw.Elapsed.TotalMicroseconds / parser.TotalRecords:F2}µs/record");
-    }
-
-    [Fact]
     public void MultithreadedParsingProducesIdenticalOutput()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
@@ -125,26 +102,6 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         foreach (EvtxChunk chunk in parser.Chunks)
             all.AddRange(chunk.ParsedXml);
         return all.ToArray();
-    }
-
-    [Fact]
-    public void SampleXmlOutputForInspection()
-    {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
-
-        testOutputHelper.WriteLine("=== First 5 records XML ===");
-        int count = 0;
-        foreach (EvtxChunk chunk in parser.Chunks)
-        {
-            for (int i = 0; i < chunk.ParsedXml.Count && count < 5; i++, count++)
-            {
-                testOutputHelper.WriteLine($"\n--- Record {chunk.Records[i].EventRecordId} ---");
-                testOutputHelper.WriteLine(chunk.ParsedXml[i]);
-            }
-
-            if (count >= 5) break;
-        }
     }
 
     /// <summary>

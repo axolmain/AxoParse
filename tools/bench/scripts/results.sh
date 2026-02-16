@@ -31,9 +31,6 @@ list_parsers() {
   print_parser_row "rust-wasm" "$HAS_RUST_WASM"  "$RUST_WASM_CLI"
   print_parser_row "js"        "$HAS_JS"         "$JS_CLI"
   print_parser_row "libevtx"   "$HAS_LIBEVTX"    "$EXTERNAL_DIR/libevtx/evtxtools/evtxexport"
-  print_parser_row "velocidex" "$HAS_VELOCIDEX"  "$EXTERNAL_DIR/velocidex-evtx/dumpevtx"
-  print_parser_row "0xrawsec"  "$HAS_0XRAWSEC"   "$EXTERNAL_DIR/0xrawsec-evtx/evtxdump"
-  print_parser_row "pyevtx-rs" "$HAS_PYEVTX_RS"  "uv run --with evtx python"
 }
 
 # ── Table header ─────────────────────────────────────────────────────
@@ -60,9 +57,6 @@ build_table_header() {
   $HAS_RUST_WASM && add_column "Rust WASM"
   $HAS_JS        && add_column "JS Node"
   $HAS_LIBEVTX   && add_column "libevtx (C)"
-  $HAS_VELOCIDEX && add_column "velocidex/evtx (Go)"
-  $HAS_0XRAWSEC  && add_column "golang-evtx (Go)"
-  $HAS_PYEVTX_RS && add_column "pyevtx-rs"
 }
 
 # ── Markdown output ──────────────────────────────────────────────────
@@ -83,9 +77,6 @@ write_markdown_header() {
     echo "| **Warmup** | $WARMUP |"
     echo "| **Runs** | $RUNS |"
     if $HAS_LIBEVTX; then echo "| **libevtx (C)** | evtxexport (single-threaded) |"; fi
-    if $HAS_VELOCIDEX; then echo "| **Velocidex (Go)** | dumpevtx |"; fi
-    if $HAS_0XRAWSEC; then echo "| **0xrawsec (Go)** | evtxdump |"; fi
-    if $HAS_PYEVTX_RS; then echo "| **pyevtx-rs** | via \`uv run --with evtx\` |"; fi
     echo
   } > "$RESULTS"
 }
@@ -132,9 +123,6 @@ write_summary() {
       echo
       echo "### External parsers"
       if $HAS_LIBEVTX;   then echo "- libevtx (C): yes";   else echo "- libevtx (C): skipped";   fi
-      if $HAS_VELOCIDEX;  then echo "- Velocidex (Go): yes"; else echo "- Velocidex (Go): skipped"; fi
-      if $HAS_0XRAWSEC;   then echo "- 0xrawsec (Go): yes";  else echo "- 0xrawsec (Go): skipped";  fi
-      if $HAS_PYEVTX_RS;  then echo "- pyevtx-rs: yes";      else echo "- pyevtx-rs: skipped";      fi
     fi
   } >> "$RESULTS"
 }

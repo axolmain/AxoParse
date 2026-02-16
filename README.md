@@ -108,11 +108,10 @@ Libraries benched:
 - [evtx-parser](https://github.com/axolmain/evtx-parser) - Typescript-based (technically JS ig but hey)
 
 
-| File                               | C# (1 thread)     | C# (8 threads)   | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node           | libevtx (C)       |
-|------------------------------------|-------------------|------------------|------------------------|-------------------------|-------------------|-------------------|
-| 30M security_big_sample.evtx (XML) | 119.3 ms ± 3.4 ms | 71.9 ms ± 0.6 ms | 302.3 ms ± 1.7 ms      | 126.2 ms ± 83.3 ms      | 1.947 s ± 0.017 s | 2.697 s ± 0.029 s |
-
-**Note**: Numbers shown are `real-time` measurements (wall-clock time for invocation to complete). Single-run entries are marked with *(ran once)* — these parsers are too slow for repeated benchmarking via hyperfine.
+| File                                | C# (1 thread)     | C# (8 threads)    | C# WASM           | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node           | libevtx (C)       |
+|-------------------------------------|-------------------|-------------------|-------------------|------------------------|-------------------------|-------------------|-------------------|
+| 30M security_big_sample.evtx (XML)  | 105.3 ms ± 5.4 ms | 85.6 ms ± 2.4 ms  | N/A (web only)    | 157.4 ms ± 1.2 ms      | 57.3 ms ± 1.7 ms        | 1.013 s ± 0.013 s | 1.422 s ± 0.055 s |
+| 30M security_big_sample.evtx (JSON) | 267.2 ms ± 3.5 ms | 134.1 ms ± 1.9 ms | 115.7 ms ± 1.4 ms | 146.4 ms ± 7.2 ms      | 53.6 ms ± 1.4 ms        | 1.337 s ± 0.010 s | No support        |
 
 ## Documentation
 

@@ -4,8 +4,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class WevtCacheTests
 {
-    private static readonly string TestDataDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
     private static readonly string DllsDir = Path.Combine(TestDataDir, "dlls");
 

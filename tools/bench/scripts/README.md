@@ -14,14 +14,12 @@ All parsers are built automatically on first run. You just need the toolchains i
 
 **For full benchmarks** (gracefully skipped if missing):
 - **.NET 10 SDK** — C# native parser
-- **Go** — Velocidex + 0xrawsec parsers
 - **wasm-pack** — Rust WASM build
-- **Python 3 + uv** — python-evtx + pyevtx-rs
 - **autoconf, automake, libtool, make** — building libevtx (C) from source
 
 ```bash
 brew install hyperfine autoconf automake libtool
-brew install node rustup go dotnet uv python@3
+brew install node rustup dotnet
 cargo install wasm-pack
 ```
 
@@ -29,8 +27,8 @@ Use `--native-only` to skip everything except C# and Rust native benchmarks.
 
 | File | Purpose |
 |------|---------|
-| `lib.sh` | Colors, logging, timing helpers (`get_formatted`, `measure_cmd_once_seconds`, etc.) |
-| `builders.sh` | Clone + build functions for external parsers (Rust, libevtx, Go, Python, WASM) |
+| `lib.sh` | Colors, logging, timing helpers (`get_formatted`, etc.) |
+| `builders.sh` | Clone + build functions for external parsers (Rust, libevtx, WASM) |
 | `preflight.sh` | `run_preflight()` — tool checks, builds, sets `HAS_*` flags |
 | `run-benchmarks.sh` | `run_xml_benchmark` / `run_json_benchmark` — hyperfine invocation + single-run fallbacks |
 | `results.sh` | Markdown output: table header, metadata, results table, summary |

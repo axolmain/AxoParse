@@ -4,8 +4,7 @@ namespace AxoParse.Evtx.Tests;
 
 public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
 {
-    private static readonly string TestDataDir = Path.GetFullPath(
-        Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
+    private static readonly string TestDataDir = TestPaths.TestDataDir;
 
     private const int FileHeaderSize = 4096;
     private const int ChunkSize = 65536;

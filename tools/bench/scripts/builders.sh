@@ -94,64 +94,6 @@ fetch_and_build_libevtx() {
   log_success "C libevtx ready"
 }
 
-fetch_and_build_velocidex() {
-  log_info "Setting up Go Velocidex evtx..."
-  local dir="$EXTERNAL_DIR/velocidex-evtx"
-
-  if [[ ! -d "$dir" ]]; then
-    log_info "Cloning Velocidex evtx..."
-    git clone --quiet https://github.com/Velocidex/evtx.git "$dir"
-  fi
-
-  (
-    cd "$dir" || return 1
-
-    if [[ ! -f "dumpevtx" ]] || ! binary_looks_compatible "dumpevtx"; then
-      log_info "Building Velocidex dumpevtx..."
-      go build -o dumpevtx ./cmd/ 2>/dev/null
-    fi
-  )
-
-  log_success "Go Velocidex ready"
-}
-
-fetch_and_build_0xrawsec() {
-  log_info "Setting up Go 0xrawsec evtx..."
-  local dir="$EXTERNAL_DIR/0xrawsec-evtx"
-
-  if [[ ! -d "$dir" ]]; then
-    log_info "Cloning 0xrawsec evtx..."
-    git clone --quiet https://github.com/0xrawsec/golang-evtx.git "$dir"
-  fi
-
-  (
-    cd "$dir" || return 1
-
-    if [[ ! -f "evtxdump" ]] || ! binary_looks_compatible "evtxdump"; then
-      log_info "Building 0xrawsec evtxdump..."
-
-      # Patch missing Version/CommitID constants if needed
-      if ! grep -q "Version.*=.*\"" tools/evtxdump/evtxdump.go 2>/dev/null; then
-        local tmpf
-        tmpf=$(mktemp)
-        if sed '/^const (/,/^)/{
-          /conditions;`$/a\
-	Version  = "dev"\
-	CommitID = "unknown"
-        }' tools/evtxdump/evtxdump.go > "$tmpf" 2>/dev/null; then
-          mv "$tmpf" tools/evtxdump/evtxdump.go
-        else
-          rm -f "$tmpf"
-        fi
-      fi
-
-      go build -o evtxdump ./tools/evtxdump/ 2>/dev/null
-    fi
-  )
-
-  log_success "Go 0xrawsec ready"
-}
-
 fetch_and_build_js_evtx() {
   log_info "Setting up JS evtx parser..."
   local dir="$JS_REPO_DIR"
