@@ -10,7 +10,10 @@
     </PropertyGroup>
 
     <Target Name="Tailwind" BeforeTargets="Compile">
-        <Exec Command="npx @tailwindcss/cli -i ./Styles/input.css -o ./wwwroot/css/app.css" />
+        <Exec Command="npx @tailwindcss/cli -i ./Styles/input.css -o ./wwwroot/css/app.css --minify"
+              Condition="'$(Configuration)' == 'Release'" />
+        <Exec Command="npx @tailwindcss/cli -i ./Styles/input.css -o ./wwwroot/css/app.css"
+              Condition="'$(Configuration)' != 'Release'" />
     </Target>
 
     <ItemGroup>

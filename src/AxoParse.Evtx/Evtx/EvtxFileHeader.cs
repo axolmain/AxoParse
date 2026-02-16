@@ -65,15 +65,7 @@ public readonly record struct EvtxFileHeader(
     /// </summary>
     /// <param name="data">Raw file bytes; must be at least 128 bytes long.</param>
     /// <returns>A populated <see cref="EvtxFileHeader"/> with all header fields.</returns>
-    public static EvtxFileHeader ParseEvtxFileHeader(byte[] data) => ParseBytes(data);
-
-    /// <summary>
-    /// Reads and validates the 4096-byte EVTX file header from raw bytes,
-    /// extracting all header fields from their defined offsets.
-    /// </summary>
-    /// <param name="data">Raw file bytes; must be at least 128 bytes long.</param>
-    /// <returns>A populated <see cref="EvtxFileHeader"/> with all header fields.</returns>
-    private static EvtxFileHeader ParseBytes(ReadOnlySpan<byte> data)
+    public static EvtxFileHeader ParseEvtxFileHeader(ReadOnlySpan<byte> data)
     {
         if (data.Length < 128)
             throw new InvalidDataException("EVTX header too short");

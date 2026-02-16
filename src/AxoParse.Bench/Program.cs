@@ -28,7 +28,7 @@ if (format == OutputFormat.Json)
         EvtxChunk chunk = parser.Chunks[index];
         if (chunk.ParsedJson != null)
         {
-            for (int i = 0; i < chunk.ParsedJson.Length; i++)
+            for (int i = 0; i < chunk.ParsedJson.Count; i++)
                 stdout.Write(chunk.ParsedJson[i]);
         }
     }
@@ -40,7 +40,7 @@ else
     for (int index = 0; index < parser.Chunks.Count; index++)
     {
         EvtxChunk chunk = parser.Chunks[index];
-        for (int i = 0; i < chunk.ParsedXml.Length; i++)
+        for (int i = 0; i < chunk.ParsedXml.Count; i++)
         {
             string xml = chunk.ParsedXml[i];
             writer.Write(xml);

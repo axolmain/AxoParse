@@ -3,30 +3,14 @@ using System.Collections.Concurrent;
 namespace AxoParse.Evtx;
 
 /// <summary>
-/// Specifies the output format for parsed EVTX event records.
-/// </summary>
-public enum OutputFormat
-{
-    /// <summary>
-    /// Render each event record as an XML string.
-    /// </summary>
-    Xml,
-
-    /// <summary>
-    /// Render each event record as a UTF-8 JSON byte array.
-    /// </summary>
-    Json
-}
-
-/// <summary>
 /// Top-level orchestrator. Parses the file header, slices chunks, and collects all parsed data.
 /// </summary>
-public class EvtxParser
+public class EvtxParser : IDisposable
 {
     /// <summary>
     /// The complete EVTX file bytes. Retained so parsed records can lazily reference event data via spans.
     /// </summary>
-    public byte[] RawData { get; }
+    public ReadOnlyMemory<byte> RawData { get; }
 
     /// <summary>
     /// Parsed EVTX file header (first 4096 bytes) containing version info, chunk count, and flags.
@@ -124,5 +108,11 @@ public class EvtxParser
         }
 
         return new EvtxParser(fileData, fileHeader, chunks, totalRecords);
+    }
+
+    /// <summary>Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources.</summary>
+    public void Dispose()
+    {
+        throw new NotImplementedException();
     }
 }

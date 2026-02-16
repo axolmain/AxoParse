@@ -3,28 +3,27 @@ using System.Runtime.InteropServices;
 namespace AxoParse.Evtx;
 
 /// <summary>
-/// Compiles WEVT BinXML fragments into <see cref="CompiledTemplate"/> objects.
-/// WEVT templates use a different name encoding than EVTX chunks:
-/// no 4-byte nameOffset field, all names are inline at the current position.
-/// WEVT inline name layout: hash(2) + numChars(2) + numChars*2 UTF-16LE + nul(2) = 6 + numChars*2 bytes.
+/// Partial class containing template compilation methods.
+/// Compiles BinXml template bodies into <see cref="CompiledTemplate"/> objects
+/// with interleaved static XML string parts and substitution slot metadata.
 /// </summary>
-internal static class WevtTemplateCompiler
+internal sealed partial class BinXmlParser
 {
     /// <summary>
-    /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.
+    /// Compiles a template body into a <see cref="CompiledTemplate"/> of interleaved string parts
+    /// and substitution slot IDs. Returns null if the template contains nested templates or
+    /// other constructs that prevent static compilation.
     /// </summary>
-    private const int MaxRecursionDepth = 64;
-
-    /// <summary>
-    /// Compiles a WEVT BinXML fragment into a <see cref="CompiledTemplate"/>.
-    /// Handles the WEVT-specific name encoding (no 4-byte nameOffset, all names inline).
-    /// </summary>
-    /// <param name="binXmlData">Raw BinXML bytes from a TEMP entry (starting at offset 40).</param>
-    /// <returns>Compiled template, or null if the fragment contains unsupported tokens or is malformed.</returns>
-    internal static CompiledTemplate? Compile(ReadOnlySpan<byte> binXmlData)
+    /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
+    /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>
+    /// <returns>A compiled template, or null if the template cannot be statically compiled.</returns>
+    private CompiledTemplate? CompileTemplate(int defDataOffset, int dataSize)
     {
-        if (binXmlData.Length < 4)
-            return null;
+        int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
+        if (tplBodyFileOffset + dataSize > _fileData.Length) return null;
+
+        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, dataSize);
+        int tplChunkBase = defDataOffset + 24;
 
         List<string> parts = new() { string.Empty };
         List<int> subIds = new();
@@ -32,62 +31,31 @@ internal static class WevtTemplateCompiler
         bool bail = false;
 
         int pos = 0;
-
-        // Skip fragment header token (0x0F + 3 bytes)
-        if (binXmlData[0] == BinXmlToken.FragmentHeader)
+        // Skip fragment header
+        if (tplBody.Length >= 4 && tplBody[0] == BinXmlToken.FragmentHeader)
             pos += 4;
 
-        CompileContentWevt(binXmlData, ref pos, parts, subIds, isOptional, ref bail);
+        CompileContent(tplBody, ref pos, tplChunkBase, parts, subIds, isOptional, ref bail);
 
-        if (bail)
-            return null;
-
+        if (bail) return null;
         return new CompiledTemplate(parts.ToArray(), subIds.ToArray(), isOptional.ToArray());
     }
 
     /// <summary>
-    /// Reads a WEVT inline name structure at the current position.
-    /// Layout: hash(2) + numChars(2) + numChars*2 UTF-16LE bytes + nul(2) = 6 + numChars*2 bytes.
+    /// Walks BinXml content tokens, appending static XML text to the last entry in <paramref name="parts"/>
+    /// and recording substitution slots. Sets <paramref name="bail"/> to true if a nested template
+    /// or unsupported token is encountered (compilation cannot proceed).
     /// </summary>
-    /// <param name="data">BinXml byte stream.</param>
-    /// <param name="pos">Current read position; advanced past the inline name.</param>
-    /// <returns>The name string, or null if bounds check fails.</returns>
-    private static string? ReadWevtInlineName(ReadOnlySpan<byte> data, ref int pos)
-    {
-        // hash(2) + numChars(2) = minimum 4 bytes before the string
-        if (pos + 4 > data.Length)
-            return null;
-
-        pos += 2; // skip hash
-        ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
-        pos += 2;
-
-        int stringBytes = numChars * 2;
-        // string bytes + 2 byte nul terminator
-        if (pos + stringBytes + 2 > data.Length)
-            return null;
-
-        ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(data.Slice(pos, stringBytes));
-        pos += stringBytes;
-        pos += 2; // nul terminator
-
-        return new string(chars);
-    }
-
-    /// <summary>
-    /// Walks WEVT BinXml content tokens, appending static XML text to the last entry in
-    /// <paramref name="parts"/> and recording substitution slots. Mirrors
-    /// <see cref="BinXmlParser"/>.CompileContent but uses WEVT inline name encoding.
-    /// </summary>
-    /// <param name="data">BinXml byte stream (WEVT template body).</param>
+    /// <param name="data">BinXml byte stream (template body).</param>
     /// <param name="pos">Current read position; advanced past consumed tokens.</param>
+    /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="parts">Accumulator for static XML string fragments.</param>
     /// <param name="subIds">Accumulator for substitution slot indices.</param>
     /// <param name="isOptional">Accumulator for whether each substitution is optional.</param>
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
-    private static void CompileContentWevt(ReadOnlySpan<byte> data, ref int pos,
-                                           List<string> parts, List<int> subIds, List<bool> isOptional, ref bool bail, int depth = 0)
+    private void CompileContent(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+                                List<string> parts, List<int> subIds, List<bool> isOptional, ref bool bail, int depth = 0)
     {
         while (pos < data.Length)
         {
@@ -105,14 +73,14 @@ internal static class WevtTemplateCompiler
             switch (baseTok)
             {
                 case BinXmlToken.OpenStartElement:
-                    CompileElementWevt(data, ref pos, parts, subIds, isOptional, ref bail, depth + 1);
+                    CompileElement(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, ref bail, depth + 1);
                     break;
 
                 case BinXmlToken.Value:
                     pos++; // token
                     pos++; // value type
-                    string str = BinXmlParser.ReadUnicodeTextStringAsString(data, ref pos);
-                    parts[^1] += BinXmlParser.XmlEscapeString(str);
+                    string str = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
+                    parts[^1] += BinXmlValueFormatter.XmlEscapeString(str);
                     break;
 
                 case BinXmlToken.NormalSubstitution:
@@ -135,19 +103,15 @@ internal static class WevtTemplateCompiler
 
                 case BinXmlToken.EntityRef:
                     pos++;
-                    // WEVT: no nameOffset — read inline name directly
-                    string? entityName = ReadWevtInlineName(data, ref pos);
-                    if (entityName is null)
-                    {
-                        bail = true;
-                        return;
-                    }
+                    uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
+                    pos += 4;
+                    string entityName = ReadName(nameOff);
                     parts[^1] += $"&{entityName};";
                     break;
 
                 case BinXmlToken.CDataSection:
                     pos++;
-                    string cdataStr = BinXmlParser.ReadUnicodeTextStringAsString(data, ref pos);
+                    string cdataStr = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
                     parts[^1] += $"<![CDATA[{cdataStr}]]>";
                     break;
 
@@ -159,20 +123,20 @@ internal static class WevtTemplateCompiler
     }
 
     /// <summary>
-    /// Compiles a single WEVT OpenStartElement and its children into static XML fragments.
-    /// Mirrors <see cref="BinXmlParser"/>.CompileElement but reads names inline (no nameOffset).
-    /// WEVT OpenStartElement layout: token(1) + depId(2) + dataSize(4) + inline name (NO nameOffset).
-    /// WEVT Attribute layout: token(1) + inline name (NO nameOffset).
+    /// Compiles a single OpenStartElement and its children into static XML fragments.
+    /// Appends opening/closing tags and attribute markup to <paramref name="parts"/>,
+    /// recording substitution slots encountered in attributes and child content.
     /// </summary>
-    /// <param name="data">BinXml byte stream (WEVT template body).</param>
+    /// <param name="data">BinXml byte stream (template body).</param>
     /// <param name="pos">Current read position; advanced past the entire element.</param>
+    /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="parts">Accumulator for static XML string fragments.</param>
     /// <param name="subIds">Accumulator for substitution slot indices.</param>
     /// <param name="isOptional">Accumulator for whether each substitution is optional.</param>
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
-    private static void CompileElementWevt(ReadOnlySpan<byte> data, ref int pos,
-                                           List<string> parts, List<int> subIds, List<bool> isOptional, ref bool bail, int depth = 0)
+    private void CompileElement(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+                                List<string> parts, List<int> subIds, List<bool> isOptional, ref bool bail, int depth = 0)
     {
         if (depth >= MaxRecursionDepth)
         {
@@ -186,24 +150,20 @@ internal static class WevtTemplateCompiler
 
         pos += 2; // depId
         pos += 4; // dataSize
+        uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
+        pos += 4;
 
-        // WEVT: no nameOffset field — read inline name directly
-        string? elemName = ReadWevtInlineName(data, ref pos);
-        if (elemName is null)
+        if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase))
         {
             bail = true;
             return;
         }
 
+        string elemName = ReadName(nameOffset);
         parts[^1] += $"<{elemName}";
 
         if (hasAttrs)
         {
-            if (pos + 4 > data.Length)
-            {
-                bail = true;
-                return;
-            }
             uint attrListSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             int attrEnd = pos + (int)attrListSize;
@@ -216,17 +176,17 @@ internal static class WevtTemplateCompiler
                 if (attrBase != BinXmlToken.Attribute) break;
 
                 pos++;
-
-                // WEVT: no nameOffset field — read inline name directly
-                string? attrName = ReadWevtInlineName(data, ref pos);
-                if (attrName is null)
+                uint attrNameOff = MemoryMarshal.Read<uint>(data[pos..]);
+                pos += 4;
+                if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase))
                 {
                     bail = true;
                     return;
                 }
 
+                string attrName = ReadName(attrNameOff);
                 parts[^1] += $" {attrName}=\"";
-                CompileContentWevt(data, ref pos, parts, subIds, isOptional, ref bail, depth + 1);
+                CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, ref bail, depth + 1);
                 if (bail) return;
                 parts[^1] += "\"";
             }
@@ -248,7 +208,7 @@ internal static class WevtTemplateCompiler
         {
             pos++;
             parts[^1] += ">";
-            CompileContentWevt(data, ref pos, parts, subIds, isOptional, ref bail, depth + 1);
+            CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, ref bail, depth + 1);
             if (bail) return;
             if (pos < data.Length && data[pos] == BinXmlToken.EndElement)
                 pos++;

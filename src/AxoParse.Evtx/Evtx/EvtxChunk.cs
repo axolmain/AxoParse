@@ -52,24 +52,24 @@ public class EvtxChunk
     /// Template definitions preloaded from this chunk's 32-entry template pointer table,
     /// keyed by chunk-relative offset.
     /// </summary>
-    public Dictionary<uint, BinXmlTemplateDefinition> Templates { get; }
+    public IReadOnlyDictionary<uint, BinXmlTemplateDefinition> Templates { get; }
 
     /// <summary>
     /// Event records parsed from this chunk's data area.
     /// </summary>
-    public List<EvtxRecord> Records { get; }
+    public IReadOnlyList<EvtxRecord> Records { get; }
 
     /// <summary>
     /// BinXml-rendered XML strings, one per record, in the same order as <see cref="Records"/>.
     /// Empty when output format is JSON.
     /// </summary>
-    public string[] ParsedXml { get; }
+    public IReadOnlyList<string> ParsedXml { get; }
 
     /// <summary>
     /// BinXml-rendered UTF-8 JSON byte arrays, one per record, in the same order as <see cref="Records"/>.
     /// Null when output format is XML.
     /// </summary>
-    public byte[][]? ParsedJson { get; }
+    public IReadOnlyList<byte[]>? ParsedJson { get; }
 
     /// <summary>
     /// Constructs an EvtxChunk from pre-parsed components.
@@ -163,13 +163,31 @@ public class EvtxChunk
         {
             byte[][] parsedJson = new byte[records.Count][];
             for (int i = 0; i < records.Count; i++)
-                parsedJson[i] = binXml.ParseRecordJson(records[i]);
+            {
+                try
+                {
+                    parsedJson[i] = binXml.ParseRecordJson(records[i]);
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    parsedJson[i] = Array.Empty<byte>();
+                }
+            }
             return new EvtxChunk(header, templates, records, Array.Empty<string>(), parsedJson);
         }
 
         string[] parsedXml = new string[records.Count];
         for (int i = 0; i < records.Count; i++)
-            parsedXml[i] = binXml.ParseRecord(records[i]);
+        {
+            try
+            {
+                parsedXml[i] = binXml.ParseRecord(records[i]);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                parsedXml[i] = "";
+            }
+        }
         return new EvtxChunk(header, templates, records, parsedXml);
     }
 

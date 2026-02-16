@@ -42,7 +42,7 @@ public partial class EvtxInterop
             EvtxChunk chunk = parser.Chunks[ci];
             for (int ri = 0; ri < chunk.Records.Count; ri++)
             {
-                string xml = ri < chunk.ParsedXml.Length ? chunk.ParsedXml[ri] : "";
+                string xml = ri < chunk.ParsedXml.Count ? chunk.ParsedXml[ri] : "";
                 _storedRecords.Add((ci, chunk.Records[ri], xml));
             }
         }
@@ -124,7 +124,7 @@ public partial class EvtxInterop
             for (int ri = 0; ri < chunk.Records.Count; ri++)
             {
                 EvtxRecord record = chunk.Records[ri];
-                string xml = ri < chunk.ParsedXml.Length ? chunk.ParsedXml[ri] : "";
+                string xml = ri < chunk.ParsedXml.Count ? chunk.ParsedXml[ri] : "";
 
                 writer.WriteStartObject();
                 writer.WriteNumber("recordId", record.EventRecordId);

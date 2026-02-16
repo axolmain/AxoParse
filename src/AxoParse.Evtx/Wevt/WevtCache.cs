@@ -23,6 +23,9 @@ public sealed class WevtCache
     /// <summary>
     /// Number of templates that were successfully compiled into <see cref="CompiledTemplate"/> objects.
     /// </summary>
+    /// <remarks>
+    /// O(n) — iterates the entire dictionary. Intended for diagnostics, not hot-path use.
+    /// </remarks>
     public int CompiledCount
     {
         get
