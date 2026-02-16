@@ -129,7 +129,7 @@ internal sealed class BinXmlParser
         ReadOnlySpan<byte> chunkData = _fileData.AsSpan(_chunkFileOffset, EvtxChunk.ChunkSize);
         int offset = (int)chunkRelOffset;
         if (offset + 8 > chunkData.Length) return string.Empty;
-        ushort numChars = MemoryMarshal.Read<ushort>(chunkData.Slice(offset + 6));
+        ushort numChars = MemoryMarshal.Read<ushort>(chunkData[(offset + 6)..]);
         if (offset + 8 + numChars * 2 > chunkData.Length) return string.Empty;
         ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(chunkData.Slice(offset + 8, numChars * 2));
         return new string(chars);
@@ -171,7 +171,7 @@ internal sealed class BinXmlParser
         if (pos + 8 > data.Length)
             return false;
 
-        ushort numChars = MemoryMarshal.Read<ushort>(data.Slice(pos + 6));
+        ushort numChars = MemoryMarshal.Read<ushort>(data[(pos + 6)..]);
         int inlineNameBytes = 10 + numChars * 2;
 
         if (pos + inlineNameBytes > data.Length)
@@ -224,7 +224,7 @@ internal sealed class BinXmlParser
             else if (baseTok == BinXmlToken.PiTarget)
             {
                 pos++; // consume 0x0A
-                uint piNameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                uint piNameOff = MemoryMarshal.Read<uint>(data[pos..]);
                 pos += 4;
                 string piName = ReadName(piNameOff);
                 vsb.Append("<?");
@@ -293,7 +293,7 @@ internal sealed class BinXmlParser
         pos++; // consume 0x0C token
         pos++; // unknown1
         pos += 4; // unknown2
-        uint defDataOffset = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint defDataOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         // Determine inline vs back-reference
@@ -306,9 +306,9 @@ internal sealed class BinXmlParser
         if (isInline)
         {
             pos += 4; // next def offset
-            templateGuid = MemoryMarshal.Read<Guid>(data.Slice(pos));
+            templateGuid = MemoryMarshal.Read<Guid>(data[pos..]);
             pos += 16;
-            dataSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+            dataSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             pos += (int)dataSize; // skip template body (already preloaded)
         }
@@ -324,13 +324,13 @@ internal sealed class BinXmlParser
             {
                 // Fallback: read directly from chunk
                 ReadOnlySpan<byte> chunkData = _fileData.AsSpan(_chunkFileOffset, EvtxChunk.ChunkSize);
-                templateGuid = MemoryMarshal.Read<Guid>(chunkData.Slice((int)defDataOffset + 4));
-                dataSize = MemoryMarshal.Read<uint>(chunkData.Slice((int)defDataOffset + 20));
+                templateGuid = MemoryMarshal.Read<Guid>(chunkData[((int)defDataOffset + 4)..]);
+                dataSize = MemoryMarshal.Read<uint>(chunkData[((int)defDataOffset + 20)..]);
             }
         }
 
         // Read substitution descriptors and values
-        uint numValues = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint numValues = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         int descStart = pos;
@@ -344,9 +344,11 @@ internal sealed class BinXmlParser
         int[] valueSizes = new int[numVals];
         byte[] valueTypes = new byte[numVals];
 
+        // Convert span-relative pos to absolute file offset for RenderValue
+        int dataBaseFileOffset = _chunkFileOffset + binxmlChunkBase;
         for (int i = 0; i < numVals; i++)
         {
-            valueOffsets[i] = pos;
+            valueOffsets[i] = dataBaseFileOffset + pos;
             valueSizes[i] = descriptors[i].Size;
             valueTypes[i] = descriptors[i].Type;
             pos += descriptors[i].Size;
@@ -407,7 +409,7 @@ internal sealed class BinXmlParser
 
         pos += 2; // depId
         pos += 4; // dataSize
-        uint nameOffset = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase)) return;
@@ -419,7 +421,7 @@ internal sealed class BinXmlParser
         // Parse attribute list if present
         if (hasAttrs)
         {
-            uint attrListSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+            uint attrListSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             int attrEnd = pos + (int)attrListSize;
 
@@ -430,7 +432,7 @@ internal sealed class BinXmlParser
                 if (attrBase != BinXmlToken.Attribute) break;
 
                 pos++; // consume attribute token
-                uint attrNameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                uint attrNameOff = MemoryMarshal.Read<uint>(data[pos..]);
                 pos += 4;
 
                 if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase)) break;
@@ -521,7 +523,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.NormalSubstitution:
                 {
                     pos++; // consume token
-                    ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     pos++; // subValType
                     if (valueOffsets != null && subId < valueOffsets.Length)
@@ -535,7 +537,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.OptionalSubstitution:
                 {
                     pos++; // consume token
-                    ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     pos++; // subValType
                     if (valueOffsets != null && subId < valueOffsets.Length)
@@ -553,7 +555,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.CharRef:
                 {
                     pos++; // consume token
-                    ushort charVal = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     vsb.Append("&#");
                     vsb.AppendFormatted(charVal);
@@ -563,7 +565,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.EntityRef:
                 {
                     pos++; // consume token
-                    uint nameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                    uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
                     pos += 4;
                     string entityName = ReadName(nameOff);
                     vsb.Append('&');
@@ -670,7 +672,7 @@ internal sealed class BinXmlParser
             else if (baseTok == BinXmlToken.NormalSubstitution)
             {
                 pos++;
-                ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2;
                 pos++; // subValType
                 subIds.Add(subId);
@@ -680,7 +682,7 @@ internal sealed class BinXmlParser
             else if (baseTok == BinXmlToken.OptionalSubstitution)
             {
                 pos++;
-                ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2;
                 pos++; // subValType
                 subIds.Add(subId);
@@ -690,14 +692,14 @@ internal sealed class BinXmlParser
             else if (baseTok == BinXmlToken.CharRef)
             {
                 pos++;
-                ushort charVal = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2;
                 parts[^1] += $"&#{charVal};";
             }
             else if (baseTok == BinXmlToken.EntityRef)
             {
                 pos++;
-                uint nameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
                 pos += 4;
                 string entityName = ReadName(nameOff);
                 parts[^1] += $"&{entityName};";
@@ -749,7 +751,7 @@ internal sealed class BinXmlParser
 
         pos += 2; // depId
         pos += 4; // dataSize
-        uint nameOffset = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase))
@@ -763,7 +765,7 @@ internal sealed class BinXmlParser
 
         if (hasAttrs)
         {
-            uint attrListSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+            uint attrListSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             int attrEnd = pos + (int)attrListSize;
 
@@ -775,7 +777,7 @@ internal sealed class BinXmlParser
                 if (attrBase != BinXmlToken.Attribute) break;
 
                 pos++;
-                uint attrNameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                uint attrNameOff = MemoryMarshal.Read<uint>(data[pos..]);
                 pos += 4;
                 if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase))
                 {
@@ -993,12 +995,12 @@ internal sealed class BinXmlParser
             {
                 if (size < 16) break;
                 ushort yr = MemoryMarshal.Read<ushort>(valueBytes);
-                ushort mo = MemoryMarshal.Read<ushort>(valueBytes.Slice(2));
-                ushort dy = MemoryMarshal.Read<ushort>(valueBytes.Slice(6));
-                ushort hr = MemoryMarshal.Read<ushort>(valueBytes.Slice(8));
-                ushort mn = MemoryMarshal.Read<ushort>(valueBytes.Slice(10));
-                ushort sc = MemoryMarshal.Read<ushort>(valueBytes.Slice(12));
-                ushort ms = MemoryMarshal.Read<ushort>(valueBytes.Slice(14));
+                ushort mo = MemoryMarshal.Read<ushort>(valueBytes[2..]);
+                ushort dy = MemoryMarshal.Read<ushort>(valueBytes[6..]);
+                ushort hr = MemoryMarshal.Read<ushort>(valueBytes[8..]);
+                ushort mn = MemoryMarshal.Read<ushort>(valueBytes[10..]);
+                ushort sc = MemoryMarshal.Read<ushort>(valueBytes[12..]);
+                ushort ms = MemoryMarshal.Read<ushort>(valueBytes[14..]);
                 vsb.AppendFormatted(yr, "D4");
                 vsb.Append('-');
                 vsb.AppendFormatted(mo, "D2");
@@ -1033,7 +1035,7 @@ internal sealed class BinXmlParser
                     int subOff = 8 + i * 4;
                     if (subOff + 4 > size) break;
                     vsb.Append('-');
-                    vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes.Slice(subOff)));
+                    vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes[subOff..]));
                 }
 
                 break;
@@ -1151,8 +1153,8 @@ internal sealed class BinXmlParser
     private void RenderGuid(ReadOnlySpan<byte> b, ref ValueStringBuilder vsb)
     {
         uint d1 = MemoryMarshal.Read<uint>(b);
-        ushort d2 = MemoryMarshal.Read<ushort>(b.Slice(4));
-        ushort d3 = MemoryMarshal.Read<ushort>(b.Slice(6));
+        ushort d2 = MemoryMarshal.Read<ushort>(b[4..]);
+        ushort d3 = MemoryMarshal.Read<ushort>(b[6..]);
 
         vsb.Append('{');
         vsb.AppendFormatted(d1, "x8");
@@ -1184,7 +1186,7 @@ internal sealed class BinXmlParser
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static string ReadUnicodeTextStringAsString(ReadOnlySpan<byte> data, ref int pos)
     {
-        ushort numChars = MemoryMarshal.Read<ushort>(data.Slice(pos));
+        ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
         pos += 2;
         ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(data.Slice(pos, numChars * 2));
         pos += numChars * 2;
@@ -1321,7 +1323,7 @@ internal sealed class BinXmlParser
                 if (pos < data.Length && data[pos] == BinXmlToken.PiData)
                 {
                     pos++;
-                    ushort numChars = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2 + numChars * 2;
                 }
             }
@@ -1370,7 +1372,7 @@ internal sealed class BinXmlParser
         pos++; // 0x0C token
         pos++; // unknown1
         pos += 4; // unknown2
-        uint defDataOffset = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint defDataOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         uint currentChunkRelOffset = (uint)(binxmlChunkBase + pos);
@@ -1382,7 +1384,7 @@ internal sealed class BinXmlParser
         {
             pos += 4; // next def offset
             pos += 16; // guid
-            dataSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+            dataSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             pos += (int)dataSize;
         }
@@ -1393,12 +1395,12 @@ internal sealed class BinXmlParser
             else if (defDataOffset + 24 <= EvtxChunk.ChunkSize)
             {
                 ReadOnlySpan<byte> chunkData = _fileData.AsSpan(_chunkFileOffset, EvtxChunk.ChunkSize);
-                dataSize = MemoryMarshal.Read<uint>(chunkData.Slice((int)defDataOffset + 20));
+                dataSize = MemoryMarshal.Read<uint>(chunkData[((int)defDataOffset + 20)..]);
             }
         }
 
         // Read substitution descriptors
-        uint numValues = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint numValues = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         int descStart = pos;
@@ -1411,9 +1413,11 @@ internal sealed class BinXmlParser
         int[] valueSizes = new int[numVals];
         byte[] valueTypes = new byte[numVals];
 
+        // Convert span-relative pos to absolute file offset for RenderValueJson
+        int dataBaseFileOffset = _chunkFileOffset + binxmlChunkBase;
         for (int i = 0; i < numVals; i++)
         {
-            valueOffsets[i] = pos;
+            valueOffsets[i] = dataBaseFileOffset + pos;
             valueSizes[i] = descriptors[i].Size;
             valueTypes[i] = descriptors[i].Type;
             pos += descriptors[i].Size;
@@ -1479,7 +1483,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.NormalSubstitution:
                 {
                     pos++;
-                    ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     pos++; // subValType
                     if (valueOffsets != null && subId < valueOffsets.Length)
@@ -1490,7 +1494,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.OptionalSubstitution:
                 {
                     pos++;
-                    ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     pos++; // subValType
                     if (valueOffsets != null && subId < valueOffsets.Length)
@@ -1506,7 +1510,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.CharRef:
                 {
                     pos++;
-                    ushort charVal = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     w.WriteStringValue(char.ConvertFromUtf32(charVal));
                     break;
@@ -1514,7 +1518,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.EntityRef:
                 {
                     pos++;
-                    uint nameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                    uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
                     pos += 4;
                     string entityName = ReadName(nameOff);
                     // Resolve common XML entities
@@ -1624,13 +1628,13 @@ internal sealed class BinXmlParser
                 hasText = true;
                 pos++;
                 pos++; // value type
-                ushort numChars = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2 + numChars * 2;
             }
             else if (baseTok == BinXmlToken.NormalSubstitution)
             {
                 pos++;
-                ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2;
                 byte subValType = data[pos];
                 pos++;
@@ -1646,7 +1650,7 @@ internal sealed class BinXmlParser
             else if (baseTok == BinXmlToken.OptionalSubstitution)
             {
                 pos++;
-                ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2;
                 pos++; // subValType
                 if (valueOffsets != null && subId < valueOffsets.Length)
@@ -1676,7 +1680,7 @@ internal sealed class BinXmlParser
             {
                 hasText = true;
                 pos++;
-                ushort numChars = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2 + numChars * 2;
             }
             else if (baseTok == BinXmlToken.TemplateInstance)
@@ -1709,16 +1713,16 @@ internal sealed class BinXmlParser
         bool hasAttrs = (tok & BinXmlToken.HasMoreDataFlag) != 0;
         pos++;
         pos += 2; // depId
-        uint elemDataSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint elemDataSize = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
-        uint nameOffset = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase)) return;
 
         if (hasAttrs)
         {
-            uint attrListSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+            uint attrListSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4 + (int)attrListSize;
         }
 
@@ -1772,7 +1776,7 @@ internal sealed class BinXmlParser
             {
                 pos++;
                 pos++;
-                ushort numChars = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2 + numChars * 2;
             }
             else if (baseTok == BinXmlToken.NormalSubstitution || baseTok == BinXmlToken.OptionalSubstitution)
@@ -1790,7 +1794,7 @@ internal sealed class BinXmlParser
             else if (baseTok == BinXmlToken.CDataSection)
             {
                 pos++;
-                ushort numChars = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2 + numChars * 2;
             }
             else
@@ -1829,7 +1833,7 @@ internal sealed class BinXmlParser
 
         pos += 2; // depId
         pos += 4; // dataSize
-        uint nameOffset = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase)) return;
@@ -1840,7 +1844,7 @@ internal sealed class BinXmlParser
         List<(string name, string value)>? attrs = null;
         if (hasAttrs)
         {
-            uint attrListSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+            uint attrListSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             int attrEnd = pos + (int)attrListSize;
 
@@ -1852,7 +1856,7 @@ internal sealed class BinXmlParser
                 if (attrBase != BinXmlToken.Attribute) break;
 
                 pos++;
-                uint attrNameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                uint attrNameOff = MemoryMarshal.Read<uint>(data[pos..]);
                 pos += 4;
                 if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase)) break;
 
@@ -2024,7 +2028,7 @@ internal sealed class BinXmlParser
             if (baseTok == BinXmlToken.NormalSubstitution || baseTok == BinXmlToken.OptionalSubstitution)
             {
                 savedPos++;
-                ushort subId = MemoryMarshal.Read<ushort>(data.Slice(savedPos));
+                ushort subId = MemoryMarshal.Read<ushort>(data[savedPos..]);
                 savedPos += 2;
                 savedPos++; // valType
                 if (subCount == 0) firstSubId = subId;
@@ -2102,7 +2106,7 @@ internal sealed class BinXmlParser
                 peekPos++; // token
                 peekPos += 2; // depId
                 peekPos += 4; // dataSize
-                uint nameOff = MemoryMarshal.Read<uint>(data.Slice(peekPos));
+                uint nameOff = MemoryMarshal.Read<uint>(data[peekPos..]);
 
                 string childName = ReadName(nameOff);
 
@@ -2147,7 +2151,7 @@ internal sealed class BinXmlParser
             else if (baseTok == BinXmlToken.NormalSubstitution || baseTok == BinXmlToken.OptionalSubstitution)
             {
                 pos++;
-                ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                 pos += 2;
                 pos++; // subValType
                 if (valueOffsets != null && subId < valueOffsets.Length)
@@ -2207,14 +2211,14 @@ internal sealed class BinXmlParser
         pos++; // token
         pos += 2; // depId
         pos += 4; // dataSize
-        uint nameOffset = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase)) return null;
 
         // Now at attribute list
         if (pos + 4 > data.Length) return null;
-        uint attrListSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint attrListSize = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
         int attrEnd = pos + (int)attrListSize;
 
@@ -2225,7 +2229,7 @@ internal sealed class BinXmlParser
             if (attrBase != BinXmlToken.Attribute) break;
 
             pos++;
-            uint attrNameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+            uint attrNameOff = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase)) break;
 
@@ -2266,7 +2270,7 @@ internal sealed class BinXmlParser
         pos++;
         pos += 2; // depId
         pos += 4; // dataSize
-        uint nameOffset = MemoryMarshal.Read<uint>(data.Slice(pos));
+        uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
 
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase))
@@ -2277,7 +2281,7 @@ internal sealed class BinXmlParser
 
         if (hasAttrs)
         {
-            uint attrListSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+            uint attrListSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             int attrEnd = pos + (int)attrListSize;
             // Skip attributes (we already peeked Name=)
@@ -2287,7 +2291,7 @@ internal sealed class BinXmlParser
                 byte attrBase = (byte)(attrTok & ~BinXmlToken.HasMoreDataFlag);
                 if (attrBase != BinXmlToken.Attribute) break;
                 pos++;
-                uint attrNameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                uint attrNameOff = MemoryMarshal.Read<uint>(data[pos..]);
                 pos += 4;
                 if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase)) break;
 
@@ -2359,7 +2363,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.NormalSubstitution:
                 {
                     pos++;
-                    ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     pos++;
                     if (valueOffsets != null && subId < valueOffsets.Length)
@@ -2370,7 +2374,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.OptionalSubstitution:
                 {
                     pos++;
-                    ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     pos++;
                     if (valueOffsets != null && subId < valueOffsets.Length)
@@ -2386,7 +2390,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.CharRef:
                 {
                     pos++;
-                    ushort charVal = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     vsb.Append((char)charVal);
                     break;
@@ -2394,7 +2398,7 @@ internal sealed class BinXmlParser
                 case BinXmlToken.EntityRef:
                 {
                     pos++;
-                    uint nameOff = MemoryMarshal.Read<uint>(data.Slice(pos));
+                    uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
                     pos += 4;
                     string entityName = ReadName(nameOff);
                     string resolved = entityName switch
@@ -2604,12 +2608,12 @@ internal sealed class BinXmlParser
                 }
 
                 ushort yr = MemoryMarshal.Read<ushort>(valueBytes);
-                ushort mo = MemoryMarshal.Read<ushort>(valueBytes.Slice(2));
-                ushort dy = MemoryMarshal.Read<ushort>(valueBytes.Slice(6));
-                ushort hr = MemoryMarshal.Read<ushort>(valueBytes.Slice(8));
-                ushort mn = MemoryMarshal.Read<ushort>(valueBytes.Slice(10));
-                ushort sc = MemoryMarshal.Read<ushort>(valueBytes.Slice(12));
-                ushort ms = MemoryMarshal.Read<ushort>(valueBytes.Slice(14));
+                ushort mo = MemoryMarshal.Read<ushort>(valueBytes[2..]);
+                ushort dy = MemoryMarshal.Read<ushort>(valueBytes[6..]);
+                ushort hr = MemoryMarshal.Read<ushort>(valueBytes[8..]);
+                ushort mn = MemoryMarshal.Read<ushort>(valueBytes[10..]);
+                ushort sc = MemoryMarshal.Read<ushort>(valueBytes[12..]);
+                ushort ms = MemoryMarshal.Read<ushort>(valueBytes[14..]);
                 ValueStringBuilder vsb = new(stackalloc char[24]);
                 vsb.AppendFormatted(yr, "D4");
                 vsb.Append('-');
@@ -2653,7 +2657,7 @@ internal sealed class BinXmlParser
                     int subOff = 8 + i * 4;
                     if (subOff + 4 > size) break;
                     vsb.Append('-');
-                    vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes.Slice(subOff)));
+                    vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes[subOff..]));
                 }
 
                 w.WriteStringValue(vsb.AsSpan());

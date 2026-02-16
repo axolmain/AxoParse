@@ -59,7 +59,7 @@ internal static class WevtTemplateCompiler
             return null;
 
         pos += 2; // skip hash
-        ushort numChars = MemoryMarshal.Read<ushort>(data.Slice(pos));
+        ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
         pos += 2;
 
         int stringBytes = numChars * 2;
@@ -118,7 +118,7 @@ internal static class WevtTemplateCompiler
                 case BinXmlToken.NormalSubstitution:
                 case BinXmlToken.OptionalSubstitution:
                     pos++;
-                    ushort subId = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort subId = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     pos++; // subValType
                     subIds.Add(subId);
@@ -128,7 +128,7 @@ internal static class WevtTemplateCompiler
 
                 case BinXmlToken.CharRef:
                     pos++;
-                    ushort charVal = MemoryMarshal.Read<ushort>(data.Slice(pos));
+                    ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
                     parts[^1] += $"&#{charVal};";
                     break;
@@ -204,7 +204,7 @@ internal static class WevtTemplateCompiler
                 bail = true;
                 return;
             }
-            uint attrListSize = MemoryMarshal.Read<uint>(data.Slice(pos));
+            uint attrListSize = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             int attrEnd = pos + (int)attrListSize;
 

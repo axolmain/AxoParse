@@ -12,16 +12,104 @@ public partial class EvtxInterop
     private static readonly string[] LevelNames = ["", "Critical", "Error", "Warning", "Information", "Verbose"];
 
     /// <summary>
+    /// Flattened record list from the most recent <see cref="ParseEvtxFile"/> call.
+    /// Each entry holds the chunk index, record header, and pre-extracted XML string
+    /// so that <see cref="GetRecordPage"/> can serialise on demand without re-parsing.
+    /// </summary>
+    private static List<(int ChunkIndex, EvtxRecord Record, string Xml)> _storedRecords = [];
+
+    /// <summary>
+    /// Parses an EVTX file from a byte array and stores the full result in WASM memory.
+    /// Returns a lightweight JSON metadata object — no record data is included.
+    /// Use <see cref="GetRecordPage"/> to retrieve records in pages afterwards.
+    ///
+    /// Designed for JS consumers that want progressive/streamed loading:
+    /// call this once, then loop <see cref="GetRecordPage"/> to pull pages of records
+    /// without serialising the entire dataset up front.
+    /// </summary>
+    /// <param name="data">Complete EVTX file bytes.</param>
+    /// <returns>
+    /// JSON object: <c>{"totalRecords":N,"numChunks":N}</c>
+    /// </returns>
+    [JSExport]
+    public static string ParseEvtxFile(byte[] data)
+    {
+        EvtxParser parser = EvtxParser.Parse(data, 1);
+
+        _storedRecords = new List<(int, EvtxRecord, string)>(parser.TotalRecords);
+        for (int ci = 0; ci < parser.Chunks.Count; ci++)
+        {
+            EvtxChunk chunk = parser.Chunks[ci];
+            for (int ri = 0; ri < chunk.Records.Count; ri++)
+            {
+                string xml = ri < chunk.ParsedXml.Length ? chunk.ParsedXml[ri] : "";
+                _storedRecords.Add((ci, chunk.Records[ri], xml));
+            }
+        }
+
+        using MemoryStream stream = new(128);
+        using Utf8JsonWriter writer = new(stream);
+        writer.WriteStartObject();
+        writer.WriteNumber("totalRecords", parser.TotalRecords);
+        writer.WriteNumber("numChunks", parser.Chunks.Count);
+        writer.WriteEndObject();
+        writer.Flush();
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Returns a JSON array containing the requested page of records.
+    /// Data must have been loaded first via <see cref="ParseEvtxFile"/>.
+    ///
+    /// Each record object contains: recordId, timestamp, xml, chunkIndex,
+    /// plus all extracted fields (eventId, provider, level, computer, channel, eventData, etc.).
+    /// </summary>
+    /// <param name="offset">Zero-based starting record index.</param>
+    /// <param name="limit">Maximum number of records to return. Clamped to available records.</param>
+    /// <returns>JSON array of record objects, or <c>"[]"</c> if offset is out of range.</returns>
+    [JSExport]
+    public static string GetRecordPage(int offset, int limit)
+    {
+        if (offset < 0 || offset >= _storedRecords.Count)
+            return "[]";
+
+        int end = Math.Min(offset + limit, _storedRecords.Count);
+
+        using MemoryStream stream = new();
+        using Utf8JsonWriter writer = new(stream);
+        writer.WriteStartArray();
+
+        for (int i = offset; i < end; i++)
+        {
+            (int chunkIndex, EvtxRecord record, string xml) = _storedRecords[i];
+            writer.WriteStartObject();
+            writer.WriteNumber("recordId", record.EventRecordId);
+            writer.WriteString("timestamp", FileTimeToIso(record.WrittenTime));
+            writer.WriteString("xml", xml);
+            writer.WriteNumber("chunkIndex", chunkIndex);
+            WriteXmlFields(writer, xml);
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndArray();
+        writer.Flush();
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
     /// Parses an EVTX file from a byte array and returns a JSON string containing all parsed event records.
     /// Called from JavaScript via [JSExport].
+    ///
+    /// For large files prefer <see cref="ParseEvtxFile"/> + <see cref="GetRecordPage"/> to avoid
+    /// serialising the entire dataset into a single JSON string.
     /// </summary>
     [JSExport]
     public static string ParseEvtxToJson(byte[] data)
     {
-        var parser = EvtxParser.Parse(data, 1); // single-threaded in WASM
+        EvtxParser parser = EvtxParser.Parse(data, 1); // single-threaded in WASM
 
-        using var stream = new MemoryStream();
-        using var writer = new Utf8JsonWriter(stream);
+        using MemoryStream stream = new();
+        using Utf8JsonWriter writer = new(stream);
 
         writer.WriteStartObject();
 
@@ -32,10 +120,10 @@ public partial class EvtxInterop
 
         for (int ci = 0; ci < parser.Chunks.Count; ci++)
         {
-            var chunk = parser.Chunks[ci];
+            EvtxChunk chunk = parser.Chunks[ci];
             for (int ri = 0; ri < chunk.Records.Count; ri++)
             {
-                var record = chunk.Records[ri];
+                EvtxRecord record = chunk.Records[ri];
                 string xml = ri < chunk.ParsedXml.Length ? chunk.ParsedXml[ri] : "";
 
                 writer.WriteStartObject();

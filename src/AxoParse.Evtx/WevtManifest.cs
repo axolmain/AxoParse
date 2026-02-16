@@ -68,10 +68,10 @@ internal static class WevtManifest
         if (crimData.Length < CrimHeaderSize)
             return templates;
 
-        if (!crimData.Slice(0, 4).SequenceEqual("CRIM"u8))
+        if (!crimData[..4].SequenceEqual("CRIM"u8))
             return templates;
 
-        uint providerCount = MemoryMarshal.Read<uint>(crimData.Slice(12));
+        uint providerCount = MemoryMarshal.Read<uint>(crimData[12..]);
 
         int providerDescStart = CrimHeaderSize;
         for (uint p = 0; p < providerCount; p++)
@@ -81,7 +81,7 @@ internal static class WevtManifest
                 break;
 
             // Provider data offset is at bytes 16..20 of the descriptor (after the 16-byte GUID)
-            uint wevtOffset = MemoryMarshal.Read<uint>(crimData.Slice(descOffset + 16));
+            uint wevtOffset = MemoryMarshal.Read<uint>(crimData[(descOffset + 16)..]);
             ParseWevtProvider(crimData, (int)wevtOffset, templates);
         }
 
@@ -102,7 +102,7 @@ internal static class WevtManifest
         if (!data.Slice(offset, 4).SequenceEqual("WEVT"u8))
             return;
 
-        uint descriptorCount = MemoryMarshal.Read<uint>(data.Slice(offset + 12));
+        uint descriptorCount = MemoryMarshal.Read<uint>(data[(offset + 12)..]);
 
         int elemStart = offset + WevtHeaderSize;
         for (uint e = 0; e < descriptorCount; e++)
@@ -111,7 +111,7 @@ internal static class WevtManifest
             if (elemDescOffset + ElementDescriptorSize > data.Length)
                 break;
 
-            uint elementOffset = MemoryMarshal.Read<uint>(data.Slice(elemDescOffset));
+            uint elementOffset = MemoryMarshal.Read<uint>(data[elemDescOffset..]);
 
             if (elementOffset + 4 <= (uint)data.Length &&
                 data.Slice((int)elementOffset, 4).SequenceEqual("TTBL"u8))
@@ -132,7 +132,7 @@ internal static class WevtManifest
         if (offset + TtblHeaderSize > data.Length)
             return;
 
-        uint count = MemoryMarshal.Read<uint>(data.Slice(offset + 8));
+        uint count = MemoryMarshal.Read<uint>(data[(offset + 8)..]);
 
         int pos = offset + TtblHeaderSize;
         for (uint t = 0; t < count; t++)
@@ -143,13 +143,13 @@ internal static class WevtManifest
             if (!data.Slice(pos, 4).SequenceEqual("TEMP"u8))
                 break;
 
-            uint tempSize = MemoryMarshal.Read<uint>(data.Slice(pos + 4));
+            uint tempSize = MemoryMarshal.Read<uint>(data[(pos + 4)..]);
             if (tempSize < TempHeaderSize || pos + (int)tempSize > data.Length)
                 break;
 
-            uint itemDescriptorCount = MemoryMarshal.Read<uint>(data.Slice(pos + 8));
-            uint templateItemsOffset = MemoryMarshal.Read<uint>(data.Slice(pos + 16));
-            Guid guid = MemoryMarshal.Read<Guid>(data.Slice(pos + 24));
+            uint itemDescriptorCount = MemoryMarshal.Read<uint>(data[(pos + 8)..]);
+            uint templateItemsOffset = MemoryMarshal.Read<uint>(data[(pos + 16)..]);
+            Guid guid = MemoryMarshal.Read<Guid>(data[(pos + 24)..]);
 
             // BinXML starts at byte 40 within the TEMP entry (after the header).
             // templateItemsOffset is absolute (from CRIM start) — convert to relative within the TEMP entry.

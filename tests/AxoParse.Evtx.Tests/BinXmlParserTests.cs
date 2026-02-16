@@ -147,6 +147,52 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         }
     }
 
+    /// <summary>
+    /// Verifies that substitution values (EventID, Level, EventData, etc.) render correctly
+    /// in the XML output. Regression test for a bug where substitution value offsets were
+    /// span-relative instead of absolute file offsets, causing all numeric fields to read as 0
+    /// and EventData/UserData sections to render empty.
+    /// </summary>
+    [Fact]
+    public void SubstitutionValuesRenderCorrectly()
+    {
+        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        int totalRecords = 0;
+        int withEventData = 0;
+        int withNonZeroEventId = 0;
+
+        foreach (string file in evtxFiles)
+        {
+            byte[] data = File.ReadAllBytes(file);
+            EvtxParser parser = EvtxParser.Parse(data, 1);
+
+            foreach (EvtxChunk chunk in parser.Chunks)
+            {
+                foreach (string xml in chunk.ParsedXml)
+                {
+                    totalRecords++;
+
+                    if (xml.Contains("<EventData") || xml.Contains("<UserData"))
+                        withEventData++;
+
+                    // Check that EventID is not always 0 (was the symptom of the offset bug)
+                    if (!xml.Contains("<EventID Qualifiers=\"\">0</EventID>"))
+                        withNonZeroEventId++;
+                }
+            }
+        }
+
+        testOutputHelper.WriteLine($"Total: {totalRecords}, EventData: {withEventData}, NonZeroEventID: {withNonZeroEventId}");
+
+        // With correct offsets, most records should have EventData/UserData
+        Assert.True(withEventData > 100,
+            $"Expected many records with EventData/UserData, got {withEventData}");
+
+        // With correct offsets, most records should have non-zero EventID
+        Assert.True(withNonZeroEventId > 100,
+            $"Expected many records with non-zero EventID, got {withNonZeroEventId}");
+    }
+
     [Fact]
     public void XmlOutput_SurvivesUtf8Encoding_WithUnpairedSurrogates()
     {

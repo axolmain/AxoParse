@@ -252,7 +252,19 @@ internal static class BinXmlValueType
 [StructLayout(LayoutKind.Sequential, Pack = 1)]
 internal readonly struct SubstitutionDescriptor
 {
+    /// <summary>
+    /// Byte size of the substitution value data that follows the descriptor array.
+    /// </summary>
     public readonly ushort Size;
+
+    /// <summary>
+    /// BinXml value type code identifying the data type of this substitution value.
+    /// Bit 0x80 indicates an array; mask with 0x7F to get the base <see cref="BinXmlValueType"/>.
+    /// </summary>
     public readonly byte Type;
+
+    /// <summary>
+    /// Alignment padding byte required by the on-disk 4-byte descriptor layout; not used.
+    /// </summary>
     public readonly byte Padding;
 }
