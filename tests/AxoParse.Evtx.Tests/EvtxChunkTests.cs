@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -12,7 +13,7 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void GetEventMatchesDirectIndexAccess()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
         EvtxChunk chunk = parser.Chunks[0];
@@ -31,12 +32,12 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesAllChunksInSecurityEvtx()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(data);
 
         for (int i = 0; i < fileHeader.NumberOfChunks; i++)
         {
-            int offset = FileHeaderSize + i * EvtxChunk.ChunkSize;
+            int offset = _fileHeaderSize + i * EvtxChunk.ChunkSize;
 
             EvtxChunk chunk = EvtxChunk.Parse(data.AsSpan(offset, EvtxChunk.ChunkSize), offset);
 
@@ -88,7 +89,7 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void RenderDiagnosticsEmptyOnCleanChunks()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
         foreach (EvtxChunk chunk in parser.Chunks)
@@ -103,8 +104,8 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
 
     private static (byte[] fileData, int chunkFileOffset) GetChunkInfo(string filename, int chunkIndex = 0)
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, filename));
-        int offset = FileHeaderSize + chunkIndex * EvtxChunk.ChunkSize;
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, filename));
+        int offset = _fileHeaderSize + chunkIndex * EvtxChunk.ChunkSize;
         return (data, offset);
     }
 
@@ -112,8 +113,8 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
 
     #region Non-Public Fields
 
-    private const int FileHeaderSize = 4096;
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    private const int _fileHeaderSize = 4096;
+    private static readonly string _testDataDir = TestPaths.TestDataDir;
 
     #endregion
 }

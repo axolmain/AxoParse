@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -9,7 +10,7 @@ public class EvtxFileHeaderTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesAllTestFiles()
     {
-        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        string[] evtxFiles = Directory.GetFiles(_testDataDir, "*.evtx");
         Assert.True(evtxFiles.Length > 0, "No test .evtx files found");
 
         Stopwatch sw = new Stopwatch();
@@ -32,7 +33,7 @@ public class EvtxFileHeaderTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesDirtyFlaggedFile()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "2-system-Security-dirty.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "2-system-Security-dirty.evtx"));
 
         Stopwatch sw = Stopwatch.StartNew();
         EvtxFileHeader header = EvtxFileHeader.ParseEvtxFileHeader(data);
@@ -61,7 +62,7 @@ public class EvtxFileHeaderTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesNoCrc32FlaggedFile()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "Application_no_crc32.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "Application_no_crc32.evtx"));
 
         EvtxFileHeader header = EvtxFileHeader.ParseEvtxFileHeader(data);
 
@@ -72,7 +73,7 @@ public class EvtxFileHeaderTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesSecurityEvtxHeader()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
 
         Stopwatch sw = Stopwatch.StartNew();
         EvtxFileHeader header = EvtxFileHeader.ParseEvtxFileHeader(data);
@@ -116,7 +117,7 @@ public class EvtxFileHeaderTests(ITestOutputHelper testOutputHelper)
 
     #region Non-Public Fields
 
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    private static readonly string _testDataDir = TestPaths.TestDataDir;
 
     #endregion
 }

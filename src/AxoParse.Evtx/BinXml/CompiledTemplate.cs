@@ -1,4 +1,8 @@
-namespace AxoParse.Evtx;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace AxoParse.Evtx.BinXml;
 
 /// <summary>
 /// Pre-compiled BinXml template: string parts interleaved with substitution slots.

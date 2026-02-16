@@ -1,6 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.Wevt;
 
 /// <summary>
 /// Extracted WEVT template: the template GUID and its raw BinXML fragment bytes.
@@ -29,7 +32,7 @@ internal static class WevtManifest
     {
         List<WevtTemplate> templates = new();
 
-        if (crimData.Length < CrimHeaderSize)
+        if (crimData.Length < _crimHeaderSize)
             return templates;
 
         if (!crimData[..4].SequenceEqual("CRIM"u8))
@@ -37,11 +40,11 @@ internal static class WevtManifest
 
         uint providerCount = MemoryMarshal.Read<uint>(crimData[12..]);
 
-        int providerDescStart = CrimHeaderSize;
+        int providerDescStart = _crimHeaderSize;
         for (uint p = 0; p < providerCount; p++)
         {
-            int descOffset = providerDescStart + (int)(p * ProviderDescriptorSize);
-            if (descOffset + ProviderDescriptorSize > crimData.Length)
+            int descOffset = providerDescStart + (int)(p * _providerDescriptorSize);
+            if (descOffset + _providerDescriptorSize > crimData.Length)
                 break;
 
             // Provider data offset is at bytes 16..20 of the descriptor (after the 16-byte GUID)
@@ -60,22 +63,22 @@ internal static class WevtManifest
     /// <param name="templates">Accumulator for extracted templates.</param>
     private static void ParseTtbl(ReadOnlySpan<byte> data, int offset, List<WevtTemplate> templates)
     {
-        if (offset + TtblHeaderSize > data.Length)
+        if (offset + _ttblHeaderSize > data.Length)
             return;
 
         uint count = MemoryMarshal.Read<uint>(data[(offset + 8)..]);
 
-        int pos = offset + TtblHeaderSize;
+        int pos = offset + _ttblHeaderSize;
         for (uint t = 0; t < count; t++)
         {
-            if (pos + TempHeaderSize > data.Length)
+            if (pos + _tempHeaderSize > data.Length)
                 break;
 
             if (!data.Slice(pos, 4).SequenceEqual("TEMP"u8))
                 break;
 
             uint tempSize = MemoryMarshal.Read<uint>(data[(pos + 4)..]);
-            if ((tempSize < TempHeaderSize) || (pos + (int)tempSize > data.Length))
+            if ((tempSize < _tempHeaderSize) || (pos + (int)tempSize > data.Length))
                 break;
 
             uint itemDescriptorCount = MemoryMarshal.Read<uint>(data[(pos + 8)..]);
@@ -85,7 +88,7 @@ internal static class WevtManifest
             // BinXML starts at byte 40 within the TEMP entry (after the header).
             // templateItemsOffset is absolute (from CRIM start) — convert to relative within the TEMP entry.
             // BinXML ends where the item descriptor table begins, or at end-of-TEMP if no items.
-            int binXmlStart = pos + TempHeaderSize;
+            int binXmlStart = pos + _tempHeaderSize;
             int binXmlEnd;
             if ((itemDescriptorCount > 0) && (templateItemsOffset > (uint)pos))
             {
@@ -117,7 +120,7 @@ internal static class WevtManifest
     /// <param name="templates">Accumulator for extracted templates.</param>
     private static void ParseWevtProvider(ReadOnlySpan<byte> data, int offset, List<WevtTemplate> templates)
     {
-        if (offset + WevtHeaderSize > data.Length)
+        if (offset + _wevtHeaderSize > data.Length)
             return;
 
         if (!data.Slice(offset, 4).SequenceEqual("WEVT"u8))
@@ -125,11 +128,11 @@ internal static class WevtManifest
 
         uint descriptorCount = MemoryMarshal.Read<uint>(data[(offset + 12)..]);
 
-        int elemStart = offset + WevtHeaderSize;
+        int elemStart = offset + _wevtHeaderSize;
         for (uint e = 0; e < descriptorCount; e++)
         {
-            int elemDescOffset = elemStart + (int)(e * ElementDescriptorSize);
-            if (elemDescOffset + ElementDescriptorSize > data.Length)
+            int elemDescOffset = elemStart + (int)(e * _elementDescriptorSize);
+            if (elemDescOffset + _elementDescriptorSize > data.Length)
                 break;
 
             uint elementOffset = MemoryMarshal.Read<uint>(data[elemDescOffset..]);
@@ -150,19 +153,19 @@ internal static class WevtManifest
     /// CRIM header: 16 bytes.
     /// Offset 0: "CRIM" magic (4), size (4), major_version (2), minor_version (2), provider_count (4).
     /// </summary>
-    private const int CrimHeaderSize = 16;
+    private const int _crimHeaderSize = 16;
 
     /// <summary>
     /// Element descriptor within WEVT: 8 bytes.
     /// element_offset (4) + unknown (4).
     /// </summary>
-    private const int ElementDescriptorSize = 8;
+    private const int _elementDescriptorSize = 8;
 
     /// <summary>
     /// Provider descriptor: 20 bytes.
     /// GUID (16) + data offset from CRIM start (4).
     /// </summary>
-    private const int ProviderDescriptorSize = 20;
+    private const int _providerDescriptorSize = 20;
 
     /// <summary>
     /// TEMP header: 40 bytes.
@@ -170,19 +173,19 @@ internal static class WevtManifest
     /// template_items_offset (4), event_type (4), GUID (16).
     /// BinXML starts at offset 40.
     /// </summary>
-    private const int TempHeaderSize = 40;
+    private const int _tempHeaderSize = 40;
 
     /// <summary>
     /// TTBL header: 12 bytes.
     /// "TTBL" magic (4), size (4), count (4).
     /// </summary>
-    private const int TtblHeaderSize = 12;
+    private const int _ttblHeaderSize = 12;
 
     /// <summary>
     /// WEVT provider header: 20 bytes.
     /// "WEVT" magic (4), size (4), message_id (4), descriptor_count (4), unknown2_count (4).
     /// </summary>
-    private const int WevtHeaderSize = 20;
+    private const int _wevtHeaderSize = 20;
 
     #endregion
 }

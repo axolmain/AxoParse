@@ -1,6 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
+using AxoParse.Evtx.BinXml;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.Wevt;
 
 /// <summary>
 /// Compiles WEVT BinXML fragments into <see cref="CompiledTemplate"/> objects.
@@ -142,7 +146,7 @@ internal static class WevtTemplateCompiler
     private static void CompileElementWevt(ReadOnlySpan<byte> data, ref int pos,
                                            List<string> parts, List<int> subIds, List<bool> isOptional, ref bool bail, int depth = 0)
     {
-        if (depth >= MaxRecursionDepth)
+        if (depth >= _maxRecursionDepth)
         {
             bail = true;
             return;
@@ -264,7 +268,7 @@ internal static class WevtTemplateCompiler
     /// <summary>
     /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.
     /// </summary>
-    private const int MaxRecursionDepth = 64;
+    private const int _maxRecursionDepth = 64;
 
     #endregion
 }

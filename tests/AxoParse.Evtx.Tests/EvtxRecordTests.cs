@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -9,16 +10,16 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesAllRecordsInFirstChunk()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        int chunkStart = FileHeaderSize;
-        EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(data.AsSpan(chunkStart, ChunkSize));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
+        int chunkStart = _fileHeaderSize;
+        EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(data.AsSpan(chunkStart, _chunkSize));
 
         Stopwatch sw = new Stopwatch();
-        int offset = ChunkHeaderSize;
+        int offset = _chunkHeaderSize;
         List<EvtxRecord> records = new List<EvtxRecord>();
 
-        ReadOnlySpan<byte> span = data.AsSpan(chunkStart, ChunkSize);
-        while (offset < ChunkSize - 28)
+        ReadOnlySpan<byte> span = data.AsSpan(chunkStart, _chunkSize);
+        while (offset < _chunkSize - 28)
         {
             if (!span.Slice(offset, 4).SequenceEqual("\x2a\x2a\x00\x00"u8))
                 break;
@@ -45,12 +46,12 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesFirstRecordOfSecurityEvtx()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        int chunkStart = FileHeaderSize;
-        EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(data.AsSpan(chunkStart, ChunkSize));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
+        int chunkStart = _fileHeaderSize;
+        EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(data.AsSpan(chunkStart, _chunkSize));
 
-        ReadOnlySpan<byte> recordData = data.AsSpan(chunkStart + ChunkHeaderSize);
-        int fileOffset = chunkStart + ChunkHeaderSize;
+        ReadOnlySpan<byte> recordData = data.AsSpan(chunkStart + _chunkHeaderSize);
+        int fileOffset = chunkStart + _chunkHeaderSize;
 
         Stopwatch sw = Stopwatch.StartNew();
         EvtxRecord? record = EvtxRecord.ParseEvtxRecord(recordData, fileOffset);
@@ -79,14 +80,14 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void SizeAndSizeCopyMatch()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        int chunkStart = FileHeaderSize;
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
+        int chunkStart = _fileHeaderSize;
 
-        int offset = ChunkHeaderSize;
+        int offset = _chunkHeaderSize;
         int count = 0;
-        ReadOnlySpan<byte> chunkSpan = data.AsSpan(chunkStart, ChunkSize);
+        ReadOnlySpan<byte> chunkSpan = data.AsSpan(chunkStart, _chunkSize);
 
-        while (offset < ChunkSize - 28)
+        while (offset < _chunkSize - 28)
         {
             ReadOnlySpan<byte> recordSlice = chunkSpan[offset..];
             if (!recordSlice[..4].SequenceEqual("\x2a\x2a\x00\x00"u8))
@@ -109,11 +110,11 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void WrittenTimeUtcReturnsValidDateTime()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        int chunkStart = FileHeaderSize;
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
+        int chunkStart = _fileHeaderSize;
 
-        ReadOnlySpan<byte> recordData = data.AsSpan(chunkStart + ChunkHeaderSize);
-        EvtxRecord? record = EvtxRecord.ParseEvtxRecord(recordData, chunkStart + ChunkHeaderSize);
+        ReadOnlySpan<byte> recordData = data.AsSpan(chunkStart + _chunkHeaderSize);
+        EvtxRecord? record = EvtxRecord.ParseEvtxRecord(recordData, chunkStart + _chunkHeaderSize);
 
         Assert.NotNull(record);
         DateTime writtenTime = record.Value.WrittenTimeUtc;
@@ -129,10 +130,10 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
 
     #region Non-Public Fields
 
-    private const int ChunkHeaderSize = 512;
-    private const int ChunkSize = 65536;
-    private const int FileHeaderSize = 4096;
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    private const int _chunkHeaderSize = 512;
+    private const int _chunkSize = 65536;
+    private const int _fileHeaderSize = 4096;
+    private static readonly string _testDataDir = TestPaths.TestDataDir;
 
     #endregion
 }

@@ -1,7 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using PeNet;
 using PeNet.Header.Pe;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.Wevt;
 
 /// <summary>
 /// Extracts WEVT_TEMPLATE resource data from PE binaries (DLLs/EXEs).
@@ -38,7 +41,7 @@ internal static class PeResourceReader
 
         // Root directory entries — find the one named "WEVT_TEMPLATE"
         List<ImageResourceDirectoryEntry?>? rootEntries = resourceDir.DirectoryEntries;
-        ImageResourceDirectoryEntry? wevtEntry = FindNamedEntry(rootEntries, WevtTemplateResourceName);
+        ImageResourceDirectoryEntry? wevtEntry = FindNamedEntry(rootEntries, _wevtTemplateResourceName);
         if (wevtEntry is null)
             return null;
 
@@ -128,7 +131,7 @@ internal static class PeResourceReader
     /// <summary>
     /// The PE resource type name used by Windows event providers to store template manifests.
     /// </summary>
-    private const string WevtTemplateResourceName = "WEVT_TEMPLATE";
+    private const string _wevtTemplateResourceName = "WEVT_TEMPLATE";
 
     #endregion
 }

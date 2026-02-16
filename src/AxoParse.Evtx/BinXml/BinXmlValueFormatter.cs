@@ -1,7 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.BinXml;
 
 /// <summary>
 /// Shared static helpers for BinXml value formatting: hex conversion, XML escaping,

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -12,7 +13,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void CancellationTokenCancelsParsing()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         CancellationTokenSource cts = new CancellationTokenSource();
         cts.Cancel();
 
@@ -26,7 +27,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void DiagnosticsEmptyOnCleanParse()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
         Assert.Empty(parser.Diagnostics);
@@ -38,7 +39,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void GetEventsJsonPopulatesJsonField()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data, format: OutputFormat.Json);
 
         bool found = false;
@@ -59,7 +60,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void GetEventsPreservesChunkOrder()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
 
         ulong previousId = 0;
@@ -77,7 +78,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void GetEventsReturnsAllRecords()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
         int eventCount = 0;
@@ -94,7 +95,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void HandlesBadChunkMagicGracefully()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "sample_with_a_bad_chunk_magic.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "sample_with_a_bad_chunk_magic.evtx"));
 
         EvtxParser parser = EvtxParser.Parse(data);
 
@@ -106,7 +107,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesAllTestFiles()
     {
-        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        string[] evtxFiles = Directory.GetFiles(_testDataDir, "*.evtx");
         Stopwatch sw = new Stopwatch();
 
         testOutputHelper.WriteLine($"Full parse of {evtxFiles.Length} files:");
@@ -128,7 +129,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesSecurityEvtxFull()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
 
         Stopwatch sw = Stopwatch.StartNew();
         EvtxParser parser = EvtxParser.Parse(data);
@@ -145,7 +146,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void TotalRecordsMatchesChunkSum()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
         int sum = 0;
@@ -159,7 +160,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
 
     #region Non-Public Fields
 
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    private static readonly string _testDataDir = TestPaths.TestDataDir;
 
     #endregion
 }

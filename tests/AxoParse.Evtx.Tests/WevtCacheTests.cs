@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using AxoParse.Evtx.BinXml;
+using AxoParse.Evtx.Wevt;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -10,11 +12,11 @@ public class WevtCacheTests
     /// Verifies that AddFromDirectory scans a directory and loads templates from PE files.
     /// </summary>
     [Fact]
-    public void AddFromDirectory_DllsDir_LoadsTemplates()
+    public void AddFromDirectoryDllsDirLoadsTemplates()
     {
         WevtCache cache = new();
 
-        int added = cache.AddFromDirectory(DllsDir);
+        int added = cache.AddFromDirectory(_dllsDir);
 
         Assert.True(added > 0, "Expected templates from DLLs directory");
     }
@@ -25,9 +27,9 @@ public class WevtCacheTests
     /// most adtschema.dll templates are simple element trees that should compile.
     /// </summary>
     [Fact]
-    public void AddFromFile_AdtSchema_CompilesTemplates()
+    public void AddFromFileAdtSchemaCompilesTemplates()
     {
-        string dllPath = Path.Combine(DllsDir, "adtschema.dll");
+        string dllPath = Path.Combine(_dllsDir, "adtschema.dll");
         WevtCache cache = new();
 
         cache.AddFromFile(dllPath);
@@ -41,9 +43,9 @@ public class WevtCacheTests
     /// adtschema.dll has 464 TEMP entries but only 312 unique GUIDs (152 duplicates).
     /// </summary>
     [Fact]
-    public void AddFromFile_AdtSchema_Extracts312UniqueTemplates()
+    public void AddFromFileAdtSchemaExtracts312UniqueTemplates()
     {
-        string dllPath = Path.Combine(DllsDir, "adtschema.dll");
+        string dllPath = Path.Combine(_dllsDir, "adtschema.dll");
         WevtCache cache = new();
 
         int added = cache.AddFromFile(dllPath);
@@ -57,9 +59,9 @@ public class WevtCacheTests
     /// Loading the same DLL twice should add 0 new templates the second time.
     /// </summary>
     [Fact]
-    public void AddFromFile_DuplicateGuids_FirstInWins()
+    public void AddFromFileDuplicateGuidsFirstInWins()
     {
-        string dllPath = Path.Combine(DllsDir, "adtschema.dll");
+        string dllPath = Path.Combine(_dllsDir, "adtschema.dll");
         WevtCache cache = new();
 
         int first = cache.AddFromFile(dllPath);
@@ -74,7 +76,7 @@ public class WevtCacheTests
     /// Verifies that AddFromPeData returns 0 for non-PE data without throwing.
     /// </summary>
     [Fact]
-    public void AddFromPeData_InvalidData_ReturnsZero()
+    public void AddFromPeDataInvalidDataReturnsZero()
     {
         WevtCache cache = new();
 
@@ -89,9 +91,9 @@ public class WevtCacheTests
     /// First TEMP: guid=b7a692cd-c953-5a0f-445e-82bb75770d40 (verified against Rust tool output).
     /// </summary>
     [Fact]
-    public void ParseCrimManifest_AdtSchema_ContainsKnownTemplateGuids()
+    public void ParseCrimManifestAdtSchemaContainsKnownTemplateGuids()
     {
-        string dllPath = Path.Combine(DllsDir, "adtschema.dll");
+        string dllPath = Path.Combine(_dllsDir, "adtschema.dll");
         byte[] peData = File.ReadAllBytes(dllPath);
         byte[]? wevtData = PeResourceReader.ExtractWevtTemplate(peData);
         Assert.NotNull(wevtData);
@@ -108,9 +110,9 @@ public class WevtCacheTests
     /// adtschema.dll contains 1 provider with 464 template definitions (some share GUIDs).
     /// </summary>
     [Fact]
-    public void ParseCrimManifest_AdtSchema_Extracts464TempEntries()
+    public void ParseCrimManifestAdtSchemaExtracts464TempEntries()
     {
-        string dllPath = Path.Combine(DllsDir, "adtschema.dll");
+        string dllPath = Path.Combine(_dllsDir, "adtschema.dll");
         byte[] peData = File.ReadAllBytes(dllPath);
         byte[]? wevtData = PeResourceReader.ExtractWevtTemplate(peData);
 
@@ -130,9 +132,9 @@ public class WevtCacheTests
     /// Verifies that PopulateCache correctly injects WEVT templates into a parser's compiled cache.
     /// </summary>
     [Fact]
-    public void PopulateCache_InjectsTemplatesIntoConcurrentDictionary()
+    public void PopulateCacheInjectsTemplatesIntoConcurrentDictionary()
     {
-        string dllPath = Path.Combine(DllsDir, "adtschema.dll");
+        string dllPath = Path.Combine(_dllsDir, "adtschema.dll");
         WevtCache cache = new();
         cache.AddFromFile(dllPath);
 
@@ -146,8 +148,8 @@ public class WevtCacheTests
 
     #region Non-Public Fields
 
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
-    private static readonly string DllsDir = Path.Combine(TestDataDir, "dlls");
+    private static readonly string _testDataDir = TestPaths.TestDataDir;
+    private static readonly string _dllsDir = Path.Combine(_testDataDir, "dlls");
 
     #endregion
 }

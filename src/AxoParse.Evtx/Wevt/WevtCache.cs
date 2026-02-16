@@ -1,6 +1,10 @@
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using AxoParse.Evtx.BinXml;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.Wevt;
 
 /// <summary>
 /// Offline template cache built from WEVT_TEMPLATE resources in Windows provider PE binaries.

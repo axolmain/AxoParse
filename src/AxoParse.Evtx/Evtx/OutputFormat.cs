@@ -1,4 +1,8 @@
-namespace AxoParse.Evtx;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace AxoParse.Evtx.Evtx;
 
 /// <summary>
 /// Specifies the output format for parsed EVTX event records.

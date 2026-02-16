@@ -26,7 +26,7 @@ public static class EvtxFieldExtractor
         string levelStr = ExtractTagText(xml, "Level");
         int level = 0;
         if (!string.IsNullOrEmpty(levelStr)) int.TryParse(levelStr, out level);
-        string levelText = (level >= 0) && (level < LevelNames.Length) ? LevelNames[level] : $"Level {level}";
+        string levelText = (level >= 0) && (level < _levelNames.Length) ? _levelNames[level] : $"Level {level}";
 
         return new EventRecordView(
             RecordId: recordId,
@@ -268,7 +268,7 @@ public static class EvtxFieldExtractor
 
     #region Non-Public Fields
 
-    private static readonly string[] LevelNames = ["", "Critical", "Error", "Warning", "Information", "Verbose"];
+    private static readonly string[] _levelNames = ["", "Critical", "Error", "Warning", "Information", "Verbose"];
 
     #endregion
 }

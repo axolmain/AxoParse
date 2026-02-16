@@ -1,8 +1,12 @@
+using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using AxoParse.Evtx.Evtx;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.BinXml;
 
 /// <summary>
 /// Core BinXml parser. One instance per chunk. Produces XML strings from BinXml token streams.
@@ -327,7 +331,7 @@ internal sealed partial class BinXmlParser
                               int[]? valueOffsets, int[]? valueSizes, byte[]? valueTypes,
                               int binxmlChunkBase, ref ValueStringBuilder vsb, int depth = 0)
     {
-        if (depth >= MaxRecursionDepth) return;
+        if (depth >= _maxRecursionDepth) return;
 
         byte tok = data[pos];
         bool hasAttrs = (tok & BinXmlToken.HasMoreDataFlag) != 0;
@@ -878,7 +882,7 @@ internal sealed partial class BinXmlParser
     /// <summary>
     /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.
     /// </summary>
-    private const int MaxRecursionDepth = 64;
+    private const int _maxRecursionDepth = 64;
 
     /// <summary>
     /// Absolute byte offset of this chunk within <see cref="_fileData"/>.

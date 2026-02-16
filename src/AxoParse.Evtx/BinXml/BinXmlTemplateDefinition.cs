@@ -1,6 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.BinXml;
 
 /// <summary>
 /// Raw template definition header for zero-copy reads via MemoryMarshal.

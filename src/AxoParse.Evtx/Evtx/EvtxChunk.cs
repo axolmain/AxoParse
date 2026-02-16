@@ -1,6 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
+using AxoParse.Evtx.BinXml;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.Evtx;
 
 /// <summary>
 /// Chunk status flags stored at chunk header offset 120.
@@ -284,7 +288,7 @@ public class EvtxChunk
         uint scanEnd = Math.Min(dataEnd, (uint)chunkData.Length);
         List<EvtxRecord> records = new List<EvtxRecord>(capacityHint);
 
-        int offset = ChunkHeaderSize;
+        int offset = _chunkHeaderSize;
         while (offset + 28 <= scanEnd)
         {
             ReadOnlySpan<byte> magic = chunkData.Slice(offset, 4);
@@ -362,7 +366,7 @@ public class EvtxChunk
     /// <summary>
     /// Size of the chunk header in bytes. Event record data begins immediately after.
     /// </summary>
-    private const int ChunkHeaderSize = 512;
+    private const int _chunkHeaderSize = 512;
 
     #endregion
 }

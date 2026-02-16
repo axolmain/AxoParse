@@ -3,6 +3,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using AxoParse.Evtx;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Browser;
 
@@ -366,7 +367,7 @@ public partial class EvtxInterop
         int level = 0;
         if (!string.IsNullOrEmpty(levelStr)) int.TryParse(levelStr, out level);
         writer.WriteNumber("level", level);
-        writer.WriteString("levelText", (level >= 0) && (level < LevelNames.Length) ? LevelNames[level] : $"Level {level}");
+        writer.WriteString("levelText", (level >= 0) && (level < _levelNames.Length) ? _levelNames[level] : $"Level {level}");
 
         writer.WriteString("computer", ExtractTagText(xml, "Computer"));
         writer.WriteString("channel", ExtractTagText(xml, "Channel"));
@@ -386,7 +387,7 @@ public partial class EvtxInterop
 
     #region Non-Public Fields
 
-    private static readonly string[] LevelNames = ["", "Critical", "Error", "Warning", "Information", "Verbose"];
+    private static readonly string[] _levelNames = ["", "Critical", "Error", "Warning", "Information", "Verbose"];
 
     /// <summary>
     /// Flattened record list from the most recent <see cref="ParseEvtxFile"/> call.

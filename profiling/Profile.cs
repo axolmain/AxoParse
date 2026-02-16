@@ -1,16 +1,17 @@
 using System.Diagnostics;
 using AxoParse.Evtx;
+using AxoParse.Evtx.Evtx;
 
 string file = args.Length > 0 ? args[0] : "tests/data/security_big_sample.evtx";
 
 byte[] data = File.ReadAllBytes(file);
 
-const int WarmupRuns = 3;
-const int MeasuredRuns = 5;
+const int warmupRuns = 3;
+const int measuredRuns = 5;
 
 long[] RunTest(int threads, OutputFormat format)
 {
-    for (int i = 0; i < WarmupRuns; i++)
+    for (int i = 0; i < warmupRuns; i++)
     {
         EvtxParser.Parse(data, threads, format);
     }
@@ -19,8 +20,8 @@ long[] RunTest(int threads, OutputFormat format)
     GC.WaitForPendingFinalizers();
     GC.Collect();
 
-    long[] times = new long[MeasuredRuns];
-    for (int i = 0; i < MeasuredRuns; i++)
+    long[] times = new long[measuredRuns];
+    for (int i = 0; i < measuredRuns; i++)
     {
         Stopwatch sw = Stopwatch.StartNew();
         EvtxParser.Parse(data, threads, format);
@@ -62,7 +63,7 @@ Console.WriteLine(header);
 Console.WriteLine(new string('-', header.Length));
 
 // Rows
-for (int r = 0; r < MeasuredRuns; r++)
+for (int r = 0; r < measuredRuns; r++)
 {
     string row = $"  {r + 1}".PadRight(6);
     for (int f = 0; f < formats.Length; f++)
@@ -83,9 +84,9 @@ for (int f = 0; f < formats.Length; f++)
     for (int t = 0; t < threadCounts.Length; t++)
     {
         long avg = 0;
-        for (int r = 0; r < MeasuredRuns; r++)
+        for (int r = 0; r < measuredRuns; r++)
             avg += results[f][t][r];
-        avg /= MeasuredRuns;
+        avg /= measuredRuns;
         avgRow += $"{avg} ms".PadLeft(12);
     }
 }

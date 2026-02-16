@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -12,13 +13,13 @@ public class EvtxChunkHeaderTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesAllChunksInSecurityEvtx()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(data);
 
         for (int i = 0; i < fileHeader.NumberOfChunks; i++)
         {
-            int offset = FileHeaderSize + i * ChunkSize;
-            byte[] chunkData = data[offset..(offset + ChunkSize)];
+            int offset = _fileHeaderSize + i * _chunkSize;
+            byte[] chunkData = data[offset..(offset + _chunkSize)];
 
             EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
 
@@ -31,8 +32,8 @@ public class EvtxChunkHeaderTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesFirstChunkOfSecurityEvtx()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
-        byte[] chunkData = data[FileHeaderSize..(FileHeaderSize + ChunkSize)];
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
+        byte[] chunkData = data[_fileHeaderSize..(_fileHeaderSize + _chunkSize)];
 
         Stopwatch sw = Stopwatch.StartNew();
         EvtxChunkHeader chunk = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
@@ -75,9 +76,9 @@ public class EvtxChunkHeaderTests(ITestOutputHelper testOutputHelper)
 
     #region Non-Public Fields
 
-    private const int ChunkSize = 65536;
-    private const int FileHeaderSize = 4096;
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    private const int _chunkSize = 65536;
+    private const int _fileHeaderSize = 4096;
+    private static readonly string _testDataDir = TestPaths.TestDataDir;
 
     #endregion
 }

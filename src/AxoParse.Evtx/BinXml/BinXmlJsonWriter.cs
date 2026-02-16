@@ -1,9 +1,13 @@
+using System;
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using AxoParse.Evtx.Evtx;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.BinXml;
 
 /// <summary>
 /// Partial class containing JSON writing methods.
@@ -23,7 +27,7 @@ internal sealed partial class BinXmlParser
         int binxmlChunkBase = record.EventDataFileOffset - _chunkFileOffset;
 
         ArrayBufferWriter<byte> buffer = new(512);
-        using Utf8JsonWriter w = new(buffer, JsonOpts);
+        using Utf8JsonWriter w = new(buffer, _jsonOpts);
         int pos = 0;
         ParseDocumentJson(eventData, ref pos, binxmlChunkBase, w);
         w.Flush();
@@ -567,7 +571,7 @@ internal sealed partial class BinXmlParser
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
     private void SkipElement(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, int depth = 0)
     {
-        if (depth >= MaxRecursionDepth) return;
+        if (depth >= _maxRecursionDepth) return;
 
         byte tok = data[pos];
         bool hasAttrs = (tok & BinXmlToken.HasMoreDataFlag) != 0;
@@ -880,7 +884,7 @@ internal sealed partial class BinXmlParser
                                   int[]? valueOffsets, int[]? valueSizes, byte[]? valueTypes,
                                   int binxmlChunkBase, Utf8JsonWriter w, int depth = 0)
     {
-        if (depth >= MaxRecursionDepth)
+        if (depth >= _maxRecursionDepth)
         {
             w.WriteNullValue();
             return;
@@ -1361,7 +1365,7 @@ internal sealed partial class BinXmlParser
     /// <summary>
     /// Shared JSON writer options with validation skipped for performance.
     /// </summary>
-    private static readonly JsonWriterOptions JsonOpts = new() { SkipValidation = true };
+    private static readonly JsonWriterOptions _jsonOpts = new() { SkipValidation = true };
 
     #endregion
 

@@ -2,23 +2,24 @@
 @using System.Diagnostics
 @using System.Text
 @using AxoParse.Evtx
+@using AxoParse.Evtx.Evtx
 @using AxoParse.Web.Models
 
 <PageTitle>AxoParse — EVTX Viewer</PageTitle>
 
-@if (!string.IsNullOrEmpty(errorMessage))
+@if (!string.IsNullOrEmpty(_errorMessage))
 {
     <div
         class="mx-4 mt-4 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-red-800 flex items-center justify-between"
         role="alert">
-        <span>@errorMessage</span>
-        <button class="ml-4 text-red-400 hover:text-red-600 cursor-pointer" @onclick="() => errorMessage = null">
+        <span>@_errorMessage</span>
+        <button class="ml-4 text-red-400 hover:text-red-600 cursor-pointer" @onclick="() => _errorMessage = null">
             &times;
         </button>
     </div>
 }
 
-@if (parseResult is null && !isParsing)
+@if (_parseResult is null && !_isParsing)
 {
     <div class="flex-1 flex flex-col items-center justify-center">
         <h2 class="mb-6 text-2xl font-semibold text-gray-800">Upload an EVTX file</h2>
@@ -30,39 +31,39 @@
         <small class="mt-3 text-gray-400 text-sm">Max 500 MB</small>
     </div>
 }
-else if (isParsing)
+else if (_isParsing)
 {
     <div class="flex-1 flex flex-col items-center justify-center">
         <div class="animate-spin h-10 w-10 border-4 border-indigo-500 border-t-transparent rounded-full mb-4"></div>
-        <p class="text-gray-500">Parsing @fileName…</p>
+        <p class="text-gray-500">Parsing @_fileName…</p>
     </div>
 }
-else if (parseResult is not null)
+else if (_parseResult is not null)
 {
     <div
         class="px-4 py-3 bg-white border-b border-gray-200 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm shrink-0">
-        <div><span class="font-semibold text-gray-600">File:</span> @parseResult.Value.FileName</div>
-        <div><span class="font-semibold text-gray-600">Records:</span> @parseResult.Value.TotalRecords.ToString("N0")
+        <div><span class="font-semibold text-gray-600">File:</span> @_parseResult.Value.FileName</div>
+        <div><span class="font-semibold text-gray-600">Records:</span> @_parseResult.Value.TotalRecords.ToString("N0")
         </div>
-        <div><span class="font-semibold text-gray-600">Chunks:</span> @parseResult.Value.ChunkCount</div>
-        <div><span class="font-semibold text-gray-600">Parse time:</span> @parseResult.Value.ParseTimeMs ms</div>
+        <div><span class="font-semibold text-gray-600">Chunks:</span> @_parseResult.Value.ChunkCount</div>
+        <div><span class="font-semibold text-gray-600">Parse time:</span> @_parseResult.Value.ParseTimeMs ms</div>
 
         <div class="ml-auto flex items-center gap-2">
             <div class="relative" @onclick:stopPropagation="true">
                 <button
                     class="px-3 py-1.5 text-sm rounded border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
-                    @onclick="() => showColumnDropdown = !showColumnDropdown">
+                    @onclick="() => _showColumnDropdown = !_showColumnDropdown">
                     Columns
                 </button>
-                @if (showColumnDropdown)
+                @if (_showColumnDropdown)
                 {
                     <div
                         class="absolute right-0 top-full mt-1 z-10 min-w-[180px] rounded-lg bg-white border border-gray-200 shadow-lg p-2">
-                        @foreach (ColumnDef col in AllColumns)
+                        @foreach (ColumnDef col in _allColumns)
                         {
                             <label
                                 class="flex items-center gap-2 px-3 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm">
-                                <input type="checkbox" checked="@visibleColumns[col.Key]"
+                                <input type="checkbox" checked="@_visibleColumns[col.Key]"
                                        class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
                                        @onchange="() => ToggleColumn(col.Key)"/>
                                 @col.Label
@@ -82,72 +83,72 @@ else if (parseResult is not null)
     <div class="vgrid-wrapper">
         <div class="vgrid-scroll" style="--grid-cols: @GridTemplateColumns">
             <div class="vgrid-header">
-                @if (visibleColumns["RecordId"])
+                @if (_visibleColumns["RecordId"])
                 {
                     <div class="vgrid-cell">Record ID</div>
                 }
-                @if (visibleColumns["Timestamp"])
+                @if (_visibleColumns["Timestamp"])
                 {
                     <div class="vgrid-cell">Timestamp</div>
                 }
-                @if (visibleColumns["EventId"])
+                @if (_visibleColumns["EventId"])
                 {
                     <div class="vgrid-cell">Event ID</div>
                 }
-                @if (visibleColumns["Level"])
+                @if (_visibleColumns["Level"])
                 {
                     <div class="vgrid-cell">Level</div>
                 }
-                @if (visibleColumns["Provider"])
+                @if (_visibleColumns["Provider"])
                 {
                     <div class="vgrid-cell">Provider</div>
                 }
-                @if (visibleColumns["Computer"])
+                @if (_visibleColumns["Computer"])
                 {
                     <div class="vgrid-cell">Computer</div>
                 }
-                @if (visibleColumns["Channel"])
+                @if (_visibleColumns["Channel"])
                 {
                     <div class="vgrid-cell">Channel</div>
                 }
-                @if (visibleColumns["EventData"])
+                @if (_visibleColumns["EventData"])
                 {
                     <div class="vgrid-cell">Event Data</div>
                 }
             </div>
 
             <div class="vgrid-body">
-                <Virtualize Items="parseResult.Value.Records" Context="record" ItemSize="29" OverscanCount="20">
+                <Virtualize Items="_parseResult.Value.Records" Context="record" ItemSize="29" OverscanCount="20">
                     <div class="vgrid-row @(record.RecordId % 2 == 0 ? "vgrid-row-even" : "vgrid-row-odd")">
-                        @if (visibleColumns["RecordId"])
+                        @if (_visibleColumns["RecordId"])
                         {
                             <div class="vgrid-cell">@record.RecordId</div>
                         }
-                        @if (visibleColumns["Timestamp"])
+                        @if (_visibleColumns["Timestamp"])
                         {
                             <div class="vgrid-cell">@record.Timestamp</div>
                         }
-                        @if (visibleColumns["EventId"])
+                        @if (_visibleColumns["EventId"])
                         {
                             <div class="vgrid-cell">@record.EventId</div>
                         }
-                        @if (visibleColumns["Level"])
+                        @if (_visibleColumns["Level"])
                         {
                             <div class="vgrid-cell">@record.LevelText</div>
                         }
-                        @if (visibleColumns["Provider"])
+                        @if (_visibleColumns["Provider"])
                         {
                             <div class="vgrid-cell">@record.Provider</div>
                         }
-                        @if (visibleColumns["Computer"])
+                        @if (_visibleColumns["Computer"])
                         {
                             <div class="vgrid-cell">@record.Computer</div>
                         }
-                        @if (visibleColumns["Channel"])
+                        @if (_visibleColumns["Channel"])
                         {
                             <div class="vgrid-cell">@record.Channel</div>
                         }
-                        @if (visibleColumns["EventData"])
+                        @if (_visibleColumns["EventData"])
                         {
                             <div class="vgrid-cell" title="@record.EventData">@record.EventData</div>
                         }
@@ -159,18 +160,18 @@ else if (parseResult is not null)
 }
 
 @code {
-    private const long MaxFileSize = 500L * 1024 * 1024;
-    private bool isParsing;
-    private bool showColumnDropdown;
-    private string? fileName;
-    private string? errorMessage;
-    private ParseResult? parseResult;
+    private const long _maxFileSize = 500L * 1024 * 1024;
+    private bool _isParsing;
+    private bool _showColumnDropdown;
+    private string? _fileName;
+    private string? _errorMessage;
+    private ParseResult? _parseResult;
 
     /// <summary>
     /// CSS grid column widths keyed by <see cref="ColumnDef.Key"/>.
     /// Fixed-width columns use px; variable-width columns use minmax with fr units.
     /// </summary>
-    private static readonly Dictionary<string, string> ColumnWidths = new(8)
+    private static readonly Dictionary<string, string> _columnWidths = new(8)
     {
         ["RecordId"] = "90px",
         ["Timestamp"] = "200px",
@@ -190,11 +191,11 @@ else if (parseResult is not null)
         get
         {
             StringBuilder sb = new(128);
-            for (int i = 0; i < AllColumns.Length; i++)
+            for (int i = 0; i < _allColumns.Length; i++)
             {
-                if (!visibleColumns[AllColumns[i].Key]) continue;
+                if (!_visibleColumns[_allColumns[i].Key]) continue;
                 if (sb.Length > 0) sb.Append(' ');
-                sb.Append(ColumnWidths[AllColumns[i].Key]);
+                sb.Append(_columnWidths[_allColumns[i].Key]);
             }
             return sb.ToString();
         }
@@ -211,7 +212,7 @@ else if (parseResult is not null)
     /// <summary>
     /// All available table columns and their default visibility.
     /// </summary>
-    private static readonly ColumnDef[] AllColumns =
+    private static readonly ColumnDef[] _allColumns =
     [
         new("RecordId", "Record ID", true),
         new("Timestamp", "Timestamp", true),
@@ -226,14 +227,14 @@ else if (parseResult is not null)
     /// <summary>
     /// Tracks which columns are currently visible, keyed by <see cref="ColumnDef.Key"/>.
     /// </summary>
-    private Dictionary<string, bool> visibleColumns = null!;
+    private Dictionary<string, bool> _visibleColumns = null!;
 
     protected override void OnInitialized()
     {
-        visibleColumns = new Dictionary<string, bool>(AllColumns.Length);
-        for (int i = 0; i < AllColumns.Length; i++)
+        _visibleColumns = new Dictionary<string, bool>(_allColumns.Length);
+        for (int i = 0; i < _allColumns.Length; i++)
         {
-            visibleColumns[AllColumns[i].Key] = AllColumns[i].DefaultVisible;
+            _visibleColumns[_allColumns[i].Key] = _allColumns[i].DefaultVisible;
         }
     }
 
@@ -243,20 +244,20 @@ else if (parseResult is not null)
     /// <param name="key">The column key to toggle.</param>
     private void ToggleColumn(string key)
     {
-        visibleColumns[key] = !visibleColumns[key];
+        _visibleColumns[key] = !_visibleColumns[key];
         StateHasChanged();
     }
 
     private async Task OnFileSelected(InputFileChangeEventArgs e)
     {
         IBrowserFile file = e.File;
-        fileName = file.Name;
-        errorMessage = null;
-        parseResult = null;
+        _fileName = file.Name;
+        _errorMessage = null;
+        _parseResult = null;
 
-        if (file.Size > MaxFileSize)
+        if (file.Size > _maxFileSize)
         {
-            errorMessage = $"File too large ({file.Size / (1024 * 1024)} MB). Maximum is 500 MB.";
+            _errorMessage = $"File too large ({file.Size / (1024 * 1024)} MB). Maximum is 500 MB.";
             return;
         }
 
@@ -267,11 +268,11 @@ else if (parseResult is not null)
             byte[] data;
             using (MemoryStream ms = new())
             {
-                await file.OpenReadStream(MaxFileSize).CopyToAsync(ms);
+                await file.OpenReadStream(_maxFileSize).CopyToAsync(ms);
                 data = ms.ToArray();
             }
 
-            isParsing = true;
+            _isParsing = true;
             StateHasChanged();
 
             // Yield so the spinner renders before the synchronous parse blocks the UI thread
@@ -293,7 +294,7 @@ else if (parseResult is not null)
                 }
             }
 
-            parseResult = new ParseResult(
+            _parseResult = new ParseResult(
                 FileName: file.Name,
                 TotalRecords: parsed.TotalRecords,
                 ChunkCount: parsed.Chunks.Count,
@@ -302,19 +303,19 @@ else if (parseResult is not null)
         }
         catch (Exception ex)
         {
-            errorMessage = $"Failed to parse: {ex.Message}";
+            _errorMessage = $"Failed to parse: {ex.Message}";
         }
         finally
         {
-            isParsing = false;
+            _isParsing = false;
         }
     }
 
     private void Reset()
     {
-        parseResult = null;
-        errorMessage = null;
-        fileName = null;
+        _parseResult = null;
+        _errorMessage = null;
+        _fileName = null;
     }
 
 }

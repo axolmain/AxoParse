@@ -17,7 +17,7 @@ internal static class Crc32
     {
         uint crc = 0xFFFFFFFFu;
         for (int i = 0; i < data.Length; i++)
-            crc = Table[(byte)(crc ^ data[i])] ^ (crc >> 8);
+            crc = _table[(byte)(crc ^ data[i])] ^ (crc >> 8);
         return crc ^ 0xFFFFFFFFu;
     }
 
@@ -49,7 +49,7 @@ internal static class Crc32
     /// <summary>
     /// Precomputed 256-entry CRC32 lookup table using the reflected IEEE 802.3 polynomial (0xEDB88320).
     /// </summary>
-    private static readonly uint[] Table = InitTable();
+    private static readonly uint[] _table = InitTable();
 
     #endregion
 }

@@ -1,4 +1,8 @@
-namespace AxoParse.Evtx;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace AxoParse.Evtx.Evtx;
 
 /// <summary>
 /// Identifies the specific validation failure that caused an <see cref="EvtxParseException"/>.

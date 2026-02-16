@@ -1,6 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.BinXml;
 
 /// <summary>
 /// BinXml token types. Const bytes instead of enums to avoid cast overhead.

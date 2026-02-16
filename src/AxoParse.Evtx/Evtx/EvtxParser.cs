@@ -1,6 +1,11 @@
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using AxoParse.Evtx.BinXml;
+using AxoParse.Evtx.Wevt;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.Evtx;
 
 /// <summary>
 /// Top-level orchestrator. Parses the file header, slices chunks, and collects all parsed data.

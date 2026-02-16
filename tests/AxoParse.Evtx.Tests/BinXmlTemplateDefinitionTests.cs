@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using AxoParse.Evtx.BinXml;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -11,7 +13,7 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
     public void FollowsHashChains()
     {
         // Parse all chunks and count templates that were found via chaining (not direct pointer)
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(data);
 
         int totalTemplates = 0;
@@ -19,8 +21,8 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
 
         for (int ci = 0; ci < fileHeader.NumberOfChunks; ci++)
         {
-            int offset = FileHeaderSize + ci * ChunkSize;
-            ReadOnlySpan<byte> chunkData = data.AsSpan(offset, ChunkSize);
+            int offset = _fileHeaderSize + ci * _chunkSize;
+            ReadOnlySpan<byte> chunkData = data.AsSpan(offset, _chunkSize);
             ReadOnlySpan<uint> tplPtrs = MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128));
 
             // Count direct pointers (non-zero entries in table)
@@ -41,7 +43,7 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void HandlesEmptyPointerTable()
     {
-        byte[] chunkData = new byte[ChunkSize];
+        byte[] chunkData = new byte[_chunkSize];
         ReadOnlySpan<uint> emptyPtrs = stackalloc uint[32];
 
         Dictionary<uint, BinXmlTemplateDefinition> cache =
@@ -53,7 +55,7 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void HandlesOutOfBoundsPointer()
     {
-        byte[] chunkData = new byte[ChunkSize];
+        byte[] chunkData = new byte[_chunkSize];
         uint[] badPtrsArr = new uint[32];
         badPtrsArr[0] = 99999; // beyond chunk boundary
         ReadOnlySpan<uint> badPtrs = badPtrsArr;
@@ -70,7 +72,7 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void PreloadsFromAllTestFiles()
     {
-        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        string[] evtxFiles = Directory.GetFiles(_testDataDir, "*.evtx");
         Assert.True(evtxFiles.Length > 0, "No test .evtx files found");
 
         foreach (string file in evtxFiles)
@@ -80,10 +82,10 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
 
             for (int ci = 0; ci < fileHeader.NumberOfChunks; ci++)
             {
-                int offset = FileHeaderSize + ci * ChunkSize;
-                if (offset + ChunkSize > data.Length) break;
+                int offset = _fileHeaderSize + ci * _chunkSize;
+                if (offset + _chunkSize > data.Length) break;
 
-                ReadOnlySpan<byte> chunkData = data.AsSpan(offset, ChunkSize);
+                ReadOnlySpan<byte> chunkData = data.AsSpan(offset, _chunkSize);
                 if (!chunkData[..8].SequenceEqual("ElfChnk\0"u8)) continue;
 
                 ReadOnlySpan<uint> tplPtrs = MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128));
@@ -100,7 +102,7 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
     public void PreloadsTemplatesFromFirstChunk()
     {
         (byte[] fileData, int chunkOffset) = GetChunkInfo("security.evtx");
-        ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkOffset, ChunkSize);
+        ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkOffset, _chunkSize);
         ReadOnlySpan<uint> tplPtrs = MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128));
 
         Stopwatch sw = Stopwatch.StartNew();
@@ -122,7 +124,7 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
     public void TemplateDefinitionsHaveValidData()
     {
         (byte[] fileData, int chunkOffset) = GetChunkInfo("security.evtx");
-        ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkOffset, ChunkSize);
+        ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkOffset, _chunkSize);
         ReadOnlySpan<uint> tplPtrs = MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128));
         Dictionary<uint, BinXmlTemplateDefinition> cache =
             BinXmlTemplateDefinition.PreloadFromChunk(chunkData, tplPtrs, chunkOffset);
@@ -143,8 +145,8 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
 
     private static (byte[] fileData, int chunkFileOffset) GetChunkInfo(string filename, int chunkIndex = 0)
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, filename));
-        int offset = FileHeaderSize + chunkIndex * ChunkSize;
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, filename));
+        int offset = _fileHeaderSize + chunkIndex * _chunkSize;
         return (data, offset);
     }
 
@@ -152,9 +154,9 @@ public class BinXmlTemplateDefinitionTests(ITestOutputHelper testOutputHelper)
 
     #region Non-Public Fields
 
-    private const int ChunkSize = 65536;
-    private const int FileHeaderSize = 4096;
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    private const int _chunkSize = 65536;
+    private const int _fileHeaderSize = 4096;
+    private static readonly string _testDataDir = TestPaths.TestDataDir;
 
     #endregion
 }

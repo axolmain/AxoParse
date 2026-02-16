@@ -1,6 +1,9 @@
+using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
+using System.Linq;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.Evtx;
 
 /// <summary>
 /// The chunk header tracks which event records are contained within, provides fast-lookup caches for common strings

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -10,7 +11,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void AllRecordsNonEmpty()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
         int totalRecords = 0;
@@ -31,7 +32,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void FirstRecordStartsWithEventXmlns()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
         EvtxParser parser = EvtxParser.Parse(data);
 
         Assert.True(parser.Chunks.Count > 0);
@@ -47,7 +48,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void MultithreadedParsingProducesIdenticalOutput()
     {
-        byte[] data = File.ReadAllBytes(Path.Combine(TestDataDir, "security.evtx"));
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
 
         // Parse with 1 thread as baseline
         EvtxParser baseline = EvtxParser.Parse(data, 1);
@@ -73,7 +74,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void ParsesAllTestFilesWithoutExceptions()
     {
-        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        string[] evtxFiles = Directory.GetFiles(_testDataDir, "*.evtx");
         Stopwatch sw = new Stopwatch();
 
         testOutputHelper.WriteLine($"BinXml parse of {evtxFiles.Length} files:");
@@ -105,7 +106,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public void SubstitutionValuesRenderCorrectly()
     {
-        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        string[] evtxFiles = Directory.GetFiles(_testDataDir, "*.evtx");
         int totalRecords = 0;
         int withEventData = 0;
         int withNonZeroEventId = 0;
@@ -143,13 +144,13 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     }
 
     [Fact]
-    public void XmlOutput_SurvivesUtf8Encoding_WithUnpairedSurrogates()
+    public void XmlOutputSurvivesUtf8EncodingWithUnpairedSurrogates()
     {
         // EVTX files may contain corrupt UTF-16 data with unpaired surrogates (e.g. lone \uDE1E).
         // Previously this caused EncoderFallbackException when writing XML to stdout via StreamWriter.
         // The parser's AppendXmlEscaped now replaces unpaired surrogates with U+FFFD so all output
         // is valid Unicode that encodes to UTF-8 without error.
-        string[] evtxFiles = Directory.GetFiles(TestDataDir, "*.evtx");
+        string[] evtxFiles = Directory.GetFiles(_testDataDir, "*.evtx");
 
         foreach (string file in evtxFiles)
         {
@@ -191,7 +192,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
 
     #region Non-Public Fields
 
-    private static readonly string TestDataDir = TestPaths.TestDataDir;
+    private static readonly string _testDataDir = TestPaths.TestDataDir;
 
     #endregion
 }

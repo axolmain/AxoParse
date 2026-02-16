@@ -1,6 +1,9 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 
-namespace AxoParse.Evtx;
+namespace AxoParse.Evtx.BinXml;
 
 /// <summary>
 /// Partial class containing template compilation methods.
@@ -108,7 +111,7 @@ internal sealed partial class BinXmlParser
     private void CompileElement(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
                                 List<string> parts, List<int> subIds, List<bool> isOptional, ref bool bail, int depth = 0)
     {
-        if (depth >= MaxRecursionDepth)
+        if (depth >= _maxRecursionDepth)
         {
             bail = true;
             return;
