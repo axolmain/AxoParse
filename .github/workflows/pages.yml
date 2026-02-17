@@ -1,0 +1,69 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 preview
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: preview
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install .NET workloads
+        run: dotnet workload restore
+
+      - name: Install Tailwind dependencies
+        run: npm ci
+        working-directory: demos/AxoParse.Web
+
+      - name: Publish
+        run: dotnet publish demos/AxoParse.Web --configuration Release
+
+      - name: Set base href for GitHub Pages
+        run: sed -i 's|<base href="/"/>|<base href="/${{ github.event.repository.name }}/"/>|' demos/AxoParse.Web/bin/Release/net10.0/publish/wwwroot/index.html
+
+      - name: Add .nojekyll
+        run: cp .nojekyll demos/AxoParse.Web/bin/Release/net10.0/publish/wwwroot/.nojekyll
+
+      - name: Copy 404.html for SPA routing
+        run: cp demos/AxoParse.Web/bin/Release/net10.0/publish/wwwroot/index.html demos/AxoParse.Web/bin/Release/net10.0/publish/wwwroot/404.html
+
+      - name: Remove Brotli and Gzip compressed files
+        run: |
+          find demos/AxoParse.Web/bin/Release/net10.0/publish/wwwroot/_framework -name '*.br' -delete
+          find demos/AxoParse.Web/bin/Release/net10.0/publish/wwwroot/_framework -name '*.gz' -delete
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: demos/AxoParse.Web/bin/Release/net10.0/publish/wwwroot
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
