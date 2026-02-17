@@ -24,6 +24,9 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install .NET workloads
+        run: dotnet workload restore
+
       - name: Install Tailwind dependencies
         run: npm ci
         working-directory: demos/AxoParse.Web
