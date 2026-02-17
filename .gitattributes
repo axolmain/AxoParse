@@ -2,3 +2,9 @@
 *.dll filter=lfs diff=lfs merge=lfs -text
 *.exe filter=lfs diff=lfs merge=lfs -text
 *.dat filter=lfs diff=lfs merge=lfs -text
+
+# Prevent line-ending conversion for published web assets
+*.js binary
+*.json binary
+*.css binary
+*.html binary
