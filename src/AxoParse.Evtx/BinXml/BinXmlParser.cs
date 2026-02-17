@@ -19,17 +19,20 @@ internal sealed partial class BinXmlParser
     /// <param name="fileData">Complete EVTX file bytes.</param>
     /// <param name="chunkFileOffset">Absolute byte offset of the chunk within <paramref name="fileData"/>.</param>
     /// <param name="templates">Preloaded template definitions for this chunk, keyed by chunk-relative offset.</param>
-    /// <param name="compiledCache">Shared cross-chunk cache of compiled templates keyed by GUID.</param>
+    /// <param name="compiledCache">Shared cross-chunk cache of compiled XML templates keyed by GUID. Null when using JSON output.</param>
+    /// <param name="compiledJsonCache">Shared cross-chunk cache of compiled JSON templates keyed by GUID. Null when using XML output.</param>
     public BinXmlParser(
         byte[] fileData,
         int chunkFileOffset,
         Dictionary<uint, BinXmlTemplateDefinition> templates,
-        Dictionary<Guid, CompiledTemplate?> compiledCache)
+        Dictionary<Guid, CompiledTemplate?>? compiledCache,
+        Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache = null)
     {
         _fileData = fileData;
         _chunkFileOffset = chunkFileOffset;
         _templates = templates;
         _compiledCache = compiledCache;
+        _compiledJsonCache = compiledJsonCache;
         _nameCache = new Dictionary<uint, string>(64);
 
         // Pre-populate name cache from chunk common string offset table (64 uint32 entries at chunk offset 128)
@@ -162,7 +165,7 @@ internal sealed partial class BinXmlParser
                     pos++; // subValType
                     if ((valueOffsets != null) && (subId < valueOffsets.Length))
                     {
-                        WriteValue(valueSizes![subId], valueTypes![subId], valueOffsets[subId], binxmlChunkBase,
+                        WriteBinXmlValue(valueSizes![subId], valueTypes![subId], valueOffsets[subId], binxmlChunkBase,
                             ref vsb);
                     }
 
@@ -180,7 +183,7 @@ internal sealed partial class BinXmlParser
                         int valSize = valueSizes![subId];
                         if ((valType != BinXmlValueType.Null) && (valSize > 0))
                         {
-                            WriteValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
+                            WriteBinXmlValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
                         }
                     }
 
@@ -449,10 +452,14 @@ internal sealed partial class BinXmlParser
         if (tplBodyFileOffset + (int)tid.DataSize > _fileData.Length) return;
 
         // Check compiled cache (GetOrAdd may invoke factory concurrently for same key — harmless)
-        if (!_compiledCache.TryGetValue(tid.TemplateGuid, out CompiledTemplate? compiled))
+        CompiledTemplate? compiled = null;
+        if (_compiledCache != null)
         {
-            compiled = CompileTemplate((int)tid.DefDataOffset, (int)tid.DataSize);
-            _compiledCache[tid.TemplateGuid] = compiled;
+            if (!_compiledCache.TryGetValue(tid.TemplateGuid, out compiled))
+            {
+                compiled = CompileTemplate((int)tid.DefDataOffset, (int)tid.DataSize);
+                _compiledCache[tid.TemplateGuid] = compiled;
+            }
         }
 
         if (compiled != null)
@@ -657,7 +664,7 @@ internal sealed partial class BinXmlParser
             for (int i = 0; i + elemSize <= valueBytes.Length; i += elemSize)
             {
                 if (!first) vsb.Append(", ");
-                WriteValue(elemSize, baseType, fileOffset + i, binxmlChunkBase, ref vsb);
+                WriteBinXmlValue(elemSize, baseType, fileOffset + i, binxmlChunkBase, ref vsb);
                 first = false;
             }
 
@@ -666,37 +673,6 @@ internal sealed partial class BinXmlParser
 
         // Fallback: hex
         BinXmlValueFormatter.AppendHex(ref vsb, valueBytes);
-    }
-
-    /// <summary>
-    /// Writes a compiled template by interleaving its static XML parts with formatted substitution values.
-    /// </summary>
-    /// <param name="compiled">Pre-compiled template containing static parts and substitution metadata.</param>
-    /// <param name="valueOffsets">File offsets of each substitution value.</param>
-    /// <param name="valueSizes">Byte sizes of each substitution value.</param>
-    /// <param name="valueTypes">BinXml value type codes for each substitution.</param>
-    /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
-    /// <param name="vsb">String builder that receives the rendered XML output.</param>
-    private void WriteCompiled(CompiledTemplate compiled,
-                               int[] valueOffsets, int[] valueSizes, byte[] valueTypes,
-                               int binxmlChunkBase, ref ValueStringBuilder vsb)
-    {
-        vsb.Append(compiled.Parts[0]);
-        for (int i = 0; i < compiled.SubIds.Length; i++)
-        {
-            int subId = compiled.SubIds[i];
-            if (subId < valueOffsets.Length)
-            {
-                byte valType = valueTypes[subId];
-                int valSize = valueSizes[subId];
-                if (!compiled.IsOptional[i] || ((valType != BinXmlValueType.Null) && (valSize > 0)))
-                {
-                    WriteValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
-                }
-            }
-
-            vsb.Append(compiled.Parts[i + 1]);
-        }
     }
 
     /// <summary>
@@ -709,7 +685,7 @@ internal sealed partial class BinXmlParser
     /// <param name="fileOffset">Absolute byte offset of the value data within <see cref="_fileData"/>.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml (type 0x21) resolution.</param>
     /// <param name="vsb">String builder that receives the rendered text.</param>
-    private void WriteValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueStringBuilder vsb)
+    private void WriteBinXmlValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueStringBuilder vsb)
     {
         if (size == 0) return;
         ReadOnlySpan<byte> valueBytes = _fileData.AsSpan(fileOffset, size);
@@ -872,6 +848,37 @@ internal sealed partial class BinXmlParser
         }
     }
 
+    /// <summary>
+    /// Writes a compiled template by filling in its static XML parts with formatted substitution values.
+    /// </summary>
+    /// <param name="compiled">Pre-compiled template containing static parts and substitution metadata.</param>
+    /// <param name="valueOffsets">File offsets of each substitution value.</param>
+    /// <param name="valueSizes">Byte sizes of each substitution value.</param>
+    /// <param name="valueTypes">BinXml value type codes for each substitution.</param>
+    /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
+    /// <param name="vsb">String builder that receives the rendered XML output.</param>
+    private void WriteCompiled(CompiledTemplate compiled,
+                               int[] valueOffsets, int[] valueSizes, byte[] valueTypes,
+                               int binxmlChunkBase, ref ValueStringBuilder vsb)
+    {
+        vsb.Append(compiled.Parts[0]);
+        for (int i = 0; i < compiled.SubIds.Length; i++)
+        {
+            int subId = compiled.SubIds[i];
+            if (subId < valueOffsets.Length)
+            {
+                byte valType = valueTypes[subId];
+                int valSize = valueSizes[subId];
+                if (!compiled.IsOptional[i] || ((valType != BinXmlValueType.Null) && (valSize > 0)))
+                {
+                    WriteBinXmlValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
+                }
+            }
+
+            vsb.Append(compiled.Parts[i + 1]);
+        }
+    }
+
     #endregion
 
     #region Non-Public Fields
@@ -887,10 +894,16 @@ internal sealed partial class BinXmlParser
     private readonly int _chunkFileOffset;
 
     /// <summary>
-    /// Process-wide cache of compiled templates keyed by template GUID.
-    /// Shared across chunks to avoid recompiling identical templates.
+    /// Process-wide cache of compiled XML templates keyed by template GUID.
+    /// Shared across chunks to avoid recompiling identical templates. Null when using JSON output.
     /// </summary>
-    private readonly Dictionary<Guid, CompiledTemplate?> _compiledCache;
+    private readonly Dictionary<Guid, CompiledTemplate?>? _compiledCache;
+
+    /// <summary>
+    /// Process-wide cache of compiled JSON templates keyed by template GUID.
+    /// Shared across chunks to avoid recompiling identical templates. Null when using XML output.
+    /// </summary>
+    private readonly Dictionary<Guid, CompiledJsonTemplate?>? _compiledJsonCache;
 
     /// <summary>
     /// Raw EVTX file bytes shared across all chunks and records.

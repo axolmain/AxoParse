@@ -40,6 +40,81 @@ internal static class BinXmlValueFormatter
     }
 
     /// <summary>
+    /// Appends text to the string builder with JSON escaping per RFC 8259.
+    /// Escapes backslash, double-quote, and control characters U+0000..U+001F.
+    /// Uses a fast path for text containing no special characters.
+    /// Replaces unpaired surrogates with U+FFFD.
+    /// </summary>
+    /// <param name="vsb">String builder that receives the escaped text.</param>
+    /// <param name="text">Source character span to escape and append.</param>
+    internal static void AppendJsonEscaped(ref ValueStringBuilder vsb, scoped ReadOnlySpan<char> text)
+    {
+        // Fast path: no JSON-special chars, no control chars, no surrogates → bulk append
+        bool needsEscape = false;
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if ((c == '\\') || (c == '"') || (c < '\u0020') || char.IsSurrogate(c))
+            {
+                needsEscape = true;
+                break;
+            }
+        }
+
+        if (!needsEscape)
+        {
+            vsb.Append(text);
+            return;
+        }
+
+        // Slow path: escape per RFC 8259
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if (char.IsHighSurrogate(c))
+            {
+                if ((i + 1 < text.Length) && char.IsLowSurrogate(text[i + 1]))
+                {
+                    vsb.Append(c);
+                    vsb.Append(text[++i]);
+                }
+                else
+                {
+                    vsb.Append('\uFFFD');
+                }
+            }
+            else if (char.IsLowSurrogate(c))
+            {
+                vsb.Append('\uFFFD');
+            }
+            else
+            {
+                switch (c)
+                {
+                    case '\\': vsb.Append("\\\\"); break;
+                    case '"': vsb.Append("\\\""); break;
+                    case '\n': vsb.Append("\\n"); break;
+                    case '\r': vsb.Append("\\r"); break;
+                    case '\t': vsb.Append("\\t"); break;
+                    case '\b': vsb.Append("\\b"); break;
+                    case '\f': vsb.Append("\\f"); break;
+                    default:
+                        if (c < '\u0020')
+                        {
+                            vsb.Append("\\u00");
+                            vsb.Append(HexLookup[c]);
+                        }
+                        else
+                        {
+                            vsb.Append(c);
+                        }
+                        break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Appends a SID (Security Identifier) in SDDL string form (e.g., S-1-5-18) to the string builder.
     /// SID binary layout: revision(1) + subAuthorityCount(1) + authority(6 big-endian) + subAuthorities(4 each LE).
     /// </summary>
@@ -200,6 +275,36 @@ internal static class BinXmlValueFormatter
             BinXmlValueType.Guid or BinXmlValueType.SystemTime => 16,
             _ => 0
         };
+    }
+
+    /// <summary>
+    /// Returns a JSON-escaped copy of <paramref name="str"/> per RFC 8259.
+    /// Used during JSON template compilation where a heap string is needed
+    /// rather than span-based appending.
+    /// </summary>
+    /// <param name="str">The string to escape.</param>
+    /// <returns>The escaped string, or the original string if no escaping was needed.</returns>
+    internal static string JsonEscapeString(string str)
+    {
+        ReadOnlySpan<char> span = str.AsSpan();
+        bool needsEscape = false;
+        for (int i = 0; i < span.Length; i++)
+        {
+            char c = span[i];
+            if ((c == '\\') || (c == '"') || (c < '\u0020'))
+            {
+                needsEscape = true;
+                break;
+            }
+        }
+        if (!needsEscape)
+            return str;
+
+        ValueStringBuilder vsb = new(stackalloc char[str.Length * 2]);
+        AppendJsonEscaped(ref vsb, span);
+        string result = vsb.ToString();
+        vsb.Dispose();
+        return result;
     }
 
     /// <summary>

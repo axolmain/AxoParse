@@ -114,30 +114,64 @@ public class EvtxParser
         }
 
         // Phase 2 (parallel): parse all valid chunks
-        ConcurrentDictionary<Guid, CompiledTemplate?> compiledCache = new();
-        wevtCache?.PopulateCache(compiledCache);
+        // Create format-specific caches to avoid overhead for the unused format
+        ConcurrentDictionary<Guid, CompiledTemplate?>? compiledCache =
+            format == OutputFormat.Xml ? new ConcurrentDictionary<Guid, CompiledTemplate?>() : null;
+        ConcurrentDictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache =
+            format == OutputFormat.Json ? new ConcurrentDictionary<Guid, CompiledJsonTemplate?>() : null;
+
+        if (compiledCache != null)
+            wevtCache?.PopulateCache(compiledCache);
+
         EvtxChunk[] results = new EvtxChunk[validCount];
 
         int parallelism = maxThreads > 0 ? maxThreads : -1;
-        Parallel.For(0, validCount,
-            new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-            () => new Dictionary<Guid, CompiledTemplate?>(), // thread local
-            (i, state, localCache) =>
-            {
-                results[i] = EvtxChunk.Parse(
-                    fileData,
-                    validOffsets[i],
-                    localCache,
-                    format);
+        if (format == OutputFormat.Json)
+        {
+            Parallel.For(0, validCount,
+                new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                () => new Dictionary<Guid, CompiledJsonTemplate?>(), // thread local
+                (i, state, localJsonCache) =>
+                {
+                    results[i] = EvtxChunk.Parse(
+                        fileData,
+                        validOffsets[i],
+                        compiledCache: null,
+                        compiledJsonCache: localJsonCache,
+                        format);
 
-                return localCache;
-            },
-            localCache =>
-            {
-                // merge into global cache once per thread
-                foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
-                    compiledCache.TryAdd(kv.Key, kv.Value);
-            });
+                    return localJsonCache;
+                },
+                localJsonCache =>
+                {
+                    // merge into global cache once per thread
+                    foreach (KeyValuePair<Guid, CompiledJsonTemplate?> kv in localJsonCache)
+                        compiledJsonCache!.TryAdd(kv.Key, kv.Value);
+                });
+        }
+        else
+        {
+            Parallel.For(0, validCount,
+                new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                () => new Dictionary<Guid, CompiledTemplate?>(), // thread local
+                (i, state, localCache) =>
+                {
+                    results[i] = EvtxChunk.Parse(
+                        fileData,
+                        validOffsets[i],
+                        compiledCache: localCache,
+                        compiledJsonCache: null,
+                        format);
+
+                    return localCache;
+                },
+                localCache =>
+                {
+                    // merge into global cache once per thread
+                    foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
+                        compiledCache!.TryAdd(kv.Key, kv.Value);
+                });
+        }
 
         // Phase 3 (sequential): collect results from valid chunks
         cancellationToken.ThrowIfCancellationRequested();
@@ -165,19 +199,40 @@ public class EvtxParser
         if (invalidCount > 0)
         {
             EvtxChunk?[] recovered = new EvtxChunk?[invalidCount];
-            Parallel.For(0, invalidCount,
-                new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                () => new Dictionary<Guid, CompiledTemplate?>(),
-                (i, state, localCache) =>
-                {
-                    recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i], localCache, format);
-                    return localCache;
-                },
-                localCache =>
-                {
-                    foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
-                        compiledCache.TryAdd(kv.Key, kv.Value);
-                });
+            if (format == OutputFormat.Json)
+            {
+                Parallel.For(0, invalidCount,
+                    new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                    () => new Dictionary<Guid, CompiledJsonTemplate?>(),
+                    (i, state, localJsonCache) =>
+                    {
+                        recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
+                            compiledCache: null, compiledJsonCache: localJsonCache, format);
+                        return localJsonCache;
+                    },
+                    localJsonCache =>
+                    {
+                        foreach (KeyValuePair<Guid, CompiledJsonTemplate?> kv in localJsonCache)
+                            compiledJsonCache!.TryAdd(kv.Key, kv.Value);
+                    });
+            }
+            else
+            {
+                Parallel.For(0, invalidCount,
+                    new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                    () => new Dictionary<Guid, CompiledTemplate?>(),
+                    (i, state, localCache) =>
+                    {
+                        recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
+                            compiledCache: localCache, compiledJsonCache: null, format);
+                        return localCache;
+                    },
+                    localCache =>
+                    {
+                        foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
+                            compiledCache!.TryAdd(kv.Key, kv.Value);
+                    });
+            }
 
             for (int i = 0; i < invalidCount; i++)
             {
