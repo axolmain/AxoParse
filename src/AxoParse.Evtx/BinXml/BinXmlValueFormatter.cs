@@ -551,5 +551,76 @@ internal static class BinXmlValueFormatter
     /// </summary>
     private static readonly SearchValues<char> XmlEscapeChars = SearchValues.Create("&<>\"'");
 
+    /// <summary>
+    /// Lowercase hex digit chars for nibble-to-char conversion.
+    /// </summary>
+    private const string LowerHexDigits = "0123456789abcdef";
+
+    #endregion
+
+    #region Lowercase Hex Helpers
+
+    /// <summary>
+    /// Appends a <see cref="uint"/> as 8-character zero-padded lowercase hex (e.g., "0000002a").
+    /// </summary>
+    /// <param name="vsb">String builder that receives the hex output.</param>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void AppendHexUInt32Padded(ref ValueStringBuilder vsb, uint value)
+    {
+        for (int i = 28; i >= 0; i -= 4)
+            vsb.Append(LowerHexDigits[(int)(value >> i) & 0xF]);
+    }
+
+    /// <summary>
+    /// Appends a <see cref="ulong"/> as 16-character zero-padded lowercase hex.
+    /// </summary>
+    /// <param name="vsb">String builder that receives the hex output.</param>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static void AppendHexUInt64Padded(ref ValueStringBuilder vsb, ulong value)
+    {
+        for (int i = 60; i >= 0; i -= 4)
+            vsb.Append(LowerHexDigits[(int)(value >> i) & 0xF]);
+    }
+
+    /// <summary>
+    /// Appends a <see cref="uint"/> as minimal lowercase hex with no leading zeros (e.g., "2a").
+    /// Outputs "0" for zero.
+    /// </summary>
+    /// <param name="vsb">String builder that receives the hex output.</param>
+    /// <param name="value">The value to format.</param>
+    internal static void AppendHexUInt32Min(ref ValueStringBuilder vsb, uint value)
+    {
+        if (value == 0)
+        {
+            vsb.Append('0');
+            return;
+        }
+        int shift = 28;
+        while (((value >> shift) & 0xF) == 0) shift -= 4;
+        for (int i = shift; i >= 0; i -= 4)
+            vsb.Append(LowerHexDigits[(int)(value >> i) & 0xF]);
+    }
+
+    /// <summary>
+    /// Appends a <see cref="ulong"/> as minimal lowercase hex with no leading zeros.
+    /// Outputs "0" for zero.
+    /// </summary>
+    /// <param name="vsb">String builder that receives the hex output.</param>
+    /// <param name="value">The value to format.</param>
+    internal static void AppendHexUInt64Min(ref ValueStringBuilder vsb, ulong value)
+    {
+        if (value == 0)
+        {
+            vsb.Append('0');
+            return;
+        }
+        int shift = 60;
+        while (((value >> shift) & 0xF) == 0) shift -= 4;
+        for (int i = shift; i >= 0; i -= 4)
+            vsb.Append(LowerHexDigits[(int)(value >> i) & 0xF]);
+    }
+
     #endregion
 }

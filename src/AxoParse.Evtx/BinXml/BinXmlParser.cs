@@ -812,16 +812,9 @@ internal sealed partial class BinXmlParser
             {
                 vsb.Append("0x");
                 if (size == 8)
-                {
-                    ulong val = MemoryMarshal.Read<ulong>(valueBytes);
-                    vsb.AppendFormatted(val, "x16");
-                }
+                    BinXmlValueFormatter.AppendHexUInt64Padded(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 else
-                {
-                    uint val = MemoryMarshal.Read<uint>(valueBytes);
-                    vsb.AppendFormatted(val, "x8");
-                }
-
+                    BinXmlValueFormatter.AppendHexUInt32Padded(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
                 break;
             }
 
@@ -848,12 +841,12 @@ internal sealed partial class BinXmlParser
 
             case BinXmlValueType.HexInt32:
                 vsb.Append("0x");
-                vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes), "x");
+                BinXmlValueFormatter.AppendHexUInt32Min(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
                 break;
 
             case BinXmlValueType.HexInt64:
                 vsb.Append("0x");
-                vsb.AppendFormatted(MemoryMarshal.Read<ulong>(valueBytes), "x");
+                BinXmlValueFormatter.AppendHexUInt64Min(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 break;
 
             case BinXmlValueType.BinXml:
@@ -888,25 +881,31 @@ internal sealed partial class BinXmlParser
                                int[] valueOffsets, int[] valueSizes, byte[] valueTypes,
                                int binxmlChunkBase, ref ValueStringBuilder vsb)
     {
-        vsb.Append(compiled.Parts[0]);
-        for (int i = 0; i < compiled.SubIds.Length; i++)
+        string[] parts = compiled.Parts;
+        SubSlot[] slots = compiled.Slots;
+        int slotCount = slots.Length;
+        int valCount = valueOffsets.Length;
+
+        vsb.Append(parts[0]);
+        for (int i = 0; i < slotCount; i++)
         {
-            int subId = compiled.SubIds[i];
-            if (subId < valueOffsets.Length)
+            ref readonly SubSlot slot = ref slots[i];
+            int subId = slot.SubId;
+            if (subId < valCount)
             {
                 byte valType = valueTypes[subId];
                 int valSize = valueSizes[subId];
-                if (!compiled.IsOptional[i] || ((valType != BinXmlValueType.Null) && (valSize > 0)))
+                if (!slot.IsOptional || ((valType != BinXmlValueType.Null) && (valSize > 0)))
                 {
-                    if (compiled.AttrPrefix[i] != null)
-                        vsb.Append(compiled.AttrPrefix[i]);
+                    if (slot.AttrPrefix != null)
+                        vsb.Append(slot.AttrPrefix);
                     WriteBinXmlValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
-                    if (compiled.AttrSuffix[i] != null)
-                        vsb.Append(compiled.AttrSuffix[i]);
+                    if (slot.AttrSuffix != null)
+                        vsb.Append(slot.AttrSuffix);
                 }
             }
 
-            vsb.Append(compiled.Parts[i + 1]);
+            vsb.Append(parts[i + 1]);
         }
     }
 

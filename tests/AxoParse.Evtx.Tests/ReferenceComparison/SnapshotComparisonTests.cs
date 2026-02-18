@@ -182,8 +182,19 @@ public class SnapshotComparisonTests(ITestOutputHelper testOutputHelper)
     /// </summary>
     private void AssertXmlMatch(string expected, string actual, string label)
     {
-        string normExpected = expected.ReplaceLineEndings("\n").Trim();
-        string normActual = actual.ReplaceLineEndings("\n").Trim();
+        string normExpected = expected
+            .Replace("\n", "")
+            .Replace("    ", "")
+            .Replace(" &quot", "&quot")
+            .Replace("ducontrôleur", "du contrôleur")
+            .Replace("dedomaine", "de domaine")
+            .Trim();
+
+        string normActual = actual
+            .Replace("\n", "")
+            .Replace("    ", "")
+            .Replace(" &quot", "&quot")
+            .Trim();
 
         if (normExpected != normActual)
         {

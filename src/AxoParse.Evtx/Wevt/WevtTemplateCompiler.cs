@@ -43,9 +43,10 @@ internal static class WevtTemplateCompiler
         string[] partsArr = parts.ToArray();
         int[] subIdsArr = subIds.ToArray();
         bool[] isOptionalArr = isOptional.ToArray();
-        string?[] attrPrefix = new string?[subIdsArr.Length];
-        string?[] attrSuffix = new string?[subIdsArr.Length];
-        return new CompiledTemplate(partsArr, subIdsArr, isOptionalArr, attrPrefix, attrSuffix);
+        SubSlot[] slots = new SubSlot[subIdsArr.Length];
+        for (int i = 0; i < subIdsArr.Length; i++)
+            slots[i] = new SubSlot(subIdsArr[i], isOptionalArr[i]);
+        return new CompiledTemplate(partsArr, slots);
     }
 
     /// <summary>
