@@ -306,7 +306,10 @@ public class EvtxChunk
             EvtxRecord? record = EvtxRecord.ParseEvtxRecord(chunkData[offset..], chunkFileOffset + offset);
             if (record == null)
             {
-                offset += 4;
+                // Magic matched but record is invalid — advance by declared size if available,
+                // otherwise by 4. Prevents re-scanning the same record's header bytes as new records.
+                uint declaredSize = MemoryMarshal.Read<uint>(chunkData.Slice(offset + 4, 4));
+                offset += declaredSize >= 28 ? (int)declaredSize : 4;
                 continue;
             }
 
@@ -338,7 +341,7 @@ public class EvtxChunk
                 {
                     parsedJson[i] = binXml.ParseRecordJson(records[i]);
                 }
-                catch (ArgumentOutOfRangeException ex)
+                catch (Exception ex)
                 {
                     parsedJson[i] = Array.Empty<byte>();
                     diagnostics[i] = $"BinXml render failed: {ex.Message}";
@@ -354,7 +357,7 @@ public class EvtxChunk
             {
                 parsedXml[i] = binXml.ParseRecord(records[i]);
             }
-            catch (ArgumentOutOfRangeException ex)
+            catch (Exception ex)
             {
                 parsedXml[i] = string.Empty;
                 diagnostics[i] = $"BinXml render failed: {ex.Message}";

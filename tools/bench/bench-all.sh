@@ -13,8 +13,8 @@ LIST_PARSERS=false
 # ── Path variables (set BEFORE sourcing helpers) ────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CSHARP_PROJECT="$ROOT_DIR/src/AxoParse.Bench/AxoParse.Bench.csproj"
-CSHARP_BIN="$ROOT_DIR/src/AxoParse.Bench/bin/publish/AxoParse.Bench"
+CSHARP_PROJECT="$ROOT_DIR/perf/AxoParse.Bench/AxoParse.Bench.csproj"
+CSHARP_BIN="$ROOT_DIR/perf/AxoParse.Bench/bin/publish/AxoParse.Bench"
 CS_WASM_CLI="$SCRIPT_DIR/bench-wasm-cli.mjs"
 CS_WASM_PROJECT="$ROOT_DIR/src/AxoParse.Browser/AxoParse.Browser.csproj"
 RUST_WASM_CLI="$SCRIPT_DIR/bench-rust-wasm-cli.mjs"

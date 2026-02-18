@@ -2,6 +2,10 @@
 
 High-performance EVTX file parsing library. Optimise for speed and minimal allocations — think competitive programming mindset. Prefer stack allocations, spans, struct over class, and avoid LINQ in hot paths. Every allocation and branch matters.
 
+# Common Commands
+
+- use `git mv` when moving existing files
+
 # Testing
 
 Uses **xUnit v3**

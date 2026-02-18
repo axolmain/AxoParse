@@ -27,12 +27,13 @@ internal sealed partial class BinXmlParser
 
         ValueStringBuilder vsb = new(stackalloc char[512]);
         int pos = 0;
-        ParseDocumentJson(eventData, ref pos, binxmlChunkBase, ref vsb);
+        ParseTopLevelJson(eventData, ref pos, binxmlChunkBase, ref vsb);
         ReadOnlySpan<char> chars = vsb.AsSpan();
         int byteCount = Encoding.UTF8.GetByteCount(chars);
         byte[] result = new byte[byteCount];
         Encoding.UTF8.GetBytes(chars, result);
         vsb.Dispose();
+
         return result;
     }
 
@@ -180,9 +181,9 @@ internal sealed partial class BinXmlParser
                     break;
 
                 case BinXmlToken.FragmentHeader:
-                    if (needsComma) vsb.Append(',');
-                    needsComma = true;
-                    ParseFragmentJson(data, ref pos, binxmlChunkBase, ref vsb);
+                    // Skip the 4-byte header; the loop handles the subsequent token
+                    // (TemplateInstance or OpenStartElement) with proper comma tracking.
+                    pos += 4;
                     break;
 
                 default:
@@ -193,42 +194,51 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// JSON variant of <see cref="ParseDocument"/>. Consumes fragment headers and skips
-    /// processing instructions (no JSON equivalent), then dispatches to fragment parsing.
+    /// Unified top-level BinXml dispatcher for JSON output. Loops over fragment headers,
+    /// template instances, and bare elements, skipping processing instructions (no JSON equivalent).
+    /// Replaces the former ParseDocumentJson / ParseFragmentJson methods.
     /// </summary>
     /// <param name="data">BinXml byte stream.</param>
     /// <param name="pos">Current read position; advanced past consumed tokens.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="vsb">String builder that receives the JSON output.</param>
-    private void ParseDocumentJson(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueStringBuilder vsb)
+    private void ParseTopLevelJson(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueStringBuilder vsb)
     {
         while (pos < data.Length)
         {
-            byte tok = data[pos];
-            byte baseTok = (byte)(tok & ~BinXmlToken.HasMoreDataFlag);
+            byte baseTok = (byte)(data[pos] & ~BinXmlToken.HasMoreDataFlag);
 
-            if (baseTok == BinXmlToken.Eof)
-                break;
+            switch (baseTok)
+            {
+                case BinXmlToken.Eof:
+                    return;
 
-            if (baseTok == BinXmlToken.FragmentHeader)
-            {
-                ParseFragmentJson(data, ref pos, binxmlChunkBase, ref vsb);
-            }
-            else if (baseTok == BinXmlToken.PiTarget)
-            {
-                // Skip PI for JSON — no equivalent
-                pos++;
-                pos += 4; // nameOffset
-                if ((pos < data.Length) && (data[pos] == BinXmlToken.PiData))
-                {
+                case BinXmlToken.FragmentHeader:
+                    pos += 4; // token + major + minor + flags
+                    break;
+
+                case BinXmlToken.TemplateInstance:
+                    ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, ref vsb);
+                    break;
+
+                case BinXmlToken.OpenStartElement:
+                    ParseElementJson(data, ref pos, null, null, null, binxmlChunkBase, ref vsb);
+                    break;
+
+                case BinXmlToken.PiTarget:
+                    // Skip PI for JSON — no equivalent
                     pos++;
-                    ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
-                    pos += 2 + numChars * 2;
-                }
-            }
-            else
-            {
-                break;
+                    pos += 4; // nameOffset
+                    if ((pos < data.Length) && (data[pos] == BinXmlToken.PiData))
+                    {
+                        pos++;
+                        ushort numChars = MemoryMarshal.Read<ushort>(data[pos..]);
+                        pos += 2 + numChars * 2;
+                    }
+                    break;
+
+                default:
+                    return;
             }
         }
     }
@@ -255,7 +265,8 @@ internal sealed partial class BinXmlParser
         bool hasAttrs = (tok & BinXmlToken.HasMoreDataFlag) != 0;
         pos++;
 
-        pos += 2; // depId
+        if (_insideTemplateBody)
+            pos += 2; // depId — present only in template body elements
         pos += 4; // dataSize
         uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
@@ -339,30 +350,6 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// JSON variant of <see cref="ParseFragment"/>. Skips the 4-byte fragment header, then
-    /// dispatches to template instance or bare element JSON rendering.
-    /// </summary>
-    /// <param name="data">BinXml byte stream.</param>
-    /// <param name="pos">Current read position; advanced past the fragment.</param>
-    /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
-    /// <param name="vsb">String builder that receives the JSON output.</param>
-    private void ParseFragmentJson(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueStringBuilder vsb)
-    {
-        if (pos + 4 > data.Length) return;
-        pos += 4; // fragment header
-
-        if (pos >= data.Length) return;
-
-        byte nextTok = data[pos];
-        byte nextBase = (byte)(nextTok & ~BinXmlToken.HasMoreDataFlag);
-
-        if (nextBase == BinXmlToken.TemplateInstance)
-            ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, ref vsb);
-        else if (nextBase == BinXmlToken.OpenStartElement)
-            ParseElementJson(data, ref pos, null, null, null, binxmlChunkBase, ref vsb);
-    }
-
-    /// <summary>
     /// JSON variant of <see cref="ParseTemplateInstance"/>. Uses <see cref="ReadTemplateInstanceData"/>
     /// for shared data extraction, then checks the compiled JSON cache for fast output.
     /// Falls back to full tree walk if the template cannot be compiled.
@@ -405,9 +392,12 @@ internal sealed partial class BinXmlParser
         if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
             tplPos += 4;
 
+        bool saved = _insideTemplateBody;
+        _insideTemplateBody = true;
         bool needsComma = false;
         ParseContentJson(tplBody, ref tplPos, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, tplChunkBase,
             ref vsb, 0, needsComma: ref needsComma);
+        _insideTemplateBody = saved;
     }
 
     /// <summary>
@@ -494,7 +484,7 @@ internal sealed partial class BinXmlParser
     /// <summary>
     /// Formats a substitution value as a JSON-escaped string (no surrounding quotes — the quotes
     /// are baked into the compiled Parts). Dispatches on value type for correct formatting.
-    /// For embedded BinXml (0x21), recursively renders via <see cref="ParseDocumentJson"/> and
+    /// For embedded BinXml (0x21), recursively renders via <see cref="ParseTopLevelJson"/> and
     /// JSON-escapes the result.
     /// </summary>
     /// <param name="size">Byte size of the value data.</param>
@@ -662,12 +652,15 @@ internal sealed partial class BinXmlParser
             case BinXmlValueType.BinXml:
             {
                 // Render embedded BinXml into a temp VSB, then JSON-escape the result
+                bool saved = _insideTemplateBody;
+                _insideTemplateBody = false;
                 ValueStringBuilder tempVsb = new(stackalloc char[256]);
                 int embeddedChunkBase = fileOffset - _chunkFileOffset;
                 int embeddedPos = 0;
-                ParseDocumentJson(valueBytes, ref embeddedPos, embeddedChunkBase, ref tempVsb);
+                ParseTopLevelJson(valueBytes, ref embeddedPos, embeddedChunkBase, ref tempVsb);
                 BinXmlValueFormatter.AppendJsonEscaped(ref vsb, tempVsb.AsSpan());
                 tempVsb.Dispose();
+                _insideTemplateBody = saved;
                 break;
             }
 

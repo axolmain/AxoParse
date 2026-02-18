@@ -22,10 +22,14 @@ internal sealed partial class BinXmlParser
     /// <param name="parts">Accumulator for static XML string fragments.</param>
     /// <param name="subIds">Accumulator for substitution slot indices.</param>
     /// <param name="isOptional">Accumulator for whether each substitution is optional.</param>
+    /// <param name="inAttrValue">Accumulator for whether each substitution is inside an attribute value.</param>
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
+    /// <param name="insideAttrValue">True when compiling content inside an attribute value context.</param>
     private void CompileContent(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                List<string> parts, List<int> subIds, List<bool> isOptional, ref bool bail, int depth = 0)
+                                List<string> parts, List<int> subIds, List<bool> isOptional,
+                                List<bool> inAttrValue, ref bool bail, int depth = 0,
+                                bool insideAttrValue = false)
     {
         while (pos < data.Length)
         {
@@ -43,7 +47,7 @@ internal sealed partial class BinXmlParser
             switch (baseTok)
             {
                 case BinXmlToken.OpenStartElement:
-                    CompileElement(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, ref bail, depth + 1);
+                    CompileElement(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, inAttrValue, ref bail, depth + 1);
                     break;
 
                 case BinXmlToken.Value:
@@ -61,6 +65,7 @@ internal sealed partial class BinXmlParser
                     pos++; // subValType
                     subIds.Add(subId);
                     isOptional.Add(baseTok == BinXmlToken.OptionalSubstitution);
+                    inAttrValue.Add(insideAttrValue);
                     parts.Add(string.Empty);
                     break;
 
@@ -103,10 +108,12 @@ internal sealed partial class BinXmlParser
     /// <param name="parts">Accumulator for static XML string fragments.</param>
     /// <param name="subIds">Accumulator for substitution slot indices.</param>
     /// <param name="isOptional">Accumulator for whether each substitution is optional.</param>
+    /// <param name="inAttrValue">Accumulator for whether each substitution is inside an attribute value.</param>
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
     private void CompileElement(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                List<string> parts, List<int> subIds, List<bool> isOptional, ref bool bail, int depth = 0)
+                                List<string> parts, List<int> subIds, List<bool> isOptional,
+                                List<bool> inAttrValue, ref bool bail, int depth = 0)
     {
         if (depth >= _maxRecursionDepth)
         {
@@ -156,7 +163,7 @@ internal sealed partial class BinXmlParser
 
                 string attrName = ReadName(attrNameOff);
                 parts[^1] += $" {attrName}=\"";
-                CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, ref bail, depth + 1);
+                CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, inAttrValue, ref bail, depth + 1, insideAttrValue: true);
                 if (bail) return;
                 parts[^1] += "\"";
             }
@@ -164,7 +171,7 @@ internal sealed partial class BinXmlParser
 
         if (pos >= data.Length)
         {
-            parts[^1] += "/>";
+            parts[^1] += $"></{elemName}>";
             return;
         }
 
@@ -172,13 +179,13 @@ internal sealed partial class BinXmlParser
         if (closeTok == BinXmlToken.CloseEmptyElement)
         {
             pos++;
-            parts[^1] += "/>";
+            parts[^1] += $"></{elemName}>";
         }
         else if (closeTok == BinXmlToken.CloseStartElement)
         {
             pos++;
             parts[^1] += ">";
-            CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, ref bail, depth + 1);
+            CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, inAttrValue, ref bail, depth + 1);
             if (bail) return;
             if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
@@ -186,7 +193,7 @@ internal sealed partial class BinXmlParser
         }
         else
         {
-            parts[^1] += "/>";
+            parts[^1] += $"></{elemName}>";
         }
     }
 
@@ -209,6 +216,7 @@ internal sealed partial class BinXmlParser
         List<string> parts = new() { string.Empty };
         List<int> subIds = new();
         List<bool> isOptional = new();
+        List<bool> inAttrValue = new();
         bool bail = false;
 
         int pos = 0;
@@ -216,10 +224,37 @@ internal sealed partial class BinXmlParser
         if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
             pos += 4;
 
-        CompileContent(tplBody, ref pos, tplChunkBase, parts, subIds, isOptional, ref bail);
+        CompileContent(tplBody, ref pos, tplChunkBase, parts, subIds, isOptional, inAttrValue, ref bail);
 
         if (bail) return null;
-        return new CompiledTemplate(parts.ToArray(), subIds.ToArray(), isOptional.ToArray());
+
+        string[] partsArr = parts.ToArray();
+        int[] subIdsArr = subIds.ToArray();
+        bool[] isOptionalArr = isOptional.ToArray();
+        bool[] inAttrValueArr = inAttrValue.ToArray();
+        string?[] attrPrefix = new string?[subIdsArr.Length];
+        string?[] attrSuffix = new string?[subIdsArr.Length];
+
+        // For optional substitutions inside attribute values, move the attribute markup
+        // (' attrName="' prefix and '"' suffix) into AttrPrefix/AttrSuffix so they are
+        // only emitted when the value is non-empty.
+        for (int i = 0; i < subIdsArr.Length; i++)
+        {
+            if (!isOptionalArr[i] || !inAttrValueArr[i]) continue;
+
+            string before = partsArr[i];
+            string after = partsArr[i + 1];
+
+            int spacePos = before.LastIndexOf(' ');
+            if ((spacePos < 0) || !after.StartsWith('"')) continue;
+
+            attrPrefix[i] = before[spacePos..];
+            attrSuffix[i] = "\"";
+            partsArr[i] = before[..spacePos];
+            partsArr[i + 1] = after[1..];
+        }
+
+        return new CompiledTemplate(partsArr, subIdsArr, isOptionalArr, attrPrefix, attrSuffix);
     }
 
     #endregion
