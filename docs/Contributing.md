@@ -53,7 +53,7 @@ src/
     Wevt/                   # WEVT template cache (PE binary extraction)
   AxoParse.Browser/         # WASM interop layer
 demos/
-  AxoParse.Web/             # Blazor demo
+  AxoParse.React/           # React demo app (Vite + TypeScript)
 tests/
   AxoParse.Evtx.Tests/      # xUnit v3
 ```
