@@ -6,8 +6,9 @@ import type {WorkerRequest, WorkerResponse} from "./worker/messages"
  * Fully-qualified URL to the WASM framework directory.
  * Workers resolve dynamic imports relative to their own blob URL,
  * not the page origin, so an absolute URL is required.
+ * Uses Vite's BASE_URL so the path works on both localhost and GitHub Pages.
  */
-const WASM_FRAMEWORK_URL = `${window.location.origin}/wasm/_framework`
+const WASM_FRAMEWORK_URL = `${window.location.origin}${import.meta.env.BASE_URL}wasm/_framework`
 
 interface Stats {
     totalRecords: number
