@@ -541,7 +541,9 @@ internal sealed partial class BinXmlParser
                             case '\f': vsb.Append("\\f"); break;
                             default:
                                 vsb.Append("\\u00");
-                                vsb.Append(BinXmlValueFormatter.HexLookup[b]);
+                                int hIdx = b * 2;
+                                vsb.Append(BinXmlValueFormatter.HexChars[hIdx]);
+                                vsb.Append(BinXmlValueFormatter.HexChars[hIdx + 1]);
                                 break;
                         }
                     }

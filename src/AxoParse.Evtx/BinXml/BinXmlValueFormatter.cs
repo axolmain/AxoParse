@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -21,22 +22,124 @@ internal static class BinXmlValueFormatter
     /// <returns>True if a timestamp was appended; false if the FILETIME was zero.</returns>
     internal static bool AppendFileTime(ReadOnlySpan<byte> valueBytes, ref ValueStringBuilder vsb)
     {
-        long ticks = MemoryMarshal.Read<long>(valueBytes);
-        if (ticks == 0) return false;
-        DateTime dt = new DateTime(ticks + FileTimeEpochDelta, DateTimeKind.Utc);
-        vsb.AppendFormatted(dt, "yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'");
+        long ft = MemoryMarshal.Read<long>(valueBytes);
+        if (ft == 0) return false;
+
+        // Convert FILETIME (100-ns ticks since 1601-01-01) to total components
+        long totalTicks = ft + FileTimeEpochDelta;
+        // Decompose into date/time parts without constructing a DateTime object
+        int totalDays = (int)(totalTicks / TicksPerDay);
+        long remainingTicks = totalTicks - (long)totalDays * TicksPerDay;
+
+        DecomposeDays(totalDays, out int year, out int month, out int day);
+
+        int totalSeconds = (int)(remainingTicks / TicksPerSecond);
+        int hour = totalSeconds / 3600;
+        int minute = totalSeconds % 3600 / 60;
+        int second = totalSeconds % 60;
+        int microseconds = (int)(remainingTicks % TicksPerSecond / 10);
+
+        // yyyy-MM-ddTHH:mm:ss.ffffffZ — write digits directly
+        AppendDigits4(ref vsb, year);
+        vsb.Append('-');
+        AppendDigits2(ref vsb, month);
+        vsb.Append('-');
+        AppendDigits2(ref vsb, day);
+        vsb.Append('T');
+        AppendDigits2(ref vsb, hour);
+        vsb.Append(':');
+        AppendDigits2(ref vsb, minute);
+        vsb.Append(':');
+        AppendDigits2(ref vsb, second);
+        vsb.Append('.');
+        AppendDigits6(ref vsb, microseconds);
+        vsb.Append('Z');
         return true;
     }
 
     /// <summary>
-    /// Appends each byte as a two-character uppercase hex string using the precomputed <see cref="HexLookup"/> table.
+    /// Decomposes a day count (from tick epoch 0001-01-01) into year, month, day.
+    /// Uses the same algorithm as the .NET runtime's DateTime implementation.
+    /// </summary>
+    /// <param name="totalDays">Total days since 0001-01-01.</param>
+    /// <param name="year">Resulting year.</param>
+    /// <param name="month">Resulting month (1-12).</param>
+    /// <param name="day">Resulting day of month (1-31).</param>
+    private static void DecomposeDays(int totalDays, out int year, out int month, out int day)
+    {
+        // 400-year cycle = 146097 days
+        int y400 = totalDays / 146097;
+        int d = totalDays - y400 * 146097;
+        // 100-year cycle = 36524 days (except last cycle which has 36525)
+        int y100 = Math.Min(d / 36524, 3);
+        d -= y100 * 36524;
+        // 4-year cycle = 1461 days
+        int y4 = d / 1461;
+        d -= y4 * 1461;
+        // Single year = 365 days (except last year in 4-year cycle which has 366)
+        int y1 = Math.Min(d / 365, 3);
+        d -= y1 * 365;
+
+        year = y400 * 400 + y100 * 100 + y4 * 4 + y1 + 1;
+        bool leap = (y1 == 3) && ((y4 != 24) || (y100 == 3));
+        ReadOnlySpan<int> cumulativeDays = leap ? CumulativeDaysLeap : CumulativeDaysNormal;
+
+        // Binary search for month
+        month = (d >> 5) + 1;
+        while (d >= cumulativeDays[month])
+            month++;
+        day = d - cumulativeDays[month - 1] + 1;
+    }
+
+    /// <summary>
+    /// Appends a 2-digit zero-padded number.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AppendDigits2(ref ValueStringBuilder vsb, int value)
+    {
+        vsb.Append((char)('0' + value / 10));
+        vsb.Append((char)('0' + value % 10));
+    }
+
+    /// <summary>
+    /// Appends a 4-digit zero-padded number.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AppendDigits4(ref ValueStringBuilder vsb, int value)
+    {
+        vsb.Append((char)('0' + value / 1000));
+        vsb.Append((char)('0' + value / 100 % 10));
+        vsb.Append((char)('0' + value / 10 % 10));
+        vsb.Append((char)('0' + value % 10));
+    }
+
+    /// <summary>
+    /// Appends a 6-digit zero-padded number (microseconds).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AppendDigits6(ref ValueStringBuilder vsb, int value)
+    {
+        vsb.Append((char)('0' + value / 100000));
+        vsb.Append((char)('0' + value / 10000 % 10));
+        vsb.Append((char)('0' + value / 1000 % 10));
+        vsb.Append((char)('0' + value / 100 % 10));
+        vsb.Append((char)('0' + value / 10 % 10));
+        vsb.Append((char)('0' + value % 10));
+    }
+
+    /// <summary>
+    /// Appends each byte as two uppercase hex characters using the precomputed <see cref="HexChars"/> table.
     /// </summary>
     /// <param name="vsb">String builder that receives the hex output.</param>
     /// <param name="data">Bytes to convert.</param>
     internal static void AppendHex(ref ValueStringBuilder vsb, ReadOnlySpan<byte> data)
     {
         for (int i = 0; i < data.Length; i++)
-            vsb.Append(HexLookup[data[i]]);
+        {
+            int idx = data[i] * 2;
+            vsb.Append(HexChars[idx]);
+            vsb.Append(HexChars[idx + 1]);
+        }
     }
 
     /// <summary>
@@ -102,7 +205,9 @@ internal static class BinXmlValueFormatter
                         if (c < '\u0020')
                         {
                             vsb.Append("\\u00");
-                            vsb.Append(HexLookup[c]);
+                            int hIdx = c * 2;
+                            vsb.Append(HexChars[hIdx]);
+                            vsb.Append(HexChars[hIdx + 1]);
                         }
                         else
                         {
@@ -157,19 +262,22 @@ internal static class BinXmlValueFormatter
         ushort mn = MemoryMarshal.Read<ushort>(valueBytes[10..]);
         ushort sc = MemoryMarshal.Read<ushort>(valueBytes[12..]);
         ushort ms = MemoryMarshal.Read<ushort>(valueBytes[14..]);
-        vsb.AppendFormatted(yr, "D4");
+        AppendDigits4(ref vsb, yr);
         vsb.Append('-');
-        vsb.AppendFormatted(mo, "D2");
+        AppendDigits2(ref vsb, mo);
         vsb.Append('-');
-        vsb.AppendFormatted(dy, "D2");
+        AppendDigits2(ref vsb, dy);
         vsb.Append('T');
-        vsb.AppendFormatted(hr, "D2");
+        AppendDigits2(ref vsb, hr);
         vsb.Append(':');
-        vsb.AppendFormatted(mn, "D2");
+        AppendDigits2(ref vsb, mn);
         vsb.Append(':');
-        vsb.AppendFormatted(sc, "D2");
+        AppendDigits2(ref vsb, sc);
         vsb.Append('.');
-        vsb.AppendFormatted(ms, "D3");
+        // 3-digit milliseconds
+        vsb.Append((char)('0' + ms / 100));
+        vsb.Append((char)('0' + ms / 10 % 10));
+        vsb.Append((char)('0' + ms % 10));
         vsb.Append('Z');
     }
 
@@ -181,17 +289,21 @@ internal static class BinXmlValueFormatter
     /// <param name="text">Source character span to escape and append.</param>
     internal static void AppendXmlEscaped(ref ValueStringBuilder vsb, scoped ReadOnlySpan<char> text)
     {
-        // Fast path: no XML-special chars and no surrogates → bulk append
-        if ((text.IndexOfAny('&', '<', '>') < 0) &&
-            (text.IndexOfAny('"', '\'') < 0) &&
-            (text.IndexOfAnyInRange('\uD800', '\uDFFF') < 0))
+        // Two vectorised scans (down from three): XML entity chars + surrogate range
+        int firstSpecial = text.IndexOfAny(XmlEscapeChars);
+        int firstSurrogate = text.IndexOfAnyInRange('\uD800', '\uDFFF');
+        if ((firstSpecial < 0) && (firstSurrogate < 0))
         {
             vsb.Append(text);
             return;
         }
 
-        // Slow path: XML-escape + replace unpaired surrogates with U+FFFD
-        for (int i = 0; i < text.Length; i++)
+        // Bulk-copy clean prefix up to whichever comes first
+        int escapeStart = (firstSpecial >= 0) && (firstSurrogate >= 0)
+            ? Math.Min(firstSpecial, firstSurrogate)
+            : Math.Max(firstSpecial, firstSurrogate);
+        vsb.Append(text[..escapeStart]);
+        for (int i = escapeStart; i < text.Length; i++)
         {
             char c = text[i];
             if (char.IsHighSurrogate(c))
@@ -234,25 +346,44 @@ internal static class BinXmlValueFormatter
     /// <param name="vsb">String builder that receives the formatted GUID.</param>
     internal static void FormatGuid(ReadOnlySpan<byte> b, ref ValueStringBuilder vsb)
     {
-        uint d1 = MemoryMarshal.Read<uint>(b);
-        ushort d2 = MemoryMarshal.Read<ushort>(b[4..]);
-        ushort d3 = MemoryMarshal.Read<ushort>(b[6..]);
+        // Data1 (4 bytes LE) → 8 hex chars, written big-endian
+        AppendHexByte(ref vsb, b[3]);
+        AppendHexByte(ref vsb, b[2]);
+        AppendHexByte(ref vsb, b[1]);
+        AppendHexByte(ref vsb, b[0]);
+        vsb.Append('-');
+        // Data2 (2 bytes LE) → 4 hex chars
+        AppendHexByte(ref vsb, b[5]);
+        AppendHexByte(ref vsb, b[4]);
+        vsb.Append('-');
+        // Data3 (2 bytes LE) → 4 hex chars
+        AppendHexByte(ref vsb, b[7]);
+        AppendHexByte(ref vsb, b[6]);
+        vsb.Append('-');
+        // Bytes 8-9 (big-endian)
+        AppendHexByte(ref vsb, b[8]);
+        AppendHexByte(ref vsb, b[9]);
+        vsb.Append('-');
+        // Bytes 10-15 (big-endian)
+        AppendHexByte(ref vsb, b[10]);
+        AppendHexByte(ref vsb, b[11]);
+        AppendHexByte(ref vsb, b[12]);
+        AppendHexByte(ref vsb, b[13]);
+        AppendHexByte(ref vsb, b[14]);
+        AppendHexByte(ref vsb, b[15]);
+    }
 
-        vsb.AppendFormatted(d1, "X8");
-        vsb.Append('-');
-        vsb.AppendFormatted(d2, "X4");
-        vsb.Append('-');
-        vsb.AppendFormatted(d3, "X4");
-        vsb.Append('-');
-        vsb.Append(HexLookup[b[8]]);
-        vsb.Append(HexLookup[b[9]]);
-        vsb.Append('-');
-        vsb.Append(HexLookup[b[10]]);
-        vsb.Append(HexLookup[b[11]]);
-        vsb.Append(HexLookup[b[12]]);
-        vsb.Append(HexLookup[b[13]]);
-        vsb.Append(HexLookup[b[14]]);
-        vsb.Append(HexLookup[b[15]]);
+    /// <summary>
+    /// Appends a single byte as two uppercase hex characters from <see cref="HexChars"/>.
+    /// </summary>
+    /// <param name="vsb">String builder that receives the hex output.</param>
+    /// <param name="b">Byte to convert.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static void AppendHexByte(ref ValueStringBuilder vsb, byte b)
+    {
+        int idx = b * 2;
+        vsb.Append(HexChars[idx]);
+        vsb.Append(HexChars[idx + 1]);
     }
 
     /// <summary>
@@ -356,14 +487,18 @@ internal static class BinXmlValueFormatter
     }
 
     /// <summary>
-    /// Builds a 256-entry lookup table for fast byte-to-hex conversion.
+    /// Builds a 512-entry char lookup table for fast byte-to-hex conversion.
+    /// Each byte maps to two consecutive chars at index byte*2.
     /// </summary>
-    /// <returns>Array where index <c>i</c> contains the uppercase two-character hex string for byte <c>i</c>.</returns>
-    private static string[] InitHexLookup()
+    /// <returns>Array where index <c>i*2</c> and <c>i*2+1</c> contain the uppercase hex digit pair for byte <c>i</c>.</returns>
+    private static char[] InitHexChars()
     {
-        string[] table = new string[256];
+        char[] table = new char[512];
         for (int i = 0; i < 256; i++)
-            table[i] = i.ToString("X2");
+        {
+            table[i * 2] = "0123456789ABCDEF"[i >> 4];
+            table[i * 2 + 1] = "0123456789ABCDEF"[i & 0xF];
+        }
         return table;
     }
 
@@ -379,9 +514,42 @@ internal static class BinXmlValueFormatter
     internal const long FileTimeEpochDelta = 504911232000000000L;
 
     /// <summary>
-    /// Pre-computed lookup table mapping byte values 0x00..0xFF to two-character uppercase hex strings.
+    /// 100-nanosecond ticks per day (24 * 60 * 60 * 10_000_000).
     /// </summary>
-    internal static readonly string[] HexLookup = InitHexLookup();
+    private const long TicksPerDay = 864000000000L;
+
+    /// <summary>
+    /// 100-nanosecond ticks per second (10_000_000).
+    /// </summary>
+    private const long TicksPerSecond = 10000000L;
+
+    /// <summary>
+    /// Cumulative days before each month for normal years. Index 0 = 0 (before Jan), index 1 = 31 (before Feb), etc.
+    /// </summary>
+    private static ReadOnlySpan<int> CumulativeDaysNormal =>
+    [
+        0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334, 365
+    ];
+
+    /// <summary>
+    /// Cumulative days before each month for leap years.
+    /// </summary>
+    private static ReadOnlySpan<int> CumulativeDaysLeap =>
+    [
+        0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335, 366
+    ];
+
+    /// <summary>
+    /// Pre-computed lookup table mapping byte values 0x00..0xFF to two uppercase hex characters.
+    /// Byte <c>i</c> maps to <c>HexChars[i*2]</c> (high nibble) and <c>HexChars[i*2+1]</c> (low nibble).
+    /// </summary>
+    internal static readonly char[] HexChars = InitHexChars();
+
+    /// <summary>
+    /// Vectorised search set for XML characters needing entity escaping: &amp; &lt; &gt; &quot; &apos;.
+    /// Surrogate pairs are checked separately via IndexOfAnyInRange.
+    /// </summary>
+    private static readonly SearchValues<char> XmlEscapeChars = SearchValues.Create("&<>\"'");
 
     #endregion
 }
