@@ -170,7 +170,7 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, "sample-with-zero-data-size-event.evtx");
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1, cancellationToken: TestContext.Current.CancellationToken);
 
         int okCount = 0;
         int errCount = 0;

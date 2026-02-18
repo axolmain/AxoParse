@@ -54,7 +54,7 @@ public class SequentialRecordIdTests(ITestOutputHelper testOutputHelper)
                 continue;
 
             byte[] data = File.ReadAllBytes(path);
-            EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+            EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1, cancellationToken: TestContext.Current.CancellationToken);
 
             ulong previousId = 0;
             int count = 0;
@@ -82,7 +82,7 @@ public class SequentialRecordIdTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, "security.evtx");
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1, cancellationToken: TestContext.Current.CancellationToken);
 
         foreach (EvtxChunk chunk in parser.Chunks)
         {

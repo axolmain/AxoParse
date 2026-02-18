@@ -7,9 +7,6 @@
         <Project Path="src/AxoParse.Evtx/AxoParse.Evtx.csproj"/>
         <Project Path="src/AxoParse.Browser/AxoParse.Browser.csproj"/>
     </Folder>
-    <Folder Name="/demos/">
-        <Project Path="demos/AxoParse.Web/AxoParse.Web.csproj"/>
-    </Folder>
     <Folder Name="/tests/">
         <Project Path="tests/AxoParse.Evtx.Tests/AxoParse.Evtx.Tests.csproj"/>
     </Folder>

@@ -1,0 +1,25 @@
+{
+  "name": "axoparse-react-demo",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "build:wasm": "dotnet publish ../../src/AxoParse.Browser -c Release -o ../../src/AxoParse.Browser/publish && mkdir -p public/wasm && rm -rf public/wasm/_framework && cp -r ../../src/AxoParse.Browser/publish/wwwroot/_framework public/wasm/_framework",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-table": "^8.21.2",
+    "@tanstack/react-virtual": "^3.13.18",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.5"
+  }
+}

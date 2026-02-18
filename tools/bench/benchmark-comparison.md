@@ -2,7 +2,7 @@
 
 | Field           | Value                        |
 |-----------------|------------------------------|
-| **Date**        | 2026-02-18 03:48:23 UTC      |
+| **Date**        | 2026-02-18 22:49:43 UTC      |
 | **Node**        | v25.6.1                      |
 | **dotnet**      | 10.0.101                     |
 | **Platform**    | Darwin arm64                 |
@@ -13,10 +13,10 @@
 
 ## Benchmark Results
 
-| File                                | C# (1 thread)       | C# (8 threads)      | C# WASM           | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node           | libevtx (C)       |
-|-------------------------------------|---------------------|---------------------|-------------------|------------------------|-------------------------|-------------------|-------------------|
-| 30M security_big_sample.evtx (XML)  | 175.0 ms ± 6.4 ms   | 140.6 ms ± 35.3 ms  | N/A (web only)    | 303.3 ms ± 2.0 ms      | 79.7 ms ± 8.2 ms        | 2.000 s ± 0.131 s | 2.822 s ± 0.098 s |
-| 30M security_big_sample.evtx (JSON) | 538.1 ms ± 144.5 ms | 242.1 ms ± 101.8 ms | 215.8 ms ± 4.0 ms | 383.2 ms ± 113.0 ms    | 110.1 ms ± 21.0 ms      | 2.704 s ± 0.319 s | No support        |
+| File                                | C# (1 thread)     | C# (8 threads)     | C# WASM           | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node           | libevtx (C)       |
+|-------------------------------------|-------------------|--------------------|-------------------|------------------------|-------------------------|-------------------|-------------------|
+| 30M security_big_sample.evtx (XML)  | 165.4 ms ± 3.0 ms | 148.1 ms ± 41.0 ms | N/A (web only)    | 304.9 ms ± 1.2 ms      | 101.1 ms ± 2.0 ms       | 1.905 s ± 0.022 s | 2.688 s ± 0.034 s |
+| 30M security_big_sample.evtx (JSON) | 353.1 ms ± 4.6 ms | 136.3 ms ± 1.2 ms  | 213.6 ms ± 3.1 ms | 277.0 ms ± 5.4 ms      | 96.0 ms ± 2.0 ms        | 2.592 s ± 0.022 s | No support        |
 
 **Note**: Numbers shown are `real-time` measurements (wall-clock time for invocation to complete). Single-run entries
 are marked with *(ran once)* — these parsers are too slow for repeated benchmarking via hyperfine.
@@ -28,12 +28,10 @@ are marked with *(ran once)* — these parsers are too slow for repeated benchma
 - **Failed (JS):** 0
 
 ### Internal parsers
-
 - C# native: yes
 - Rust native: yes
 - JS Node: yes
 - C# WASM (AOT): yes
 
 ### External parsers
-
 - libevtx (C): yes

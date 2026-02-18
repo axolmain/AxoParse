@@ -7,7 +7,7 @@
         <Task>80</Task>
         <Opcode>1</Opcode>
         <Keywords>0x4000000000000040</Keywords>
-        <TimeCreated SystemTime="2017-05-19T02:02:36.000000Z"></TimeCreated>
+        <TimeCreated SystemTime="2017-05-19T02:02:36.0000000Z"></TimeCreated>
         <EventRecordID>1</EventRecordID>
         <Correlation></Correlation>
         <Execution ProcessID="1396" ThreadID="2132"></Execution>

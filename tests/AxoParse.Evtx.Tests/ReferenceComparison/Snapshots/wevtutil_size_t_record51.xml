@@ -1,0 +1,34 @@
+<Event xmlns='http://schemas.microsoft.com/win/2004/08/events/event'>
+    <System>
+        <Provider Name='Microsoft-Windows-Security-Auditing' Guid='{54849625-5478-4994-a5ba-3e3b0328c30d}'/>
+        <EventID>4648</EventID>
+        <Version>0</Version>
+        <Level>0</Level>
+        <Task>12544</Task>
+        <Opcode>0</Opcode>
+        <Keywords>0x8020000000000000</Keywords>
+        <TimeCreated SystemTime='2015-08-24T06:54:16.6562500Z'/>
+        <EventRecordID>51</EventRecordID>
+        <Correlation/>
+        <Execution ProcessID='592' ThreadID='672'/>
+        <Channel>Security</Channel>
+        <Computer>WIN-L0ZZQ76PMUF</Computer>
+        <Security/>
+    </System>
+    <EventData>
+        <Data Name='SubjectUserSid'>S-1-5-18</Data>
+        <Data Name='SubjectUserName'>WIN-L0ZZQ76PMUF$</Data>
+        <Data Name='SubjectDomainName'>WORKGROUP</Data>
+        <Data Name='SubjectLogonId'>0x3e7</Data>
+        <Data Name='LogonGuid'>{00000000-0000-0000-0000-000000000000}</Data>
+        <Data Name='TargetUserName'>SYSTEM</Data>
+        <Data Name='TargetDomainName'>NT AUTHORITY</Data>
+        <Data Name='LogonGuid'>{00000000-0000-0000-0000-000000000000}</Data>
+        <Data Name='TargetServerName'>localhost</Data>
+        <Data Name='TargetInfo'>localhost</Data>
+        <Data Name='ProcessId'>0x244</Data>
+        <Data Name='ProcessName'>C:\Windows\System32\services.exe</Data>
+        <Data Name='IpAddress'>-</Data>
+        <Data Name='IpPort'>-</Data>
+    </EventData>
+</Event>

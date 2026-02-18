@@ -39,21 +39,36 @@ jobs:
       - name: Install .NET workloads
         run: dotnet workload restore
 
-      - name: Install Tailwind dependencies
-        run: npm ci
-        working-directory: demos/AxoParse.Web
-
       - name: Build
         run: dotnet build
 
-      - name: Publish WASM
-        run: dotnet publish demos/AxoParse.Web --configuration Release
+      - name: Publish WASM module
+        run: dotnet publish src/AxoParse.Browser -c Release
 
-      - name: Upload WASM artifact
+      - name: Copy WASM into React public dir
+        run: |
+          mkdir -p demos/AxoParse.React/public/wasm
+          rm -rf demos/AxoParse.React/public/wasm/_framework
+          cp -r src/AxoParse.Browser/bin/Release/net10.0/publish/wwwroot/_framework demos/AxoParse.React/public/wasm/_framework
+
+      - name: Install React dependencies
+        run: npm ci
+        working-directory: demos/AxoParse.React
+
+      - name: Build React app
+        run: npx vite build --base=/${{ github.event.repository.name }}/
+        working-directory: demos/AxoParse.React
+
+      - name: Remove Brotli and Gzip compressed WASM files
+        run: |
+          find demos/AxoParse.React/dist/wasm/_framework -name '*.br' -delete
+          find demos/AxoParse.React/dist/wasm/_framework -name '*.gz' -delete
+
+      - name: Upload site artifact
         uses: actions/upload-artifact@v4
         with:
-          name: wasm-publish
-          path: demos/AxoParse.Web/bin/Release/net10.0/publish/wwwroot
+          name: site
+          path: demos/AxoParse.React/dist
           retention-days: 1
 
       - name: Test
@@ -73,25 +88,17 @@ jobs:
           sparse-checkout: .nojekyll
           sparse-checkout-cone-mode: false
 
-      - name: Download WASM artifact
+      - name: Download site artifact
         uses: actions/download-artifact@v4
         with:
-          name: wasm-publish
+          name: site
           path: site
-
-      - name: Set base href for GitHub Pages
-        run: sed -i 's|<base href="/"/>|<base href="/${{ github.event.repository.name }}/"/>|' site/index.html
 
       - name: Add .nojekyll
         run: cp .nojekyll site/.nojekyll
 
       - name: Copy 404.html for SPA routing
         run: cp site/index.html site/404.html
-
-      - name: Remove Brotli and Gzip compressed files
-        run: |
-          find site/_framework -name '*.br' -delete
-          find site/_framework -name '*.gz' -delete
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

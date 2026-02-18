@@ -31,8 +31,8 @@ long[] RunTest(int threads, OutputFormat format)
     return times;
 }
 
-int[] threadCounts = [1, 8];
-OutputFormat[] formats = [OutputFormat.Xml, OutputFormat.Json];
+int[] threadCounts = [1]; // , 8
+OutputFormat[] formats = [OutputFormat.Xml]; // , OutputFormat.Json
 
 // results[format][threadIdx][run]
 long[][][] results = new long[formats.Length][][];

@@ -14,7 +14,7 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
     public void GetEventMatchesDirectIndexAccess()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
+        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
         EvtxChunk chunk = parser.Chunks[0];
         for (int i = 0; i < chunk.Records.Count; i++)
@@ -90,7 +90,7 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
     public void RenderDiagnosticsEmptyOnCleanChunks()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
+        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
         foreach (EvtxChunk chunk in parser.Chunks)
         {

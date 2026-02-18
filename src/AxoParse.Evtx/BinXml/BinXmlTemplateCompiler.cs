@@ -232,29 +232,34 @@ internal sealed partial class BinXmlParser
         int[] subIdsArr = subIds.ToArray();
         bool[] isOptionalArr = isOptional.ToArray();
         bool[] inAttrValueArr = inAttrValue.ToArray();
-        string?[] attrPrefix = new string?[subIdsArr.Length];
-        string?[] attrSuffix = new string?[subIdsArr.Length];
 
-        // For optional substitutions inside attribute values, move the attribute markup
-        // (' attrName="' prefix and '"' suffix) into AttrPrefix/AttrSuffix so they are
-        // only emitted when the value is non-empty.
+        // Build packed slot array. For optional substitutions inside attribute values,
+        // move the attribute markup (' attrName="' prefix and '"' suffix) into the slot
+        // so they are only emitted when the value is non-empty.
+        SubSlot[] slots = new SubSlot[subIdsArr.Length];
         for (int i = 0; i < subIdsArr.Length; i++)
         {
-            if (!isOptionalArr[i] || !inAttrValueArr[i]) continue;
+            string? prefix = null;
+            string? suffix = null;
 
-            string before = partsArr[i];
-            string after = partsArr[i + 1];
+            if (isOptionalArr[i] && inAttrValueArr[i])
+            {
+                string before = partsArr[i];
+                string after = partsArr[i + 1];
+                int spacePos = before.LastIndexOf(' ');
+                if ((spacePos >= 0) && after.StartsWith('"'))
+                {
+                    prefix = before[spacePos..];
+                    suffix = "\"";
+                    partsArr[i] = before[..spacePos];
+                    partsArr[i + 1] = after[1..];
+                }
+            }
 
-            int spacePos = before.LastIndexOf(' ');
-            if ((spacePos < 0) || !after.StartsWith('"')) continue;
-
-            attrPrefix[i] = before[spacePos..];
-            attrSuffix[i] = "\"";
-            partsArr[i] = before[..spacePos];
-            partsArr[i + 1] = after[1..];
+            slots[i] = new SubSlot(subIdsArr[i], isOptionalArr[i], prefix, suffix);
         }
 
-        return new CompiledTemplate(partsArr, subIdsArr, isOptionalArr, attrPrefix, attrSuffix);
+        return new CompiledTemplate(partsArr, slots);
     }
 
     #endregion

@@ -55,19 +55,28 @@ internal ref struct ValueStringBuilder : IDisposable
 
     /// <summary>
     /// Appends a string, or does nothing if null. Single-character strings are fast-pathed.
+    /// Inlines the copy directly to avoid the span intermediate and extra method call.
     /// </summary>
     /// <param name="s">The string to append, or null.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Append(string? s)
     {
         if (s == null) return;
-        if (s.Length == 1)
+        int len = s.Length;
+        if (len == 1)
         {
             Append(s[0]);
             return;
         }
 
-        Append(s.AsSpan());
+        if (len == 0) return;
+        if (_pos > _chars.Length - len)
+        {
+            Grow(len);
+        }
+
+        s.CopyTo(_chars.Slice(_pos, len));
+        _pos += len;
     }
 
     /// <summary>
@@ -102,16 +111,26 @@ internal ref struct ValueStringBuilder : IDisposable
         }
         else
         {
-            // Grow and retry
-            Grow(64);
-            if (!value.TryFormat(_chars[_pos..], out charsWritten, format, null))
-            {
-                Grow(256);
-                value.TryFormat(_chars[_pos..], out charsWritten, format, null);
-            }
-
-            _pos += charsWritten;
+            GrowAndFormat(value, format);
         }
+    }
+
+    /// <summary>
+    /// Slow path for <see cref="AppendFormatted{T}"/>: grows the buffer and retries formatting.
+    /// Separated to keep the inline fast path small.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private void GrowAndFormat<T>(T value, scoped ReadOnlySpan<char> format)
+        where T : ISpanFormattable
+    {
+        Grow(64);
+        if (!value.TryFormat(_chars[_pos..], out int charsWritten, format, null))
+        {
+            Grow(256);
+            value.TryFormat(_chars[_pos..], out charsWritten, format, null);
+        }
+
+        _pos += charsWritten;
     }
 
     /// <summary>

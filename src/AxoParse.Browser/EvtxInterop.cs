@@ -386,7 +386,7 @@ public partial class EvtxInterop
 
     #region Non-Public Fields
 
-    private static readonly string[] _levelNames = ["", "Critical", "Error", "Warning", "Information", "Verbose"];
+    private static readonly string[] _levelNames = ["LogAlways", "Critical", "Error", "Warning", "Information", "Verbose"];
 
     /// <summary>
     /// Flattened record list from the most recent <see cref="ParseEvtxFile"/> call.

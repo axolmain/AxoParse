@@ -541,7 +541,9 @@ internal sealed partial class BinXmlParser
                             case '\f': vsb.Append("\\f"); break;
                             default:
                                 vsb.Append("\\u00");
-                                vsb.Append(BinXmlValueFormatter.HexLookup[b]);
+                                int hIdx = b * 2;
+                                vsb.Append(BinXmlValueFormatter.HexChars[hIdx]);
+                                vsb.Append(BinXmlValueFormatter.HexChars[hIdx + 1]);
                                 break;
                         }
                     }
@@ -612,9 +614,9 @@ internal sealed partial class BinXmlParser
             {
                 vsb.Append("0x");
                 if (size == 8)
-                    vsb.AppendFormatted(MemoryMarshal.Read<ulong>(valueBytes), "x16");
+                    BinXmlValueFormatter.AppendHexUInt64Min(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 else
-                    vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes), "x8");
+                    BinXmlValueFormatter.AppendHexUInt32Min(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
                 break;
             }
 
@@ -641,12 +643,12 @@ internal sealed partial class BinXmlParser
 
             case BinXmlValueType.HexInt32:
                 vsb.Append("0x");
-                vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes), "x8");
+                BinXmlValueFormatter.AppendHexUInt32Padded(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
                 break;
 
             case BinXmlValueType.HexInt64:
                 vsb.Append("0x");
-                vsb.AppendFormatted(MemoryMarshal.Read<ulong>(valueBytes), "x16");
+                BinXmlValueFormatter.AppendHexUInt64Padded(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 break;
 
             case BinXmlValueType.BinXml:
