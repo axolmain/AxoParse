@@ -24,6 +24,12 @@ let exports: WasmExports | null = null
  * ```
  */
 export async function initAxoParse(frameworkUrl: string): Promise<void> {
+    // Mark this as a "sidecar" worker so the .NET runtime doesn't mistake it
+    // for a .NET-managed pthread. Without this flag the runtime skips resolving
+    // coreAssetsInMemory / allAssetsInMemory and dotnet.create() hangs forever.
+    if (typeof importScripts === "function") {
+        (globalThis as Record<string, unknown>).dotnetSidecar = true
+    }
     const {dotnet} = await import(/* @vite-ignore */ `${frameworkUrl}/dotnet.js`)
     const runtime = await dotnet.create()
     await runtime.runMain()
@@ -70,61 +76,4 @@ export function getRecordPage(offset: number, limit: number): EvtxRecord[] {
     return JSON.parse(exports.GetRecordPage(offset, limit)) as EvtxRecord[]
 }
 
-/** Default number of records fetched per page during streaming. */
-const DEFAULT_PAGE_SIZE = 500
 
-/**
- * Callback invoked after each page is fetched during {@link streamRecords}.
- *
- * @param records    - All records fetched so far (cumulative).
- * @param totalRows  - Total number of records available.
- */
-export type OnPageCallback = (records: EvtxRecord[], totalRows: number) => void
-
-/**
- * Progressively stream all records from WASM memory into a JS array.
- * Calls {@link onPage} after each batch so the UI can render incrementally.
- *
- * Uses `setTimeout(0)` between pages to yield to the browser's render loop,
- * ensuring the first page appears on screen before the rest are fetched.
- *
- * @param totalRows - Total record count from {@link parseEvtxFile}.
- * @param onPage    - Called after each page with the cumulative record array.
- * @param pageSize  - Records per page (default {@link DEFAULT_PAGE_SIZE}).
- * @returns Promise that resolves with the complete record array.
- *
- * @example
- * ```ts
- * const meta = parseEvtxFile(bytes)
- * const allRecords = await streamRecords(meta.totalRecords, (records) => {
- *   setRecords([...records]) // trigger React re-render
- * })
- * ```
- */
-export function streamRecords(
-    totalRows: number,
-    onPage: OnPageCallback,
-    pageSize: number = DEFAULT_PAGE_SIZE,
-): Promise<EvtxRecord[]> {
-    return new Promise((resolve) => {
-        const allRecords: EvtxRecord[] = []
-        let offset = 0
-
-        function fetchNext(): void {
-            const page = getRecordPage(offset, pageSize)
-            for (let i = 0; i < page.length; i++) {
-                allRecords.push(page[i])
-            }
-            offset += page.length
-            onPage(allRecords, totalRows)
-
-            if (offset < totalRows && page.length > 0) {
-                setTimeout(fetchNext, 0)
-            } else {
-                resolve(allRecords)
-            }
-        }
-
-        fetchNext()
-    })
-}

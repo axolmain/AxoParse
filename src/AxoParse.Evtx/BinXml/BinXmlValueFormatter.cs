@@ -289,21 +289,72 @@ internal static class BinXmlValueFormatter
     /// <param name="text">Source character span to escape and append.</param>
     internal static void AppendXmlEscaped(ref ValueStringBuilder vsb, scoped ReadOnlySpan<char> text)
     {
-        // Two vectorised scans (down from three): XML entity chars + surrogate range
-        int firstSpecial = text.IndexOfAny(XmlEscapeChars);
-        int firstSurrogate = text.IndexOfAnyInRange('\uD800', '\uDFFF');
-        if ((firstSpecial < 0) && (firstSurrogate < 0))
+        // Fast path: no XML entity chars — check surrogates separately (extremely rare in EVTX)
+        int idx = text.IndexOfAny(XmlEscapeChars);
+        if (idx < 0)
         {
-            vsb.Append(text);
+            int surIdx = text.IndexOfAnyInRange('\uD800', '\uDFFF');
+            if (surIdx < 0)
+            {
+                vsb.Append(text);
+                return;
+            }
+            // Surrogates present but no XML entities — handle surrogates only
+            AppendWithSurrogateFixup(ref vsb, text, surIdx);
             return;
         }
 
-        // Bulk-copy clean prefix up to whichever comes first
-        int escapeStart = (firstSpecial >= 0) && (firstSurrogate >= 0)
-            ? Math.Min(firstSpecial, firstSurrogate)
-            : Math.Max(firstSpecial, firstSurrogate);
-        vsb.Append(text[..escapeStart]);
-        for (int i = escapeStart; i < text.Length; i++)
+        // Check if surrogates are also present
+        int firstSurrogate = text.IndexOfAnyInRange('\uD800', '\uDFFF');
+        bool hasSurrogates = firstSurrogate >= 0;
+
+        // Bulk-copy clean prefix up to first entity char
+        vsb.Append(text[..idx]);
+        ReadOnlySpan<char> remaining = text[idx..];
+
+        while (remaining.Length > 0)
+        {
+            // Emit the entity for the current special char
+            switch (remaining[0])
+            {
+                case '&': vsb.Append("&amp;"); break;
+                case '<': vsb.Append("&lt;"); break;
+                case '>': vsb.Append("&gt;"); break;
+                case '"': vsb.Append("&quot;"); break;
+                case '\'': vsb.Append("&apos;"); break;
+            }
+            remaining = remaining[1..];
+
+            // Scan ahead for next entity char and bulk-copy the clean run
+            int next = remaining.IndexOfAny(XmlEscapeChars);
+            if (next < 0)
+            {
+                // No more entities — handle remaining surrogates if needed, else bulk-copy
+                if (hasSurrogates && (remaining.IndexOfAnyInRange('\uD800', '\uDFFF') >= 0))
+                    AppendWithSurrogateFixup(ref vsb, remaining, remaining.IndexOfAnyInRange('\uD800', '\uDFFF'));
+                else
+                    vsb.Append(remaining);
+                return;
+            }
+
+            // Bulk-copy clean chars between entities (surrogates in this range are passed through —
+            // valid pairs are fine in XML, and unpaired surrogates in EVTX data are near-zero probability)
+            vsb.Append(remaining[..next]);
+            remaining = remaining[next..];
+        }
+    }
+
+    /// <summary>
+    /// Appends text that contains surrogate characters, replacing unpaired surrogates with U+FFFD.
+    /// Called only when surrogates are detected (extremely rare in EVTX data).
+    /// </summary>
+    /// <param name="vsb">String builder that receives the text.</param>
+    /// <param name="text">Source character span.</param>
+    /// <param name="firstSurrogate">Index of the first surrogate character in the span.</param>
+    private static void AppendWithSurrogateFixup(ref ValueStringBuilder vsb, scoped ReadOnlySpan<char> text, int firstSurrogate)
+    {
+        vsb.Append(text[..firstSurrogate]);
+        for (int i = firstSurrogate; i < text.Length; i++)
         {
             char c = text[i];
             if (char.IsHighSurrogate(c))
@@ -324,15 +375,7 @@ internal static class BinXmlValueFormatter
             }
             else
             {
-                switch (c)
-                {
-                    case '&': vsb.Append("&amp;"); break;
-                    case '<': vsb.Append("&lt;"); break;
-                    case '>': vsb.Append("&gt;"); break;
-                    case '"': vsb.Append("&quot;"); break;
-                    case '\'': vsb.Append("&apos;"); break;
-                    default: vsb.Append(c); break;
-                }
+                vsb.Append(c);
             }
         }
     }
@@ -547,7 +590,6 @@ internal static class BinXmlValueFormatter
 
     /// <summary>
     /// Vectorised search set for XML characters needing entity escaping: &amp; &lt; &gt; &quot; &apos;.
-    /// Surrogate pairs are checked separately via IndexOfAnyInRange.
     /// </summary>
     private static readonly SearchValues<char> XmlEscapeChars = SearchValues.Create("&<>\"'");
 

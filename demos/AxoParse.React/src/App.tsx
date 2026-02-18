@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useRef, useState} from "react"
+import {useCallback, useRef, useState} from "react"
 import {
     createColumnHelper,
     flexRender,
@@ -9,10 +9,9 @@ import {
     useReactTable,
 } from "@tanstack/react-table"
 import {useVirtualizer} from "@tanstack/react-virtual"
-import {initAxoParse, parseEvtxFile, streamRecords} from "./axoparse"
+import {useEvtxWorker} from "./useEvtxWorker"
 import type {EvtxRecord} from "./types"
 
-const WASM_FRAMEWORK_URL = "/wasm/_framework"
 const ROW_HEIGHT = 29
 
 const columnHelper = createColumnHelper<EvtxRecord>()
@@ -44,94 +43,19 @@ const columns = [
     }),
 ]
 
-interface Stats {
-    totalRecords: number
-    numChunks: number
-    parseTimeMs: number
-    loadedRecords: number
-    fileName: string
-}
-
 export default function App() {
-    const [records, setRecords] = useState<EvtxRecord[]>([])
-    const [parsing, setParsing] = useState(false)
-    const [error, setError] = useState<string | null>(null)
-    const [stats, setStats] = useState<Stats | null>(null)
-    const [wasmReady, setWasmReady] = useState(false)
-    const [wasmLoading, setWasmLoading] = useState(true)
+    const {wasmReady, wasmLoading, error, stats, records, parsing, loadProgress, parse} = useEvtxWorker()
     const [globalFilter, setGlobalFilter] = useState("")
     const [sorting, setSorting] = useState<SortingState>([])
-    const initCalled = useRef(false)
     const tableContainerRef = useRef<HTMLDivElement>(null)
-
-    useEffect(() => {
-        if (initCalled.current) return
-        initCalled.current = true
-
-        initAxoParse(WASM_FRAMEWORK_URL)
-            .then(() => {
-                setWasmReady(true)
-                setWasmLoading(false)
-            })
-            .catch((err: unknown) => {
-                const message = err instanceof Error ? err.message : String(err)
-                setError(`Failed to load WASM module: ${message}`)
-                setWasmLoading(false)
-            })
-    }, [])
 
     const handleFile = useCallback(
         (file: File) => {
-            if (!wasmReady) {
-                setError("WASM module is still loading — please wait")
-                return
-            }
-
-            setError(null)
-            setParsing(true)
-            setRecords([])
-            setStats(null)
             setGlobalFilter("")
             setSorting([])
-
-            const reader = new FileReader()
-            reader.onload = () => {
-                try {
-                    const data = new Uint8Array(reader.result as ArrayBuffer)
-
-                    const t0 = performance.now()
-                    const meta = parseEvtxFile(data)
-                    const parseTimeMs = Math.round(performance.now() - t0)
-
-                    setStats({
-                        totalRecords: meta.totalRecords,
-                        numChunks: meta.numChunks,
-                        parseTimeMs,
-                        loadedRecords: 0,
-                        fileName: file.name,
-                    })
-
-                    streamRecords(meta.totalRecords, (loaded) => {
-                        setRecords([...loaded])
-                        setStats((prev) =>
-                            prev ? {...prev, loadedRecords: loaded.length} : prev,
-                        )
-                    }).then(() => {
-                        setParsing(false)
-                    })
-                } catch (err: unknown) {
-                    const message = err instanceof Error ? err.message : String(err)
-                    setError(`Parse failed: ${message}`)
-                    setParsing(false)
-                }
-            }
-            reader.onerror = () => {
-                setError("Failed to read file")
-                setParsing(false)
-            }
-            reader.readAsArrayBuffer(file)
+            parse(file)
         },
-        [wasmReady],
+        [parse],
     )
 
     const onFileChange = useCallback(
@@ -167,11 +91,6 @@ export default function App() {
         if (sorted === "desc") return " ↓"
         return ""
     }, [])
-
-    const loadProgress = useMemo(() => {
-        if (!stats || stats.totalRecords === 0) return 100
-        return Math.round((stats.loadedRecords / stats.totalRecords) * 100)
-    }, [stats])
 
     return (
         <div className="app">
@@ -210,9 +129,9 @@ export default function App() {
                         <span>
               <strong>Parse:</strong> {stats.parseTimeMs} ms
             </span>
-                        {loadProgress < 100 && (
+                        {parsing && (
                             <span>
-                <strong>Loading:</strong> {loadProgress}%
+                <strong>Loading:</strong> {Math.round((loadProgress / stats.totalRecords) * 100)}%
               </span>
                         )}
                         {rows.length !== records.length && (
@@ -239,11 +158,11 @@ export default function App() {
                     <table>
                         <thead>
                         {table.getHeaderGroups().map((headerGroup) => (
-                            <tr key={headerGroup.id}>
+                            <tr key={headerGroup.id} style={{display: "flex", width: "100%"}}>
                                 {headerGroup.headers.map((header) => (
                                     <th
                                         key={header.id}
-                                        style={{width: header.getSize()}}
+                                        style={{width: header.getSize(), flex: `0 0 ${header.getSize()}px`}}
                                         onClick={header.column.getToggleSortingHandler()}
                                         className={
                                             header.column.getCanSort() ? "sortable" : undefined
@@ -273,6 +192,7 @@ export default function App() {
                                 <tr
                                     key={row.id}
                                     style={{
+                                        display: "flex",
                                         position: "absolute",
                                         top: 0,
                                         transform: `translateY(${virtualRow.start}px)`,
@@ -281,7 +201,10 @@ export default function App() {
                                     }}
                                 >
                                     {row.getVisibleCells().map((cell) => (
-                                        <td key={cell.id}>
+                                        <td
+                                            key={cell.id}
+                                            style={{flex: `0 0 ${cell.column.getSize()}px`}}
+                                        >
                                             {flexRender(
                                                 cell.column.columnDef.cell,
                                                 cell.getContext(),
