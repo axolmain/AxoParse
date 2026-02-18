@@ -30,7 +30,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     public void DiagnosticsEmptyOnCleanParse()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
+        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Empty(parser.Diagnostics);
     }
@@ -43,7 +43,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     public void GetEventsJsonPopulatesJsonField()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data, format: OutputFormat.Json);
+        EvtxParser parser = EvtxParser.Parse(data, format: OutputFormat.Json, cancellationToken: TestContext.Current.CancellationToken);
 
         bool found = false;
         foreach (EvtxEvent evt in parser.GetEvents())
@@ -70,7 +70,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     public void GetEventsPreservesChunkOrder()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1, cancellationToken: TestContext.Current.CancellationToken);
 
         ulong previousId = 0;
         foreach (EvtxEvent evt in parser.GetEvents())
@@ -88,7 +88,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     public void GetEventsReturnsAllRecords()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
+        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
         int eventCount = 0;
         foreach (EvtxEvent evt in parser.GetEvents())
@@ -106,7 +106,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "sample_with_a_bad_chunk_magic.evtx"));
 
-        EvtxParser parser = EvtxParser.Parse(data);
+        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
         // Should skip bad chunks without throwing
         testOutputHelper.WriteLine(
@@ -120,7 +120,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     public void JsonOutputIsParseableBySystemTextJson()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data, format: OutputFormat.Json);
+        EvtxParser parser = EvtxParser.Parse(data, format: OutputFormat.Json, cancellationToken: TestContext.Current.CancellationToken);
 
         int parsed = 0;
         foreach (EvtxEvent evt in parser.GetEvents())
@@ -148,7 +148,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
         foreach (string file in evtxFiles)
         {
             byte[] data = File.ReadAllBytes(file);
-            EvtxParser parser = EvtxParser.Parse(data, format: OutputFormat.Json);
+            EvtxParser parser = EvtxParser.Parse(data, format: OutputFormat.Json, cancellationToken: TestContext.Current.CancellationToken);
 
             int recordCount = 0;
             foreach (EvtxEvent evt in parser.GetEvents())
@@ -181,7 +181,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
             string name = Path.GetFileName(file);
 
             sw.Restart();
-            EvtxParser parser = EvtxParser.Parse(data);
+            EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
             sw.Stop();
 
             testOutputHelper.WriteLine(
@@ -195,7 +195,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
 
         Stopwatch sw = Stopwatch.StartNew();
-        EvtxParser parser = EvtxParser.Parse(data);
+        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
         sw.Stop();
 
         Assert.True(parser.Chunks.Count > 0);
@@ -210,7 +210,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     public void TotalRecordsMatchesChunkSum()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data);
+        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
         int sum = 0;
         foreach (EvtxChunk chunk in parser.Chunks)
