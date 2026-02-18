@@ -37,9 +37,10 @@ internal static class BinXmlValueFormatter
         int hour = totalSeconds / 3600;
         int minute = totalSeconds % 3600 / 60;
         int second = totalSeconds % 60;
-        int microseconds = (int)(remainingTicks % TicksPerSecond / 10);
+        // 100-ns ticks within the current second (0..9_999_999) — gives 7 fractional digits
+        int fractionalTicks = (int)(remainingTicks % TicksPerSecond);
 
-        // yyyy-MM-ddTHH:mm:ss.ffffffZ — write digits directly
+        // yyyy-MM-ddTHH:mm:ss.fffffffZ — write digits directly
         AppendDigits4(ref vsb, year);
         vsb.Append('-');
         AppendDigits2(ref vsb, month);
@@ -52,7 +53,7 @@ internal static class BinXmlValueFormatter
         vsb.Append(':');
         AppendDigits2(ref vsb, second);
         vsb.Append('.');
-        AppendDigits6(ref vsb, microseconds);
+        AppendDigits7(ref vsb, fractionalTicks);
         vsb.Append('Z');
         return true;
     }
@@ -114,12 +115,13 @@ internal static class BinXmlValueFormatter
     }
 
     /// <summary>
-    /// Appends a 6-digit zero-padded number (microseconds).
+    /// Appends a 7-digit zero-padded number (100-nanosecond ticks within a second, 0..9_999_999).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static void AppendDigits6(ref ValueStringBuilder vsb, int value)
+    private static void AppendDigits7(ref ValueStringBuilder vsb, int value)
     {
-        vsb.Append((char)('0' + value / 100000));
+        vsb.Append((char)('0' + value / 1000000));
+        vsb.Append((char)('0' + value / 100000 % 10));
         vsb.Append((char)('0' + value / 10000 % 10));
         vsb.Append((char)('0' + value / 1000 % 10));
         vsb.Append((char)('0' + value / 100 % 10));

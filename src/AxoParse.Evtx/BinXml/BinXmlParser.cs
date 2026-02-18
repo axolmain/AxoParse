@@ -812,9 +812,9 @@ internal sealed partial class BinXmlParser
             {
                 vsb.Append("0x");
                 if (size == 8)
-                    BinXmlValueFormatter.AppendHexUInt64Padded(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
+                    BinXmlValueFormatter.AppendHexUInt64Min(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 else
-                    BinXmlValueFormatter.AppendHexUInt32Padded(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
+                    BinXmlValueFormatter.AppendHexUInt32Min(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
                 break;
             }
 
