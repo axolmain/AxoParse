@@ -127,6 +127,11 @@ else if (_parseResult is not null)
                             {
                                 <div class="vgrid-cell vgrid-cell-compact" data-label="ID">@record.RecordId</div>
                             }
+                            @if (_visibleColumns["Timestamp"])
+                            {
+                                <div class="vgrid-cell vgrid-cell-compact"
+                                     data-label="Timestamp">@record.Timestamp</div>
+                            }
                             @if (_visibleColumns["EventId"])
                             {
                                 <div class="vgrid-cell vgrid-cell-compact" data-label="Event">@record.EventId</div>
@@ -136,10 +141,6 @@ else if (_parseResult is not null)
                                 <div class="vgrid-cell vgrid-cell-compact" data-label="Level">@record.LevelText</div>
                             }
                         </div>
-                        @if (_visibleColumns["Timestamp"])
-                        {
-                            <div class="vgrid-cell" data-label="Timestamp">@record.Timestamp</div>
-                        }
                         @if (_visibleColumns["Provider"])
                         {
                             <div class="vgrid-cell" data-label="Provider">@record.Provider</div>
