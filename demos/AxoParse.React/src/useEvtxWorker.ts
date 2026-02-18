@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from "react"
-import type {EvtxRecord} from "./types"
+import type {EvtxRecord, RecordMeta} from "./types"
 import type {WorkerRequest, WorkerResponse} from "./worker/messages"
 
 /**
@@ -17,6 +17,11 @@ interface Stats {
     fileName: string
 }
 
+interface StreamProgress {
+    chunksProcessed: number
+    totalChunks: number
+}
+
 interface EvtxWorkerState {
     wasmReady: boolean
     wasmLoading: boolean
@@ -26,13 +31,22 @@ interface EvtxWorkerState {
     parsing: boolean
     loadProgress: number
     parse: (file: File) => void
+    streamRecords: RecordMeta[]
+    streaming: boolean
+    streamProgress: StreamProgress
+    parseStream: (file: File) => void
+    requestRecordRender: (file: File, chunkIndex: number, recordIndex: number) => void
 }
 
 /**
  * React hook that manages a Web Worker for off-main-thread EVTX parsing.
  * Handles worker lifecycle, WASM initialisation, and message passing.
  *
- * @returns Worker state and a `parse` function to trigger file parsing.
+ * Supports two parsing modes:
+ * - `parse`: reads the entire file into memory (legacy, for small files)
+ * - `parseStream`: chunk-at-a-time streaming (for large files, progressive results)
+ *
+ * @returns Worker state and functions to trigger parsing.
  */
 export function useEvtxWorker(): EvtxWorkerState {
     const [wasmReady, setWasmReady] = useState(false)
@@ -42,6 +56,9 @@ export function useEvtxWorker(): EvtxWorkerState {
     const [records, setRecords] = useState<EvtxRecord[]>([])
     const [parsing, setParsing] = useState(false)
     const [loadProgress, setLoadProgress] = useState(0)
+    const [streamRecords, setStreamRecords] = useState<RecordMeta[]>([])
+    const [streaming, setStreaming] = useState(false)
+    const [streamProgress, setStreamProgress] = useState<StreamProgress>({chunksProcessed: 0, totalChunks: 0})
     const workerRef = useRef<Worker | null>(null)
 
     useEffect(() => {
@@ -55,6 +72,7 @@ export function useEvtxWorker(): EvtxWorkerState {
             setError(`Worker error: ${e.message}`)
             setWasmLoading(false)
             setParsing(false)
+            setStreaming(false)
         }
 
         worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
@@ -89,10 +107,39 @@ export function useEvtxWorker(): EvtxWorkerState {
                     setParsing(false)
                     break
 
+                case "fileMeta":
+                    setStats({
+                        totalRecords: 0,
+                        numChunks: msg.meta.numChunks,
+                        parseTimeMs: msg.parseTimeMs,
+                        fileName: msg.fileName,
+                    })
+                    break
+
+                case "chunkRecords":
+                    setStreamRecords((prev) => [...prev, ...msg.records])
+                    setStreamProgress({
+                        chunksProcessed: msg.chunksProcessed,
+                        totalChunks: msg.totalChunks,
+                    })
+                    break
+
+                case "streamDone":
+                    setStats((prev) => prev ? {...prev, totalRecords: msg.totalRecords} : prev)
+                    setStreaming(false)
+                    break
+
+                case "renderedRecord":
+                    // Consumers handle this via a callback or additional state as needed.
+                    // For now, append to the full records list so it's accessible.
+                    setRecords((prev) => [...prev, msg.record])
+                    break
+
                 case "error":
                     setError(msg.message)
                     setWasmLoading(false)
                     setParsing(false)
+                    setStreaming(false)
                     break
             }
         }
@@ -130,5 +177,46 @@ export function useEvtxWorker(): EvtxWorkerState {
         reader.readAsArrayBuffer(file)
     }, [wasmReady])
 
-    return {wasmReady, wasmLoading, error, stats, records, parsing, loadProgress, parse}
+    const parseStream = useCallback((file: File) => {
+        if (!wasmReady) {
+            setError("WASM module is still loading — please wait")
+            return
+        }
+
+        setError(null)
+        setStreaming(true)
+        setStreamRecords([])
+        setRecords([])
+        setStats(null)
+        setStreamProgress({chunksProcessed: 0, totalChunks: 0})
+
+        const msg: WorkerRequest = {type: "parseStream", file, fileName: file.name}
+        workerRef.current!.postMessage(msg)
+    }, [wasmReady])
+
+    const requestRecordRender = useCallback((file: File, chunkIndex: number, recordIndex: number) => {
+        if (!wasmReady) {
+            setError("WASM module is still loading — please wait")
+            return
+        }
+
+        const msg: WorkerRequest = {type: "renderRecord", file, chunkIndex, recordIndex}
+        workerRef.current!.postMessage(msg)
+    }, [wasmReady])
+
+    return {
+        wasmReady,
+        wasmLoading,
+        error,
+        stats,
+        records,
+        parsing,
+        loadProgress,
+        parse,
+        streamRecords,
+        streaming,
+        streamProgress,
+        parseStream,
+        requestRecordRender,
+    }
 }

@@ -143,6 +143,114 @@ public partial class EvtxInterop
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
+    /// <summary>
+    /// Parses the 4096-byte EVTX file header and returns JSON metadata.
+    /// JS passes <c>File.slice(0, 4096)</c> as a byte array.
+    /// </summary>
+    /// <param name="headerData">First 4096 bytes of the EVTX file.</param>
+    /// <returns>
+    /// JSON object: <c>{numChunks, majorVersion, minorVersion, headerBlockSize, isDirty, isFull}</c>
+    /// </returns>
+    [JSExport]
+    public static string ParseFileHeader(byte[] headerData)
+    {
+        EvtxFileHeader header = EvtxFileHeader.ParseEvtxFileHeader(headerData);
+
+        using MemoryStream stream = new(256);
+        using Utf8JsonWriter writer = new(stream);
+        writer.WriteStartObject();
+        writer.WriteNumber("numChunks", header.NumberOfChunks);
+        writer.WriteNumber("majorVersion", header.MajorFormatVersion);
+        writer.WriteNumber("minorVersion", header.MinorFormatVersion);
+        writer.WriteNumber("headerBlockSize", header.HeaderBlockSize);
+        writer.WriteBoolean("isDirty", header.FileFlags.HasFlag(HeaderFlags.Dirty));
+        writer.WriteBoolean("isFull", header.FileFlags.HasFlag(HeaderFlags.Full));
+        writer.WriteEndObject();
+        writer.Flush();
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Parses a single 64KB chunk and returns a JSON array of lightweight record metadata.
+    /// Full BinXml render happens internally to extract fields, but XML strings are not stored.
+    /// JS passes <c>File.slice(offset, offset + 65536)</c> as a byte array.
+    /// </summary>
+    /// <param name="chunkData">Exactly 65536 bytes covering one chunk.</param>
+    /// <param name="chunkIndex">Zero-based chunk index (for inclusion in output records).</param>
+    /// <returns>JSON array of record metadata objects, or <c>"[]"</c> on parse failure.</returns>
+    [JSExport]
+    public static string ParseChunkMetadata(byte[] chunkData, int chunkIndex)
+    {
+        try
+        {
+            EvtxChunk chunk = EvtxChunk.ParseStandalone(chunkData);
+
+            using MemoryStream stream = new();
+            using Utf8JsonWriter writer = new(stream);
+            writer.WriteStartArray();
+
+            for (int i = 0; i < chunk.Records.Count; i++)
+            {
+                EvtxRecord record = chunk.Records[i];
+                string xml = i < chunk.ParsedXml.Count ? chunk.ParsedXml[i] : "";
+
+                writer.WriteStartObject();
+                writer.WriteNumber("recordId", record.EventRecordId);
+                writer.WriteString("timestamp", FileTimeToIso(record.WrittenTime));
+                writer.WriteNumber("chunkIndex", chunkIndex);
+                WriteMetadataFields(writer, xml);
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.Flush();
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch
+        {
+            return "[]";
+        }
+    }
+
+    /// <summary>
+    /// Re-parses a single 64KB chunk and returns full JSON for one specific record.
+    /// Used for on-demand detail rendering when the user expands a table row.
+    /// </summary>
+    /// <param name="chunkData">Exactly 65536 bytes covering one chunk.</param>
+    /// <param name="chunkIndex">Zero-based chunk index (for inclusion in output).</param>
+    /// <param name="recordIndex">Zero-based index of the record within the chunk.</param>
+    /// <returns>Full JSON record object, or <c>"{}"</c> if index is out of range or parse fails.</returns>
+    [JSExport]
+    public static string RenderRecord(byte[] chunkData, int chunkIndex, int recordIndex)
+    {
+        try
+        {
+            EvtxChunk chunk = EvtxChunk.ParseStandalone(chunkData);
+
+            if ((recordIndex < 0) || (recordIndex >= chunk.Records.Count))
+                return "{}";
+
+            EvtxRecord record = chunk.Records[recordIndex];
+            string xml = recordIndex < chunk.ParsedXml.Count ? chunk.ParsedXml[recordIndex] : "";
+
+            using MemoryStream stream = new();
+            using Utf8JsonWriter writer = new(stream);
+            writer.WriteStartObject();
+            writer.WriteNumber("recordId", record.EventRecordId);
+            writer.WriteString("timestamp", FileTimeToIso(record.WrittenTime));
+            writer.WriteString("xml", xml);
+            writer.WriteNumber("chunkIndex", chunkIndex);
+            WriteXmlFields(writer, xml);
+            writer.WriteEndObject();
+            writer.Flush();
+            return Encoding.UTF8.GetString(stream.ToArray());
+        }
+        catch
+        {
+            return "{}";
+        }
+    }
+
     #endregion
 
     #region Non-Public Methods
@@ -349,6 +457,39 @@ public partial class EvtxInterop
         writer.WriteString("activityId", "");
         writer.WriteString("relatedActivityId", "");
         writer.WriteString("eventData", "");
+    }
+
+    /// <summary>
+    /// Writes a subset of event fields for lightweight metadata records.
+    /// Omits xml, eventData, task, opcode, keywords, version, processId, threadId,
+    /// securityUserId, activityId, and relatedActivityId to reduce payload size.
+    /// </summary>
+    /// <param name="writer">Active JSON writer.</param>
+    /// <param name="xml">Rendered XML string for the event record.</param>
+    private static void WriteMetadataFields(Utf8JsonWriter writer, string xml)
+    {
+        if (string.IsNullOrEmpty(xml))
+        {
+            writer.WriteString("eventId", "");
+            writer.WriteString("provider", "");
+            writer.WriteNumber("level", 0);
+            writer.WriteString("levelText", "");
+            writer.WriteString("computer", "");
+            writer.WriteString("channel", "");
+            return;
+        }
+
+        writer.WriteString("eventId", ExtractTagText(xml, "EventID"));
+        writer.WriteString("provider", ExtractAttrValue(xml, "Provider", "Name"));
+
+        string levelStr = ExtractTagText(xml, "Level");
+        int level = 0;
+        if (!string.IsNullOrEmpty(levelStr)) int.TryParse(levelStr, out level);
+        writer.WriteNumber("level", level);
+        writer.WriteString("levelText", (level >= 0) && (level < _levelNames.Length) ? _levelNames[level] : $"Level {level}");
+
+        writer.WriteString("computer", ExtractTagText(xml, "Computer"));
+        writer.WriteString("channel", ExtractTagText(xml, "Channel"));
     }
 
     private static void WriteXmlFields(Utf8JsonWriter writer, string xml)

@@ -119,6 +119,21 @@ public class EvtxChunk
     }
 
     /// <summary>
+    /// Parses a standalone 64KB chunk byte array with BinXml rendering.
+    /// Treats the array as a self-contained "file" with all offsets chunk-relative
+    /// (chunkFileOffset = 0). Creates an isolated compiled template cache per call.
+    /// Suitable for WASM interop where JS passes one chunk at a time.
+    /// </summary>
+    /// <param name="chunkData">Exactly 64KB byte array covering a single chunk.</param>
+    /// <returns>A fully parsed <see cref="EvtxChunk"/> with rendered XML output.</returns>
+    public static EvtxChunk ParseStandalone(byte[] chunkData)
+    {
+        return Parse(chunkData, chunkFileOffset: 0,
+            new Dictionary<Guid, CompiledTemplate?>(),
+            compiledJsonCache: null, OutputFormat.Xml);
+    }
+
+    /// <summary>
     /// Returns the <see cref="EvtxEvent"/> at the specified index within this chunk,
     /// pairing record metadata with rendered output and any diagnostic info.
     /// </summary>

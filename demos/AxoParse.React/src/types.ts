@@ -27,3 +27,26 @@ export interface ParseMeta {
     totalRecords: number
     numChunks: number
 }
+
+/** Metadata extracted from the 4096-byte EVTX file header. */
+export interface FileMeta {
+    numChunks: number
+    majorVersion: number
+    minorVersion: number
+    headerBlockSize: number
+    isDirty: boolean
+    isFull: boolean
+}
+
+/** Lightweight per-record metadata returned by chunk-at-a-time parsing. */
+export interface RecordMeta {
+    recordId: number
+    timestamp: string
+    chunkIndex: number
+    eventId: string
+    provider: string
+    level: number
+    levelText: string
+    computer: string
+    channel: string
+}
