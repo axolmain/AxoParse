@@ -26,4 +26,8 @@
         <ProjectReference Include="..\..\src\AxoParse.Evtx\AxoParse.Evtx.csproj"/>
     </ItemGroup>
 
+    <ItemGroup>
+        <Content Include="RustTestImitation\Snapshots\*.xml" CopyToOutputDirectory="PreserveNewest"/>
+    </ItemGroup>
+
 </Project>
