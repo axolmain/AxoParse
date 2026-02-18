@@ -1,4 +1,4 @@
-import {useCallback, useRef, useState} from "react"
+import {useCallback, useMemo, useRef, useState} from "react"
 import {
     createColumnHelper,
     flexRender,
@@ -11,6 +11,8 @@ import {
 import {useVirtualizer} from "@tanstack/react-virtual"
 import {useEvtxWorker} from "./useEvtxWorker"
 import type {EvtxRecord} from "./types"
+import {exportRecords} from "./export"
+import {formatXml} from "./format-xml"
 
 const ROW_HEIGHT = 29
 
@@ -36,7 +38,12 @@ const columns = [
         header: "Event Data",
         size: 360,
         cell: (info) => (
-            <div className="cell-eventdata" title={info.getValue()}>
+            <div
+                className="cell-eventdata clickable"
+                onClick={() => (info.table.options.meta as {
+                    onDetail: (r: EvtxRecord) => void
+                }).onDetail(info.row.original)}
+            >
                 {info.getValue()}
             </div>
         ),
@@ -47,6 +54,7 @@ export default function App() {
     const {wasmReady, wasmLoading, error, stats, records, parsing, loadProgress, parse} = useEvtxWorker()
     const [globalFilter, setGlobalFilter] = useState("")
     const [sorting, setSorting] = useState<SortingState>([])
+    const [detailRecord, setDetailRecord] = useState<EvtxRecord | null>(null)
     const tableContainerRef = useRef<HTMLDivElement>(null)
 
     const handleFile = useCallback(
@@ -66,6 +74,8 @@ export default function App() {
         [handleFile],
     )
 
+    const tableMeta = useMemo(() => ({onDetail: setDetailRecord}), [])
+
     const table = useReactTable({
         data: records,
         columns,
@@ -75,6 +85,7 @@ export default function App() {
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         getFilteredRowModel: getFilteredRowModel(),
+        meta: tableMeta,
     })
 
     const {rows} = table.getRowModel()
@@ -85,6 +96,16 @@ export default function App() {
         estimateSize: () => ROW_HEIGHT,
         overscan: 20,
     })
+
+    const exportFileName = useMemo(() => {
+        if (!stats) return "export"
+        return stats.fileName.replace(/\.evtx$/i, "")
+    }, [stats])
+
+    const handleExport = useCallback((format: "csv" | "json" | "xml") => {
+        const data = rows.map((row) => row.original)
+        exportRecords(data, format, exportFileName)
+    }, [rows, exportFileName])
 
     const sortIndicator = useCallback((sorted: false | "asc" | "desc") => {
         if (sorted === "asc") return " ↑"
@@ -149,8 +170,34 @@ export default function App() {
                             onChange={(e) => setGlobalFilter(e.target.value)}
                             className="search-input"
                         />
+                        <div className="export-buttons">
+                            <button onClick={() => handleExport("csv")} disabled={parsing}>CSV</button>
+                            <button onClick={() => handleExport("json")} disabled={parsing}>JSON</button>
+                            <button onClick={() => handleExport("xml")} disabled={parsing}>XML</button>
+                        </div>
                     </div>
                 </>
+            )}
+
+            {detailRecord && (
+                <div className="modal-overlay" onClick={() => setDetailRecord(null)}>
+                    <div className="modal" onClick={(e) => e.stopPropagation()}>
+                        <div className="modal-header">
+                            <strong>Record {detailRecord.recordId}</strong>
+                            <button className="modal-close" onClick={() => setDetailRecord(null)}>X</button>
+                        </div>
+                        <div className="modal-tabs">
+                            <details open>
+                                <summary>Event Data</summary>
+                                <pre className="modal-pre">{detailRecord.eventData || "(empty)"}</pre>
+                            </details>
+                            <details>
+                                <summary>XML</summary>
+                                <pre className="modal-pre">{formatXml(detailRecord.xml)}</pre>
+                            </details>
+                        </div>
+                    </div>
+                </div>
             )}
 
             {records.length > 0 && (

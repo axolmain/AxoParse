@@ -67,12 +67,14 @@ h1 {
 
 /* Search bar */
 .search-bar {
+    display: flex;
+    gap: 0.5rem;
     margin-bottom: 0.75rem;
     flex-shrink: 0;
 }
 
 .search-input {
-    width: 100%;
+    flex: 1;
     padding: 0.5rem 0.75rem;
     border: 1px solid #d1d5db;
     border-radius: 6px;
@@ -80,6 +82,33 @@ h1 {
     font-family: inherit;
     outline: none;
     transition: border-color 0.15s;
+}
+
+.export-buttons {
+    display: flex;
+    gap: 0.25rem;
+}
+
+.export-buttons button {
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    background: #fff;
+    font-size: 0.8125rem;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.export-buttons button:hover:not(:disabled) {
+    background: #e8e8f0;
+    border-color: #6366f1;
+}
+
+.export-buttons button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 .search-input:focus {
@@ -153,6 +182,89 @@ td {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+/* Clickable event data cell */
+.cell-eventdata.clickable {
+    cursor: pointer;
+}
+
+.cell-eventdata.clickable:hover {
+    color: #6366f1;
+}
+
+/* Detail modal */
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.modal {
+    background: #fff;
+    border-radius: 8px;
+    width: min(90vw, 800px);
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #e5e7eb;
+    flex-shrink: 0;
+}
+
+.modal-close {
+    background: none;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-family: inherit;
+}
+
+.modal-close:hover {
+    background: #f3f4f6;
+}
+
+.modal-tabs {
+    overflow: auto;
+    padding: 0.75rem 1rem;
+}
+
+.modal-tabs details {
+    margin-bottom: 0.5rem;
+}
+
+.modal-tabs summary {
+    cursor: pointer;
+    font-weight: 500;
+    font-size: 0.875rem;
+    padding: 0.25rem 0;
+    user-select: none;
+}
+
+.modal-pre {
+    background: #f5f5f7;
+    border: 1px solid #e5e7eb;
+    border-radius: 4px;
+    padding: 0.75rem;
+    font-size: 0.8125rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin-top: 0.5rem;
+    max-height: 50vh;
 }
 
 /* Loading state */
