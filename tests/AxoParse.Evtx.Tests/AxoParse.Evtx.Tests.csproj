@@ -27,7 +27,7 @@
     </ItemGroup>
 
     <ItemGroup>
-        <Content Include="RustTestImitation\Snapshots\*.xml" CopyToOutputDirectory="PreserveNewest"/>
+        <Content Include="ReferenceComparison\Snapshots\*.xml" CopyToOutputDirectory="PreserveNewest"/>
     </ItemGroup>
 
 </Project>

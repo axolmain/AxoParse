@@ -15,4 +15,17 @@ namespace AxoParse.Evtx.BinXml;
 /// Whether each substitution is optional (0x0E OptionalSubstitution vs 0x0D NormalSubstitution).
 /// Optional substitutions are skipped when the value is null or zero-length.
 /// </param>
-internal sealed record CompiledTemplate(string[] Parts, int[] SubIds, bool[] IsOptional);
+/// <param name="AttrPrefix">
+/// Per-substitution attribute prefix (e.g., <c>" Name=\""</c>) that should only be emitted
+/// when the optional substitution produces a non-empty value. Null entry means no conditional prefix.
+/// </param>
+/// <param name="AttrSuffix">
+/// Per-substitution attribute suffix (e.g., <c>"\""</c>) that should only be emitted
+/// when the optional substitution produces a non-empty value. Null entry means no conditional suffix.
+/// </param>
+internal sealed record CompiledTemplate(
+    string[] Parts,
+    int[] SubIds,
+    bool[] IsOptional,
+    string?[] AttrPrefix,
+    string?[] AttrSuffix);

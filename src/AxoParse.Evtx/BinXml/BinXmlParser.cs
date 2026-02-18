@@ -64,7 +64,7 @@ internal sealed partial class BinXmlParser
 
         ValueStringBuilder vsb = new(stackalloc char[512]);
         int pos = 0;
-        ParseDocument(eventData, ref pos, binxmlChunkBase, ref vsb);
+        ParseTopLevel(eventData, ref pos, binxmlChunkBase, ref vsb, handlePiTarget: true);
         string result = vsb.ToString();
         vsb.Dispose();
         return result;
@@ -253,7 +253,7 @@ internal sealed partial class BinXmlParser
                     ParseTemplateInstance(data, ref pos, binxmlChunkBase, ref vsb);
                     break;
                 case BinXmlToken.FragmentHeader:
-                    ParseFragment(data, ref pos, binxmlChunkBase, ref vsb);
+                    ParseTopLevel(data, ref pos, binxmlChunkBase, ref vsb);
                     break;
                 default:
                     pos++;
@@ -263,61 +263,74 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Parses a top-level BinXml document, consuming fragment headers, processing instructions,
-    /// and template instances until EOF. Appends rendered XML to <paramref name="vsb"/>.
+    /// Unified top-level BinXml dispatcher. Loops over fragment headers, template instances,
+    /// bare elements, and optionally processing instructions until EOF or an unrecognized token.
+    /// Replaces the former ParseDocument / ParseFragment / ParseEmbeddedBinXml methods.
     /// </summary>
     /// <param name="data">BinXml byte stream.</param>
-    /// <param name="pos">Current read position; advanced past all consumed tokens.</param>
+    /// <param name="pos">Current read position; advanced past consumed tokens.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="vsb">String builder that receives the rendered XML output.</param>
-    private void ParseDocument(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueStringBuilder vsb)
+    /// <param name="handlePiTarget">True for record-level parsing (processing instructions are valid); false for embedded BinXml.</param>
+    private void ParseTopLevel(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+                               ref ValueStringBuilder vsb, bool handlePiTarget = false)
     {
         while (pos < data.Length)
         {
-            byte tok = data[pos];
-            byte baseTok = (byte)(tok & ~BinXmlToken.HasMoreDataFlag);
+            byte baseTok = (byte)(data[pos] & ~BinXmlToken.HasMoreDataFlag);
 
-            if (baseTok == BinXmlToken.Eof)
-                break;
-
-            if (baseTok == BinXmlToken.FragmentHeader)
+            switch (baseTok)
             {
-                ParseFragment(data, ref pos, binxmlChunkBase, ref vsb);
-            }
-            else if (baseTok == BinXmlToken.PiTarget)
-            {
-                pos++; // consume 0x0A
-                uint piNameOff = MemoryMarshal.Read<uint>(data[pos..]);
-                pos += 4;
-                string piName = ReadName(piNameOff);
-                vsb.Append("<?");
-                vsb.Append(piName);
+                case BinXmlToken.Eof:
+                    return;
 
-                if ((pos < data.Length) && (data[pos] == BinXmlToken.PiData))
-                {
-                    pos++; // consume 0x0B
-                    string piText = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
-                    if (piText.Length > 0)
+                case BinXmlToken.FragmentHeader:
+                    pos += 4; // token + major + minor + flags
+                    break;
+
+                case BinXmlToken.TemplateInstance:
+                    ParseTemplateInstance(data, ref pos, binxmlChunkBase, ref vsb);
+                    break;
+
+                case BinXmlToken.OpenStartElement:
+                    ParseElement(data, ref pos, null, null, null, binxmlChunkBase, ref vsb);
+                    break;
+
+                case BinXmlToken.PiTarget when handlePiTarget:
+                    pos++; // consume 0x0A
+                    uint piNameOff = MemoryMarshal.Read<uint>(data[pos..]);
+                    pos += 4;
+                    string piName = ReadName(piNameOff);
+                    vsb.Append("<?");
+                    vsb.Append(piName);
+
+                    if ((pos < data.Length) && (data[pos] == BinXmlToken.PiData))
                     {
-                        vsb.Append(' ');
-                        vsb.Append(piText);
+                        pos++; // consume 0x0B
+                        string piText = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
+                        if (piText.Length > 0)
+                        {
+                            vsb.Append(' ');
+                            vsb.Append(piText);
+                        }
                     }
-                }
 
-                vsb.Append("?>");
-            }
-            else
-            {
-                break;
+                    vsb.Append("?>");
+                    break;
+
+                default:
+                    return;
             }
         }
     }
 
     /// <summary>
     /// Parses an OpenStartElement token (0x01/0x41) and its children into XML.
-    /// Token layout: 1 token + 2 depId + 4 dataSize + 4 nameOffset [+ inline name] [+ 4 attrListSize + attrs]
+    /// Token layout: 1 token [+ 2 depId] + 4 dataSize + 4 nameOffset [+ inline name] [+ 4 attrListSize + attrs]
     /// followed by a close token (CloseEmpty 0x03, CloseStart 0x02, or EndElement 0x04).
     /// Bit 0x40 on the token indicates attributes are present.
+    /// The 2-byte depId is present when <see cref="_insideTemplateBody"/> is true (chunk-level
+    /// template definitions) but absent in top-level records and embedded BinXml fragments.
     /// </summary>
     /// <param name="data">BinXml byte stream.</param>
     /// <param name="pos">Current read position; advanced past the entire element on return.</param>
@@ -337,7 +350,8 @@ internal sealed partial class BinXmlParser
         bool hasAttrs = (tok & BinXmlToken.HasMoreDataFlag) != 0;
         pos++; // consume token
 
-        pos += 2; // depId
+        if (_insideTemplateBody)
+            pos += 2; // depId — present only in template body elements
         pos += 4; // dataSize
         uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
@@ -367,6 +381,39 @@ internal sealed partial class BinXmlParser
 
                 if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase)) break;
 
+                // Peek ahead: if the attribute content is a single optional substitution
+                // with null/empty value, omit the entire attribute
+                if ((pos < data.Length) &&
+                    ((data[pos] & ~BinXmlToken.HasMoreDataFlag) == BinXmlToken.OptionalSubstitution) &&
+                    (valueOffsets != null))
+                {
+                    int peekPos = pos + 1;
+                    ushort peekSubId = MemoryMarshal.Read<ushort>(data[peekPos..]);
+                    peekPos += 2;
+                    byte peekSubValType = data[peekPos];
+                    peekPos++;
+
+                    // Check what follows — if it's a break token, this is a single-sub attribute
+                    byte peekNext = peekPos < data.Length ? (byte)(data[peekPos] & ~BinXmlToken.HasMoreDataFlag) : BinXmlToken.Eof;
+                    bool isSingleSub = (peekNext == BinXmlToken.Eof) ||
+                                       (peekNext == BinXmlToken.CloseStartElement) ||
+                                       (peekNext == BinXmlToken.CloseEmptyElement) ||
+                                       (peekNext == BinXmlToken.EndElement) ||
+                                       (peekNext == BinXmlToken.Attribute);
+
+                    if (isSingleSub && (peekSubId < valueOffsets.Length))
+                    {
+                        byte valType = valueTypes![peekSubId];
+                        int valSize = valueSizes![peekSubId];
+                        if ((valType == BinXmlValueType.Null) || (valSize == 0))
+                        {
+                            // Skip the substitution token, omit the attribute entirely
+                            pos = peekPos;
+                            continue;
+                        }
+                    }
+                }
+
                 string attrName = ReadName(attrNameOff);
                 vsb.Append(' ');
                 vsb.Append(attrName);
@@ -379,7 +426,9 @@ internal sealed partial class BinXmlParser
         // Close token
         if (pos >= data.Length)
         {
-            vsb.Append("/>");
+            vsb.Append("></");
+            vsb.Append(elemName);
+            vsb.Append('>');
             return;
         }
 
@@ -387,7 +436,9 @@ internal sealed partial class BinXmlParser
         if (closeTok == BinXmlToken.CloseEmptyElement)
         {
             pos++;
-            vsb.Append("/>");
+            vsb.Append("></");
+            vsb.Append(elemName);
+            vsb.Append('>');
         }
         else if (closeTok == BinXmlToken.CloseStartElement)
         {
@@ -402,35 +453,10 @@ internal sealed partial class BinXmlParser
         }
         else
         {
-            vsb.Append("/>");
+            vsb.Append("></");
+            vsb.Append(elemName);
+            vsb.Append('>');
         }
-    }
-
-    /// <summary>
-    /// Parses a BinXml fragment: consumes the 4-byte fragment header (token + major + minor + flags)
-    /// then dispatches to either a TemplateInstance or a bare element.
-    /// A fragment may appear at the top level of a record or embedded via a BinXmlType (0x21)
-    /// substitution value, which contains a nested BinXml-encoded XML fragment or TemplateInstance.
-    /// The byte length of an embedded fragment includes up to and including its EOF token.
-    /// </summary>
-    /// <param name="data">The BinXml byte stream to parse.</param>
-    /// <param name="pos">Current read position within <paramref name="data"/>; advanced past the fragment on return.</param>
-    /// <param name="binxmlChunkBase">Chunk-relative offset of <paramref name="data"/>, used to resolve inline name structures.</param>
-    /// <param name="vsb">String builder that receives the rendered XML output.</param>
-    private void ParseFragment(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueStringBuilder vsb)
-    {
-        if (pos + 4 > data.Length) return;
-        pos += 4; // skip fragment header (token + major + minor + flags)
-
-        if (pos >= data.Length) return;
-
-        byte nextTok = data[pos];
-        byte nextBase = (byte)(nextTok & ~BinXmlToken.HasMoreDataFlag);
-
-        if (nextBase == BinXmlToken.TemplateInstance)
-            ParseTemplateInstance(data, ref pos, binxmlChunkBase, ref vsb);
-        else if (nextBase == BinXmlToken.OpenStartElement)
-            ParseElement(data, ref pos, null, null, null, binxmlChunkBase, ref vsb);
     }
 
     /// <summary>
@@ -477,7 +503,10 @@ internal sealed partial class BinXmlParser
             if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
                 tplPos += 4;
 
+            bool saved = _insideTemplateBody;
+            _insideTemplateBody = true;
             ParseContent(tplBody, ref tplPos, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, tplChunkBase, ref vsb);
+            _insideTemplateBody = saved;
         }
     }
 
@@ -581,10 +610,10 @@ internal sealed partial class BinXmlParser
 
         int numVals = (int)numValues;
 
-        // descriptor block
-        int descriptorBytes = numVals * 4;
-        ReadOnlySpan<byte> descBytes = data.Slice(p, descriptorBytes);
-        p += descriptorBytes;
+        // Descriptor block: numVals × 4-byte descriptors (u16 size + u8 type + u8 padding)
+        ReadOnlySpan<SubstitutionDescriptor> descriptors =
+            MemoryMarshal.Cast<byte, SubstitutionDescriptor>(data.Slice(p, numVals * 4));
+        p += numVals * 4;
 
         int[] valueOffsets = new int[numVals];
         int[] valueSizes = new int[numVals];
@@ -594,18 +623,13 @@ internal sealed partial class BinXmlParser
 
         for (int i = 0; i < numVals; i++)
         {
-            uint raw =
-                BinaryPrimitives.ReadUInt32LittleEndian(
-                    descBytes.Slice(i * 4, 4));
-
-            int size = (int)(raw & 0x00FFFFFF);
-            byte type = (byte)(raw >> 24);
+            SubstitutionDescriptor desc = descriptors[i];
 
             valueOffsets[i] = dataBaseFileOffset + p;
-            valueSizes[i] = size;
-            valueTypes[i] = type;
+            valueSizes[i] = desc.Size;
+            valueTypes[i] = desc.Type;
 
-            p += size;
+            p += desc.Size;
         }
 
         pos = p;
@@ -824,19 +848,22 @@ internal sealed partial class BinXmlParser
 
             case BinXmlValueType.HexInt32:
                 vsb.Append("0x");
-                vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes), "x8");
+                vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes), "x");
                 break;
 
             case BinXmlValueType.HexInt64:
                 vsb.Append("0x");
-                vsb.AppendFormatted(MemoryMarshal.Read<ulong>(valueBytes), "x16");
+                vsb.AppendFormatted(MemoryMarshal.Read<ulong>(valueBytes), "x");
                 break;
 
             case BinXmlValueType.BinXml:
             {
+                bool saved = _insideTemplateBody;
+                _insideTemplateBody = false;
                 int embeddedChunkBase = fileOffset - _chunkFileOffset;
                 int embeddedPos = 0;
-                ParseDocument(valueBytes, ref embeddedPos, embeddedChunkBase, ref vsb);
+                ParseTopLevel(valueBytes, ref embeddedPos, embeddedChunkBase, ref vsb);
+                _insideTemplateBody = saved;
                 break;
             }
 
@@ -871,7 +898,11 @@ internal sealed partial class BinXmlParser
                 int valSize = valueSizes[subId];
                 if (!compiled.IsOptional[i] || ((valType != BinXmlValueType.Null) && (valSize > 0)))
                 {
+                    if (compiled.AttrPrefix[i] != null)
+                        vsb.Append(compiled.AttrPrefix[i]);
                     WriteBinXmlValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
+                    if (compiled.AttrSuffix[i] != null)
+                        vsb.Append(compiled.AttrSuffix[i]);
                 }
             }
 
@@ -882,6 +913,14 @@ internal sealed partial class BinXmlParser
     #endregion
 
     #region Non-Public Fields
+
+    /// <summary>
+    /// True when parsing inside a template body (elements have 2-byte dependency IDs);
+    /// false at the top level or inside embedded BinXml (elements lack dependency IDs).
+    /// Save/restore around transitions: set true in ParseTemplateInstance fallback,
+    /// set false in WriteBinXmlValue(BinXml) for embedded fragments.
+    /// </summary>
+    private bool _insideTemplateBody;
 
     /// <summary>
     /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.

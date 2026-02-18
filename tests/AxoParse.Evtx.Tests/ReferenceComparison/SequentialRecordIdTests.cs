@@ -1,9 +1,9 @@
 using AxoParse.Evtx.Evtx;
 
-namespace AxoParse.Evtx.Tests.RustTestImitation;
+namespace AxoParse.Evtx.Tests.ReferenceComparison;
 
 /// <summary>
-/// Mirrors the Rust parser's inline test_parses_first_10_records test — verifies that
+/// Mirrors the reference parser's inline test_parses_first_10_records test — verifies that
 /// EventRecordId values are monotonically increasing (1, 2, 3, ...) within clean files.
 /// Divergence here means the parser is skipping, duplicating, or reordering records.
 /// </summary>
@@ -13,7 +13,7 @@ public class SequentialRecordIdTests(ITestOutputHelper testOutputHelper)
 
     /// <summary>
     /// Verifies record IDs 1..N are sequential in security.evtx (clean file, no gaps expected).
-    /// Mirrors Rust: assert_eq!(r.event_record_id, i as u64 + 1)
+    /// Mirrors reference: assert_eq!(r.event_record_id, i as u64 + 1)
     /// </summary>
     [Fact]
     public void SecurityEvtx_RecordIdsAreSequential()
@@ -23,7 +23,7 @@ public class SequentialRecordIdTests(ITestOutputHelper testOutputHelper)
 
     /// <summary>
     /// Verifies record IDs are sequential in the dirty security file (14,621 records).
-    /// The Rust parser unwraps every record — all must succeed and be sequential.
+    /// The reference parser unwraps every record — all must succeed and be sequential.
     /// </summary>
     [Fact]
     public void DirtySecurityEvtx_RecordIdsAreSequential()
@@ -75,7 +75,7 @@ public class SequentialRecordIdTests(ITestOutputHelper testOutputHelper)
 
     /// <summary>
     /// Verifies that record IDs within each individual chunk are contiguous (no internal gaps).
-    /// This matches the Rust inline test in evtx_parser.rs that validates per-chunk sequencing.
+    /// This matches the reference inline test in evtx_parser.rs that validates per-chunk sequencing.
     /// </summary>
     [Fact]
     public void SecurityEvtx_PerChunkRecordIdsAreContiguous()

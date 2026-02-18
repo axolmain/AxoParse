@@ -1,12 +1,12 @@
 using AxoParse.Evtx.Evtx;
 
-namespace AxoParse.Evtx.Tests.RustTestImitation;
+namespace AxoParse.Evtx.Tests.ReferenceComparison;
 
 /// <summary>
-/// Mirrors the Rust parser's test_full_samples.rs — parses each sample file and asserts record counts.
-/// For clean files: exact match with Rust's expected values.
-/// For corrupt files (bad checksum/magic): AxoParse recovers more records than Rust, so we assert
-/// at-least-Rust-count. The extra records are validated in RecoveredRecordValidationTests.
+/// Mirrors the reference parser's test_full_samples.rs — parses each sample file and asserts record counts.
+/// For clean files: exact match with the reference parser's expected values.
+/// For corrupt files (bad checksum/magic): AxoParse recovers more records than the reference parser, so we assert
+/// at-least-reference-count. The extra records are validated in RecoveredRecordValidationTests.
 /// </summary>
 public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
 {
@@ -40,7 +40,7 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Mirrors test_dirty_sample_with_a_bad_checksum: Rust gets 1,910 ok + 4 errors.
+    /// Mirrors test_dirty_sample_with_a_bad_checksum: Reference parser gets 1,910 ok + 4 errors.
     /// AxoParse recovers more records from bad-checksum chunks (validated in RecoveredRecordValidationTests).
     /// </summary>
     [Fact]
@@ -52,7 +52,7 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Mirrors test_dirty_sample_with_a_bad_checksum_2: Rust gets 1,774 ok + 2 errors.
+    /// Mirrors test_dirty_sample_with_a_bad_checksum_2: Reference parser gets 1,774 ok + 2 errors.
     /// AxoParse recovers more records from bad-checksum chunks (validated in RecoveredRecordValidationTests).
     /// </summary>
     [Fact]
@@ -73,7 +73,7 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Mirrors test_dirty_sample_with_a_bad_chunk_magic: Rust gets 270 ok + 2 errors.
+    /// Mirrors test_dirty_sample_with_a_bad_chunk_magic: Reference parser gets 270 ok + 2 errors.
     /// AxoParse recovers more records from bad-magic chunks (validated in RecoveredRecordValidationTests).
     /// </summary>
     [Fact]
@@ -161,8 +161,8 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Greedy recovery variant of Rust's test_sample_with_zero_data_size_event.
-    /// Rust stops scanning a chunk on the first zero-data-size record (336 total).
+    /// Greedy recovery variant of the reference parser's test_sample_with_zero_data_size_event.
+    /// The reference parser stops scanning a chunk on the first zero-data-size record (336 total).
     /// We skip bad records and keep scanning, recovering 449 valid records from the same file.
     /// </summary>
     [Fact]
@@ -186,8 +186,8 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
         testOutputHelper.WriteLine(
             $"[sample-with-zero-data-size-event.evtx] ok={okCount}, err={errCount}, total={total}");
 
-        // Greedy recovery finds more records than Rust's 336 (Rust stops chunk on first bad record)
-        Assert.True(total >= 336, $"Expected at least 336 records (Rust baseline) but got {total}");
+        // Greedy recovery finds more records than the reference parser's 336 (The reference parser stops chunk on first bad record)
+        Assert.True(total >= 336, $"Expected at least 336 records (reference baseline) but got {total}");
         Assert.Equal(449, okCount);
     }
 
@@ -197,10 +197,10 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
 
     /// <summary>
     /// Asserts that the parser recovers at least <paramref name="minOk"/> records.
-    /// Used for corrupt files where AxoParse's recovery mode finds more records than the Rust parser.
+    /// Used for corrupt files where AxoParse's recovery mode finds more records than the reference parser.
     /// </summary>
     /// <param name="fileName">File name relative to the test data directory.</param>
-    /// <param name="minOk">Minimum number of successfully rendered records (Rust parser's count).</param>
+    /// <param name="minOk">Minimum number of successfully rendered records (reference parser's count).</param>
     /// <param name="maxThreads">Thread count (1 = single-threaded, 0 = all cores).</param>
     private void AssertRecordCountAtLeast(string fileName, int minOk, int maxThreads = 1)
     {
@@ -219,14 +219,14 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
         }
 
         testOutputHelper.WriteLine(
-            $"[{fileName}] ok={okCount}, err={errCount} (Rust baseline: {minOk} ok)");
+            $"[{fileName}] ok={okCount}, err={errCount} (reference baseline: {minOk} ok)");
 
         Assert.True(okCount >= minOk,
-            $"Expected at least {minOk} ok records (Rust baseline) but got {okCount}");
+            $"Expected at least {minOk} ok records (reference baseline) but got {okCount}");
     }
 
     /// <summary>
-    /// Core assertion helper mirroring the Rust test_full_sample() function.
+    /// Core assertion helper mirroring the reference test_full_sample() function.
     /// Parses the file and counts successful vs failed event renders.
     /// </summary>
     /// <param name="fileName">File name relative to the test data directory.</param>

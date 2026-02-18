@@ -24,7 +24,7 @@ internal static class BinXmlValueFormatter
         long ticks = MemoryMarshal.Read<long>(valueBytes);
         if (ticks == 0) return false;
         DateTime dt = new DateTime(ticks + FileTimeEpochDelta, DateTimeKind.Utc);
-        vsb.AppendFormatted(dt, "yyyy-MM-dd'T'HH:mm:ss.fffffff'Z'");
+        vsb.AppendFormatted(dt, "yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'");
         return true;
     }
 
@@ -226,7 +226,8 @@ internal static class BinXmlValueFormatter
     }
 
     /// <summary>
-    /// Formats a 16-byte GUID in braced lowercase hex format: {xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}.
+    /// Formats a 16-byte GUID in uppercase hex without braces: XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX.
+    /// Matches the Rust winstructs::Guid Display format.
     /// First three components (Data1/Data2/Data3) are little-endian; last 8 bytes are big-endian.
     /// </summary>
     /// <param name="b">16-byte span containing the raw GUID.</param>
@@ -237,7 +238,6 @@ internal static class BinXmlValueFormatter
         ushort d2 = MemoryMarshal.Read<ushort>(b[4..]);
         ushort d3 = MemoryMarshal.Read<ushort>(b[6..]);
 
-        vsb.Append('{');
         vsb.AppendFormatted(d1, "X8");
         vsb.Append('-');
         vsb.AppendFormatted(d2, "X4");
@@ -246,14 +246,13 @@ internal static class BinXmlValueFormatter
         vsb.Append('-');
         vsb.Append(HexLookup[b[8]]);
         vsb.Append(HexLookup[b[9]]);
+        vsb.Append('-');
         vsb.Append(HexLookup[b[10]]);
         vsb.Append(HexLookup[b[11]]);
-        vsb.Append('-');
         vsb.Append(HexLookup[b[12]]);
         vsb.Append(HexLookup[b[13]]);
         vsb.Append(HexLookup[b[14]]);
         vsb.Append(HexLookup[b[15]]);
-        vsb.Append('}');
     }
 
     /// <summary>
@@ -367,6 +366,7 @@ internal static class BinXmlValueFormatter
             table[i] = i.ToString("X2");
         return table;
     }
+
 
     #endregion
 

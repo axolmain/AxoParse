@@ -1,12 +1,12 @@
 using AxoParse.Evtx.Evtx;
 
-namespace AxoParse.Evtx.Tests.RustTestImitation;
+namespace AxoParse.Evtx.Tests.ReferenceComparison;
 
 /// <summary>
-/// Proves that records recovered by AxoParse beyond what the Rust parser finds are legitimate
+/// Proves that records recovered by AxoParse beyond what the reference parser finds are legitimate
 /// Windows events — not garbage from corrupted chunks. For each file where we recover more
-/// records than Rust, we:
-///   1. Identify the extra record IDs (ones Rust skips)
+/// records than the reference parser, we:
+///   1. Identify the extra record IDs (ones the reference parser skips)
 ///   2. Verify each extra produces well-formed XML with required Event fields
 ///   3. Verify timestamps are plausible (within range of surrounding records)
 ///   4. Verify record IDs are contiguous within recovered chunks
@@ -16,85 +16,85 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     #region Public Methods
 
     // ── sample_with_a_bad_chunk_magic.evtx ──────────────────────────────────
-    // Rust: 270 records across 3 contiguous ranges
-    // AxoParse: 298 records — recovers 28 extra from chunks Rust rejects
+    // Reference: 270 records across 3 contiguous ranges
+    // AxoParse: 298 records — recovers 28 extra from chunks the reference parser rejects
 
     /// <summary>
-    /// Verifies that AxoParse recovers a strict superset of Rust's records for the bad chunk
-    /// magic file — every record ID Rust finds, we also find.
+    /// Verifies that AxoParse recovers a strict superset of the reference parser's records for the bad chunk
+    /// magic file — every record ID the reference parser finds, we also find.
     /// </summary>
     [Fact]
-    public void BadChunkMagic_ContainsAllRustRecords()
+    public void BadChunkMagic_ContainsAllReferenceRecords()
     {
-        HashSet<ulong> rustIds = BuildIdSet(RustBadMagicRanges);
+        HashSet<ulong> referenceIds = BuildIdSet(ReferenceBadMagicRanges);
         HashSet<ulong> dotnetIds = GetAllRecordIds("sample_with_a_bad_chunk_magic.evtx");
 
         List<ulong> missing = [];
-        foreach (ulong id in rustIds)
+        foreach (ulong id in referenceIds)
         {
             if (!dotnetIds.Contains(id))
                 missing.Add(id);
         }
 
         if (missing.Count > 0)
-            testOutputHelper.WriteLine($"Missing Rust IDs: {string.Join(", ", missing)}");
+            testOutputHelper.WriteLine($"Missing reference IDs: {string.Join(", ", missing)}");
 
         Assert.Empty(missing);
         testOutputHelper.WriteLine(
-            $"[bad_chunk_magic] AxoParse finds {dotnetIds.Count} records (Rust: {rustIds.Count}), superset confirmed");
+            $"[bad_chunk_magic] AxoParse finds {dotnetIds.Count} records (reference: {referenceIds.Count}), superset confirmed");
     }
 
     /// <summary>
-    /// Validates every extra record (not in Rust output) is a well-formed Windows event.
+    /// Validates every extra record (not in reference output) is a well-formed Windows event.
     /// </summary>
     [Fact]
     public void BadChunkMagic_ExtraRecordsAreWellFormedEvents()
     {
         AssertExtrasAreWellFormed(
             "sample_with_a_bad_chunk_magic.evtx",
-            RustBadMagicRanges,
+            ReferenceBadMagicRanges,
             "bad_chunk_magic");
     }
 
     /// <summary>
-    /// Validates extra record timestamps are plausible — within the time range of Rust-verified records.
+    /// Validates extra record timestamps are plausible — within the time range of reference-verified records.
     /// </summary>
     [Fact]
     public void BadChunkMagic_ExtraRecordTimestampsArePlausible()
     {
         AssertExtraTimestampsPlausible(
             "sample_with_a_bad_chunk_magic.evtx",
-            RustBadMagicRanges,
+            ReferenceBadMagicRanges,
             "bad_chunk_magic");
     }
 
     // ── 2-vss_0-...-TerminalServices-RemoteConnectionManager%4Operational.evtx ──
-    // Rust: 1774 records (12 contiguous ranges)
+    // Reference: 1774 records (12 contiguous ranges)
     // AxoParse: 1795 records — recovers 21 extra
 
     /// <summary>
-    /// Verifies AxoParse recovers a strict superset of Rust's records for the bad checksum 2 file.
+    /// Verifies AxoParse recovers a strict superset of the reference parser's records for the bad checksum 2 file.
     /// </summary>
     [Fact]
-    public void BadChecksum2_ContainsAllRustRecords()
+    public void BadChecksum2_ContainsAllReferenceRecords()
     {
-        HashSet<ulong> rustIds = BuildIdSet(RustBadChecksum2Ranges);
+        HashSet<ulong> referenceIds = BuildIdSet(ReferenceBadChecksum2Ranges);
         HashSet<ulong> dotnetIds = GetAllRecordIds(
             "2-vss_0-Microsoft-Windows-TerminalServices-RemoteConnectionManager%4Operational.evtx");
 
         List<ulong> missing = [];
-        foreach (ulong id in rustIds)
+        foreach (ulong id in referenceIds)
         {
             if (!dotnetIds.Contains(id))
                 missing.Add(id);
         }
 
         if (missing.Count > 0)
-            testOutputHelper.WriteLine($"Missing Rust IDs: {string.Join(", ", missing)}");
+            testOutputHelper.WriteLine($"Missing reference IDs: {string.Join(", ", missing)}");
 
         Assert.Empty(missing);
         testOutputHelper.WriteLine(
-            $"[bad_checksum_2] AxoParse finds {dotnetIds.Count} records (Rust: {rustIds.Count}), superset confirmed");
+            $"[bad_checksum_2] AxoParse finds {dotnetIds.Count} records (reference: {referenceIds.Count}), superset confirmed");
     }
 
     /// <summary>
@@ -105,7 +105,7 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     {
         AssertExtrasAreWellFormed(
             "2-vss_0-Microsoft-Windows-TerminalServices-RemoteConnectionManager%4Operational.evtx",
-            RustBadChecksum2Ranges,
+            ReferenceBadChecksum2Ranges,
             "bad_checksum_2");
     }
 
@@ -117,37 +117,37 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     {
         AssertExtraTimestampsPlausible(
             "2-vss_0-Microsoft-Windows-TerminalServices-RemoteConnectionManager%4Operational.evtx",
-            RustBadChecksum2Ranges,
+            ReferenceBadChecksum2Ranges,
             "bad_checksum_2");
     }
 
     // ── 2-vss_0-...-RdpCoreTS%4Operational.evtx ────────────────────────────
-    // Rust: 1910 records (11 contiguous ranges)
+    // Reference: 1910 records (11 contiguous ranges)
     // AxoParse: more — recovers extras from bad-checksum chunks
 
     /// <summary>
-    /// Verifies AxoParse recovers a strict superset of Rust's records for the bad checksum 1 file.
+    /// Verifies AxoParse recovers a strict superset of the reference parser's records for the bad checksum 1 file.
     /// </summary>
     [Fact]
-    public void BadChecksum1_ContainsAllRustRecords()
+    public void BadChecksum1_ContainsAllReferenceRecords()
     {
-        HashSet<ulong> rustIds = BuildIdSet(RustBadChecksum1Ranges);
+        HashSet<ulong> referenceIds = BuildIdSet(ReferenceBadChecksum1Ranges);
         HashSet<ulong> dotnetIds = GetAllRecordIds(
             "2-vss_0-Microsoft-Windows-RemoteDesktopServices-RdpCoreTS%4Operational.evtx");
 
         List<ulong> missing = [];
-        foreach (ulong id in rustIds)
+        foreach (ulong id in referenceIds)
         {
             if (!dotnetIds.Contains(id))
                 missing.Add(id);
         }
 
         if (missing.Count > 0)
-            testOutputHelper.WriteLine($"Missing Rust IDs: {string.Join(", ", missing)}");
+            testOutputHelper.WriteLine($"Missing reference IDs: {string.Join(", ", missing)}");
 
         Assert.Empty(missing);
         testOutputHelper.WriteLine(
-            $"[bad_checksum_1] AxoParse finds {dotnetIds.Count} records (Rust: {rustIds.Count}), superset confirmed");
+            $"[bad_checksum_1] AxoParse finds {dotnetIds.Count} records (reference: {referenceIds.Count}), superset confirmed");
     }
 
     /// <summary>
@@ -158,7 +158,7 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     {
         AssertExtrasAreWellFormed(
             "2-vss_0-Microsoft-Windows-RemoteDesktopServices-RdpCoreTS%4Operational.evtx",
-            RustBadChecksum1Ranges,
+            ReferenceBadChecksum1Ranges,
             "bad_checksum_1");
     }
 
@@ -170,7 +170,7 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     {
         AssertExtraTimestampsPlausible(
             "2-vss_0-Microsoft-Windows-RemoteDesktopServices-RdpCoreTS%4Operational.evtx",
-            RustBadChecksum1Ranges,
+            ReferenceBadChecksum1Ranges,
             "bad_checksum_1");
     }
 
@@ -198,13 +198,13 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Validates that every record ID our parser finds beyond Rust's set produces valid XML
+    /// Validates that every record ID our parser finds beyond the reference set produces valid XML
     /// containing the mandatory Windows Event Log structure.
     /// </summary>
     private void AssertExtrasAreWellFormed(
-        string fileName, (ulong Start, ulong End)[] rustRanges, string label)
+        string fileName, (ulong Start, ulong End)[] referenceRanges, string label)
     {
-        HashSet<ulong> rustIds = BuildIdSet(rustRanges);
+        HashSet<ulong> referenceIds = BuildIdSet(referenceRanges);
 
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
@@ -213,7 +213,7 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
         int extraCount = 0;
         foreach (EvtxEvent evt in parser.GetEvents())
         {
-            if (!evt.IsSuccess || rustIds.Contains(evt.Record.EventRecordId))
+            if (!evt.IsSuccess || referenceIds.Contains(evt.Record.EventRecordId))
                 continue;
 
             ulong id = evt.Record.EventRecordId;
@@ -251,15 +251,15 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     /// A record with a garbage timestamp (year 1601, year 9999, etc.) indicates corrupted data.
     /// </summary>
     private void AssertExtraTimestampsPlausible(
-        string fileName, (ulong Start, ulong End)[] rustRanges, string label)
+        string fileName, (ulong Start, ulong End)[] referenceRanges, string label)
     {
-        HashSet<ulong> rustIds = BuildIdSet(rustRanges);
+        HashSet<ulong> referenceIds = BuildIdSet(referenceRanges);
 
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
         EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
 
-        // First pass: collect min/max timestamps from Rust-verified records
+        // First pass: collect min/max timestamps from reference-verified records
         DateTime minTime = DateTime.MaxValue;
         DateTime maxTime = DateTime.MinValue;
         List<EvtxEvent> extraEvents = [];
@@ -270,7 +270,7 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
                 continue;
 
             DateTime ts = evt.Record.WrittenTimeUtc;
-            if (rustIds.Contains(evt.Record.EventRecordId))
+            if (referenceIds.Contains(evt.Record.EventRecordId))
             {
                 if (ts < minTime) minTime = ts;
                 if (ts > maxTime) maxTime = ts;
@@ -282,9 +282,9 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
         }
 
         testOutputHelper.WriteLine(
-            $"[{label}] Rust time range: {minTime:O} — {maxTime:O}");
+            $"[{label}] Reference time range: {minTime:O} — {maxTime:O}");
 
-        // Allow 24h tolerance beyond the Rust-verified range
+        // Allow 24h tolerance beyond the reference-verified range
         DateTime lowerBound = minTime.AddDays(-1);
         DateTime upperBound = maxTime.AddDays(1);
 
@@ -304,7 +304,7 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Builds a HashSet of all record IDs from the Rust parser's contiguous ranges.
+    /// Builds a HashSet of all record IDs from the reference parser's contiguous record ID ranges.
     /// </summary>
     private static HashSet<ulong> BuildIdSet((ulong Start, ulong End)[] ranges)
     {
@@ -322,10 +322,10 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     #region Non-Public Fields
 
     /// <summary>
-    /// Contiguous record ID ranges the Rust evtx_dump binary produces for
+    /// Contiguous record ID ranges the reference evtx_dump binary produces for
     /// sample_with_a_bad_chunk_magic.evtx (270 records total).
     /// </summary>
-    private static readonly (ulong Start, ulong End)[] RustBadMagicRanges =
+    private static readonly (ulong Start, ulong End)[] ReferenceBadMagicRanges =
     [
         (45691, 45933), // 243 records
         (46728, 46741), //  14 records
@@ -333,10 +333,10 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     ];
 
     /// <summary>
-    /// Contiguous record ID ranges the Rust evtx_dump binary produces for
+    /// Contiguous record ID ranges the reference evtx_dump binary produces for
     /// 2-vss_0-...-TerminalServices-RemoteConnectionManager%4Operational.evtx (1,774 records total).
     /// </summary>
-    private static readonly (ulong Start, ulong End)[] RustBadChecksum2Ranges =
+    private static readonly (ulong Start, ulong End)[] ReferenceBadChecksum2Ranges =
     [
         (352106, 352135), //  30 records
         (352202, 352210), //   9 records
@@ -353,10 +353,10 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     ];
 
     /// <summary>
-    /// Contiguous record ID ranges the Rust evtx_dump binary produces for
+    /// Contiguous record ID ranges the reference evtx_dump binary produces for
     /// 2-vss_0-...-RdpCoreTS%4Operational.evtx (1,910 records total).
     /// </summary>
-    private static readonly (ulong Start, ulong End)[] RustBadChecksum1Ranges =
+    private static readonly (ulong Start, ulong End)[] ReferenceBadChecksum1Ranges =
     [
         (5281368, 5281496), // 129 records
         (5734858, 5734986), // 129 records

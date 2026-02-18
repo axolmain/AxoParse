@@ -40,7 +40,12 @@ internal static class WevtTemplateCompiler
         if (bail)
             return null;
 
-        return new CompiledTemplate(parts.ToArray(), subIds.ToArray(), isOptional.ToArray());
+        string[] partsArr = parts.ToArray();
+        int[] subIdsArr = subIds.ToArray();
+        bool[] isOptionalArr = isOptional.ToArray();
+        string?[] attrPrefix = new string?[subIdsArr.Length];
+        string?[] attrSuffix = new string?[subIdsArr.Length];
+        return new CompiledTemplate(partsArr, subIdsArr, isOptionalArr, attrPrefix, attrSuffix);
     }
 
     /// <summary>

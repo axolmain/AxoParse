@@ -73,9 +73,10 @@ public readonly record struct EvtxRecord(
         if ((header.Size < 28) || (header.Size > (uint)data.Length))
             return null;
 
-        // Trailing size copy must match header size (EVTX integrity check)
+        // Trailing size copy: reject if non-zero AND mismatched (corruption).
+        // Accept zero trailing size — indicates an incomplete write (record data may still be valid).
         uint sizeCopy = MemoryMarshal.Read<uint>(data[(int)(header.Size - 4)..]);
-        if (sizeCopy != header.Size)
+        if ((sizeCopy != 0) && (sizeCopy != header.Size))
             return null;
 
         int eventDataLength = (int)(header.Size - 28);
