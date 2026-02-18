@@ -121,6 +121,86 @@ public class SnapshotComparisonTests(ITestOutputHelper testOutputHelper)
         testOutputHelper.WriteLine("[CAPI2 record 1] All UserData fields match reference output");
     }
 
+    /// <summary>
+    /// Verifies SizeT values render as minimal hex (0x244) not zero-padded (0x00000244).
+    /// Record 51 in Security_with_size_t.evtx has ProcessId as a SizeT field.
+    /// Verified against wevtutil output: ProcessId should be "0x244".
+    /// </summary>
+    [Fact]
+    public void SecurityWithSizeT_Record51_SizeTRendersMinimalHex()
+    {
+        string xml = GetRecordXml("Security_with_size_t.evtx", recordId: 51);
+
+        Assert.Contains("<Data Name=\"ProcessId\">0x244</Data>", xml);
+        Assert.DoesNotContain("0x00000244", xml);
+
+        testOutputHelper.WriteLine("[Security_with_size_t record 51] SizeT renders as minimal hex");
+    }
+
+    /// <summary>
+    /// Verifies FILETIME timestamps render with 7 fractional digits (100-ns precision).
+    /// Confirmed against wevtutil: "2016-10-06T01:00:46.8440779Z" for record 227597.
+    /// </summary>
+    [Fact]
+    public void SecurityBigSample_FileTimeHas7FractionalDigits()
+    {
+        string xml = GetRecordXml("security_big_sample.evtx", recordId: 227597);
+
+        // 7 fractional digits followed by Z — no more, no fewer
+        Assert.Matches(@"SystemTime=""\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z""", xml);
+
+        testOutputHelper.WriteLine("[security_big_sample record 227597] FILETIME has 7 fractional digits");
+    }
+
+    /// <summary>
+    /// Verifies old-style events with a Binary element and unnamed Data element render both.
+    /// Record 428 in Application_no_crc32.evtx has Binary=D9060000 and Data=WSearch.
+    /// </summary>
+    [Fact]
+    public void ApplicationNoCrc32_Record428_HasBinaryAndUnnamedData()
+    {
+        string xml = GetRecordXml("Application_no_crc32.evtx", recordId: 428);
+
+        Assert.Contains("<EventData>", xml);
+        Assert.Contains(">WSearch", xml);
+        Assert.Contains("<Binary>", xml);
+        Assert.Contains("<EventID Qualifiers=\"32768\">6000</EventID>", xml);
+        Assert.Contains("EventSourceName=\"Wlclntfy\"", xml);
+
+        testOutputHelper.WriteLine("[Application_no_crc32 record 428] Old-style event with Binary and unnamed Data");
+    }
+
+    /// <summary>
+    /// Verifies forwarded events render correctly — Archive-ForwardedEvents includes
+    /// events forwarded from remote machines with RenderingInfo context.
+    /// </summary>
+    [Fact]
+    public void ForwardedEvents_FirstRecord_ParsesSuccessfully()
+    {
+        string xml = GetFirstRecordXml("Archive-ForwardedEvents-test.evtx");
+
+        Assert.Contains("<Channel>Security</Channel>", xml);
+        Assert.Contains("<EventData>", xml);
+
+        testOutputHelper.WriteLine("[ForwardedEvents] First forwarded event parses successfully");
+    }
+
+    /// <summary>
+    /// Verifies events with irregular bool values parse without error.
+    /// The sample file contains non-standard bool representations.
+    /// </summary>
+    [Fact]
+    public void IrregularBoolValues_FirstRecord_ParsesSuccessfully()
+    {
+        string xml = GetFirstRecordXml("sample-with-irregular-bool-values.evtx");
+
+        Assert.NotEmpty(xml);
+        Assert.Contains("<Event xmlns=", xml);
+        Assert.Contains("<System>", xml);
+
+        testOutputHelper.WriteLine("[irregular-bool] First record parses successfully");
+    }
+
     #endregion
 
     #region Non-Public Methods
