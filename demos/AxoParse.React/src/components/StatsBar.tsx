@@ -1,5 +1,5 @@
 import type {ReactNode} from 'react'
-import {ActionIcon, Badge, Group, Text, Tooltip} from '@mantine/core'
+import {ActionIcon, Badge, Group, Paper, Text, Tooltip} from '@mantine/core'
 import type {FileSession} from '../types'
 
 interface StatsBarProps {
@@ -42,11 +42,8 @@ export function StatsBar({
     const multiFile = files && files.length > 1
 
     return (
-        <Group gap="lg" py="xs" px="sm" style={{
-            flexShrink: 0,
-            background: 'var(--mantine-color-gray-0)',
-            borderRadius: 'var(--mantine-radius-sm)'
-        }}>
+        <Paper p="xs" radius="sm" withBorder style={{flexShrink: 0}}>
+            <Group gap="lg">
             {fileName && <Text size="sm"><Text span fw={600}>File:</Text> {fileName}</Text>}
             <Text size="sm">
                 <Text span fw={600}>Records:</Text> {totalRecords.toLocaleString()}
@@ -99,5 +96,6 @@ export function StatsBar({
                 </ActionIcon>
             </Tooltip>
         </Group>
+        </Paper>
     )
 }

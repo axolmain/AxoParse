@@ -1,5 +1,5 @@
 import {useCallback} from 'react'
-import {ActionIcon, Button, Drawer, Group, Stack, Text, TextInput} from '@mantine/core'
+import {ActionIcon, Button, Drawer, Group, Paper, Stack, Text, TextInput} from '@mantine/core'
 import type {Bookmark} from '../lib/bookmarks'
 
 interface BookmarksPanelProps {
@@ -35,31 +35,29 @@ export function BookmarksPanel({
                 )}
 
                 {entries.map((b) => (
-                    <Group key={b.key} gap="xs" align="flex-start" wrap="nowrap" style={{
-                        padding: 'var(--mantine-spacing-xs)',
-                        borderRadius: 'var(--mantine-radius-sm)',
-                        background: 'var(--mantine-color-gray-0)',
-                    }}>
-                        <Stack gap={2} style={{flex: 1}}>
-                            <Text size="xs" c="dimmed">
-                                Chunk {b.chunkIndex} / Record {b.recordIndexInChunk}
-                            </Text>
-                            <TextInput
-                                placeholder="Add a note..."
-                                value={b.note}
-                                onChange={(e) => onSetNote(b.key, e.currentTarget.value)}
-                                size="xs"
-                            />
-                        </Stack>
-                        <ActionIcon
-                            variant="subtle"
-                            color="red"
-                            size="sm"
-                            onClick={() => onRemove(b.key)}
-                        >
-                            x
-                        </ActionIcon>
-                    </Group>
+                    <Paper key={b.key} p="xs" radius="sm" withBorder>
+                        <Group gap="xs" align="flex-start" wrap="nowrap">
+                            <Stack gap={2} style={{flex: 1}}>
+                                <Text size="xs" c="dimmed">
+                                    Chunk {b.chunkIndex} / Record {b.recordIndexInChunk}
+                                </Text>
+                                <TextInput
+                                    placeholder="Add a note..."
+                                    value={b.note}
+                                    onChange={(e) => onSetNote(b.key, e.currentTarget.value)}
+                                    size="xs"
+                                />
+                            </Stack>
+                            <ActionIcon
+                                variant="subtle"
+                                color="red"
+                                size="sm"
+                                onClick={() => onRemove(b.key)}
+                            >
+                                x
+                            </ActionIcon>
+                        </Group>
+                    </Paper>
                 ))}
 
                 {entries.length > 0 && (

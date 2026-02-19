@@ -2,7 +2,7 @@
 
 ```
 EVTX File bytes
- → EvtxFileHeader (4096 bytes)
+ → EvtxFileHeader (128-byte struct; first 4096 bytes reserved on disk)
  → EvtxChunk[] (64KB each, parsed in parallel)
    → EvtxRecord[] (binary records within each chunk)
      → BinXmlParser (binary XML tokens → XML string)
@@ -23,7 +23,8 @@ Runs in 4 phases:
 
 1. **Sequential scan** (lines 87-114): walks 64KB-aligned regions after the header, checks for `"ElfChnk\0"` magic,
    optionally validates CRC32 checksums. Collects valid chunk offsets into an `int[]`.
-2. **Parallel chunk parse** (lines 116-174): `Parallel.For` with thread-local `Dictionary<Guid, CompiledTemplate?>`
+2. **Parallel chunk parse** (lines 116-174): optionally pre-populates the compiled template cache from a `WevtCache`
+   (offline provider PE binaries), then runs `Parallel.For` with thread-local `Dictionary<Guid, CompiledTemplate?>`
    caches (avoids lock contention). Each thread calls `EvtxChunk.Parse()`. After threads finish, local caches merge into
    a shared `ConcurrentDictionary` via `TryAdd`.
 3. **Aggregate** (lines 176-184): collects chunks and sums record counts.
@@ -35,9 +36,12 @@ Runs in 4 phases:
 Each 64KB chunk is self-contained:
 
 - **Chunk header** (512 bytes): `EvtxChunkHeader` provides `FreeSpaceOffset` (scan boundary) and record ID ranges.
-- **Template preload**: A 32-entry chained hash table at chunk offset 384 stores pointers to `BinXmlTemplateDefinition`
-  structs. `PreloadFromChunk()` follows each chain, reading `{NextPtr, Guid, DataSize}` per template. Result:
+- **Template preload**: A 32-entry hash table at chunk offset 384 stores 4-byte pointers to `BinXmlTemplateDefinition`
+  structs elsewhere in the chunk. `PreloadFromChunk()` follows each pointer and walks the linked list chain
+  (`NextTemplateOffset`), reading `{NextPtr, Guid, DataSize}` per template. Result:
   `Dictionary<uint, BinXmlTemplateDefinition>` keyed by chunk-relative offset.
+- **Name cache**: A 64-entry common string offset table at chunk offset 128 pre-populates `BinXmlParser._nameCache` —
+  avoids re-reading frequently used element/attribute names from the chunk body.
 - **Record walk**: `ReadRecords()` scans from byte 512 to `FreeSpaceOffset`, looking for the 4-byte `0x00002A2A` record
   magic. Each match calls `EvtxRecord.ParseEvtxRecord()`.
 
@@ -71,12 +75,15 @@ numbered substitution slots:
 
 1. `ReadTemplateInstanceData()` parses the template reference:
     - Reads `defDataOffset` (chunk-relative pointer to template definition)
-    - Reads `numValues` and `numValues × SubstitutionDescriptor` (each: `ushort Size`, `byte Type`)
+   - Reads `numValues` and `numValues × SubstitutionDescriptor` (each: `ushort Size`, `byte Type`, `byte Padding` = 4
+     bytes)
     - Computes file offsets for each substitution value
 2. Cache lookup by template GUID:
     - **Cache miss** → `CompileTemplate()` walks the template body tokens and produces a `CompiledTemplate`: parallel
-      arrays `Parts[N+1]` (static XML fragments) and `Slots[N]` (substitution indices + metadata) in a zipper pattern.
-    - **Cache hit** → `WriteCompiled()` — the fast path.
+      arrays `Parts[N+1]` (static XML fragments) and `Slots[N]` (`SubSlot` structs with `SubId`, `IsOptional`,
+      `AttrPrefix`, `AttrSuffix`) in a zipper pattern. Returns `null` if the template contains unsupported tokens.
+    - **Cache hit (non-null)** → `WriteCompiled()` — the fast path.
+    - **Cache hit (null)** → template previously failed compilation; falls back to full `ParseContent` tree-walk.
 3. `WriteCompiled()` — the innermost hot loop:
    ```
    Parts[0] + value(Slots[0]) + Parts[1] + value(Slots[1]) + ... + Parts[N]
@@ -89,7 +96,7 @@ numbered substitution slots:
 - **FileTime**: custom tick arithmetic → `yyyy-MM-ddTHH:mm:ss.fffffffZ` (no `DateTime` allocation)
 - **GUID**: custom formatting with LE/BE byte reordering
 - **SID**: `S-1-5-...` SDDL form
-- **Integers/Hex**: `BinaryPrimitives.Read*` + direct formatting
+- **Integers/Hex**: `MemoryMarshal.Read<T>` + direct formatting
 - **Nested BinXml** (type `0x21`): recursive `ParseTopLevel()` call
 
 ## Stage 6 — Event Surfacing
@@ -98,7 +105,7 @@ numbered substitution slots:
 them into an `EvtxEvent` record struct:
 
 ```csharp
-EvtxEvent(Record: records[i], Xml: parsedXml[i], Diagnostic: ...)
+EvtxEvent(Record: records[i], Xml: parsedXml[i], Json: ReadOnlyMemory<byte>.Empty, Diagnostic: ...)
 ```
 
 `EvtxParser.GetEvents()` lazily yields all events across all chunks.

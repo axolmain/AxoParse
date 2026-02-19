@@ -1,7 +1,7 @@
 import {useMemo} from 'react'
 import type {RecordMeta} from '../types'
 import {LEVEL_CONFIG} from '../lib/level-colors'
-import {BucketResult, bucketTimestamps} from '../lib/time-buckets'
+import {bucketByDay, BucketResult, bucketTimestamps} from '../lib/time-buckets'
 
 export interface DashboardStats {
     eventIdFrequency: Array<{ eventId: string; count: number }>
@@ -52,8 +52,9 @@ export function useDashboardStats(
             .sort((a, b) => b.count - a.count)
             .slice(0, 15)
 
-        const domain = zoomDomain ?? undefined
-        const timeBuckets = bucketTimestamps(timestamps, BUCKET_COUNT, domain)
+        const timeBuckets = zoomDomain
+            ? bucketTimestamps(timestamps, BUCKET_COUNT, zoomDomain)
+            : bucketByDay(timestamps)
 
         return {eventIdFrequency, levelDistribution, providerDistribution, timeBuckets, timestamps}
     }, [records, zoomDomain])

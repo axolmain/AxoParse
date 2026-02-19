@@ -2,6 +2,7 @@ export interface FilterState {
     eventIds: string[]
     levels: number[]
     provider: string | null
+    computer: string | null
     channel: string | null
     timeRange: [Date | null, Date | null]
     textSearch: string
@@ -14,6 +15,7 @@ export const EMPTY_FILTERS: FilterState = {
     eventIds: [],
     levels: [],
     provider: null,
+    computer: null,
     channel: null,
     timeRange: [null, null],
     textSearch: '',
@@ -27,6 +29,7 @@ export function activeFilterCount(filters: FilterState): number {
     if (filters.eventIds.length > 0) count++
     if (filters.levels.length > 0) count++
     if (filters.provider !== null) count++
+    if (filters.computer !== null) count++
     if (filters.channel !== null) count++
     if (filters.timeRange[0] !== null || filters.timeRange[1] !== null) count++
     if (filters.textSearch.length > 0) count++

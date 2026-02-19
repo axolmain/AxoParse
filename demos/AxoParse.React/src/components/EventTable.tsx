@@ -12,14 +12,14 @@ import {
 } from '@tanstack/react-table'
 import {useVirtualizer} from '@tanstack/react-virtual'
 import type {EvtxRecord, FileSession, RecordMeta} from '../types'
+import type {FilterState} from '../lib/filter-types'
 import {LEVEL_CONFIG} from '../lib/level-colors'
+import {COLUMN_FILTER_META, ColumnHeader} from './ColumnHeader'
 import {RowDetail} from './RowDetail'
 import classes from './EventTable.module.css'
 
 const ROW_HEIGHT = 36
 const EXPANDED_HEIGHT = 320
-
-const SORT_INDICATORS: Record<string, string> = {asc: ' \u2191', desc: ' \u2193'}
 
 /** Join CSS module class names, filtering out falsy values. */
 function cx(...names: (string | false | undefined | null)[]): string {
@@ -69,6 +69,13 @@ interface EventTableProps {
     onSortingChange: (updater: SortingState | ((prev: SortingState) => SortingState)) => void
     columnVisibility: VisibilityState
     onColumnVisibilityChange: (updater: VisibilityState | ((prev: VisibilityState) => VisibilityState)) => void
+    filters: FilterState
+    onFiltersChange: (f: FilterState) => void
+    availableEventIds: string[]
+    availableProviders: string[]
+    availableChannels: string[]
+    availableComputers: string[]
+    availableFiles?: Array<{ value: string; label: string }>
     showFileColumn?: boolean
     files?: FileSession[]
     bookmarkKeys?: Set<string>
@@ -83,6 +90,13 @@ export function EventTable({
                                onSortingChange,
                                columnVisibility,
                                onColumnVisibilityChange,
+                               filters,
+                               onFiltersChange,
+                               availableEventIds,
+                               availableProviders,
+                               availableChannels,
+                               availableComputers,
+                               availableFiles,
                                showFileColumn,
                                files,
                                bookmarkKeys,
@@ -128,6 +142,14 @@ export function EventTable({
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
     })
+
+    const columnAvailableValues = useMemo<Record<string, string[]>>(() => ({
+        eventId: availableEventIds,
+        provider: availableProviders,
+        channel: availableChannels,
+        computer: availableComputers,
+        fileId: availableFiles?.map((f) => f.value) ?? [],
+    }), [availableEventIds, availableProviders, availableChannels, availableComputers, availableFiles])
 
     const {rows} = table.getRowModel()
 
@@ -199,6 +221,8 @@ export function EventTable({
 
     const headerGroups = table.getHeaderGroups()
 
+    const totalSize = table.getTotalSize() + (onToggleBookmark ? 36 : 0)
+
     return (
         <div
             ref={containerRef}
@@ -210,21 +234,26 @@ export function EventTable({
                 {headerGroups.map((headerGroup) => (
                     <div key={headerGroup.id} className={classes.headerRow}>
                         {onToggleBookmark && (
-                            <div className={classes.headerCell} style={{width: 36, flex: '0 0 36px'}}>
+                            <div className={classes.headerCell} style={{width: `${(36 / totalSize) * 100}%`}}>
                                 {'\u2606'}
                             </div>
                         )}
                         {headerGroup.headers.map((header) => (
                             <div
                                 key={header.id}
-                                className={cx(classes.headerCell, header.column.getCanSort() && classes.sortable)}
-                                style={{width: header.getSize(), flex: `0 0 ${header.getSize()}px`}}
-                                onClick={header.column.getToggleSortingHandler()}
+                                className={classes.headerCell}
+                                style={{width: `${(header.getSize() / totalSize) * 100}%`}}
                             >
-                                {header.isPlaceholder
-                                    ? null
-                                    : flexRender(header.column.columnDef.header, header.getContext())}
-                                {SORT_INDICATORS[header.column.getIsSorted() as string] ?? ''}
+                                {header.isPlaceholder ? null : (
+                                    <ColumnHeader
+                                        header={header}
+                                        filters={filters}
+                                        onFiltersChange={onFiltersChange}
+                                        onColumnVisibilityChange={onColumnVisibilityChange}
+                                        availableValues={columnAvailableValues[header.column.id]}
+                                        filterMeta={COLUMN_FILTER_META[header.column.id]}
+                                    />
+                                )}
                             </div>
                         ))}
                     </div>
@@ -259,7 +288,12 @@ export function EventTable({
                                 {onToggleBookmark && (
                                     <div
                                         className={classes.cell}
-                                        style={{flex: '0 0 36px', cursor: 'pointer', textAlign: 'center', fontSize: 14}}
+                                        style={{
+                                            width: `${(36 / totalSize) * 100}%`,
+                                            cursor: 'pointer',
+                                            textAlign: 'center',
+                                            fontSize: 14
+                                        }}
                                         onClick={(e) => {
                                             e.stopPropagation()
                                             onToggleBookmark(row.original)
@@ -272,7 +306,7 @@ export function EventTable({
                                     <div
                                         key={cell.id}
                                         className={classes.cell}
-                                        style={{flex: `0 0 ${cell.column.getSize()}px`}}
+                                        style={{width: `${(cell.column.getSize() / totalSize) * 100}%`}}
                                     >
                                         {flexRender(cell.column.columnDef.cell, cell.getContext())}
                                     </div>

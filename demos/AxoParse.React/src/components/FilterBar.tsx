@@ -1,6 +1,5 @@
 import {useCallback} from 'react'
-import {ActionIcon, Badge, Button, Chip, Group, MultiSelect, Select, TagsInput, TextInput, Tooltip} from '@mantine/core'
-import {DateTimePicker} from '@mantine/dates'
+import {ActionIcon, Badge, Button, CloseButton, Group, Paper, TextInput, Tooltip} from '@mantine/core'
 import {activeFilterCount, EMPTY_FILTERS, FilterState} from '../lib/filter-types'
 import {LEVEL_CONFIG} from '../lib/level-colors'
 
@@ -13,13 +12,84 @@ interface FilterBarProps {
     availableFiles?: Array<{ value: string; label: string }>
 }
 
+function ActiveFilterPills({filters, onChange}: { filters: FilterState; onChange: (f: FilterState) => void }) {
+    const pills: Array<{ label: string; onRemove: () => void }> = []
+
+    if (filters.eventIds.length > 0) {
+        pills.push({
+            label: `Event IDs: ${filters.eventIds.join(', ')}`,
+            onRemove: () => onChange({...filters, eventIds: []}),
+        })
+    }
+    if (filters.levels.length > 0) {
+        const names = filters.levels.map((l) => LEVEL_CONFIG[l]?.label ?? `Level ${l}`).join(', ')
+        pills.push({
+            label: `Levels: ${names}`,
+            onRemove: () => onChange({...filters, levels: []}),
+        })
+    }
+    if (filters.provider !== null) {
+        const short = filters.provider.length > 30 ? filters.provider.slice(0, 27) + '...' : filters.provider
+        pills.push({
+            label: `Provider: ${short}`,
+            onRemove: () => onChange({...filters, provider: null}),
+        })
+    }
+    if (filters.computer !== null) {
+        pills.push({
+            label: `Computer: ${filters.computer}`,
+            onRemove: () => onChange({...filters, computer: null}),
+        })
+    }
+    if (filters.channel !== null) {
+        pills.push({
+            label: `Channel: ${filters.channel}`,
+            onRemove: () => onChange({...filters, channel: null}),
+        })
+    }
+    if (filters.timeRange[0] !== null || filters.timeRange[1] !== null) {
+        const start = filters.timeRange[0]?.toLocaleString() ?? '...'
+        const end = filters.timeRange[1]?.toLocaleString() ?? '...'
+        pills.push({
+            label: `Time: ${start} \u2013 ${end}`,
+            onRemove: () => onChange({...filters, timeRange: [null, null]}),
+        })
+    }
+    if (filters.fileIds.length > 0) {
+        pills.push({
+            label: `Files: ${filters.fileIds.length}`,
+            onRemove: () => onChange({...filters, fileIds: []}),
+        })
+    }
+    if (filters.bookmarkedOnly) {
+        pills.push({
+            label: 'Bookmarked only',
+            onRemove: () => onChange({...filters, bookmarkedOnly: false}),
+        })
+    }
+
+    if (pills.length === 0) return null
+
+    return (
+        <>
+            {pills.map((pill) => (
+                <Badge
+                    key={pill.label}
+                    size="sm"
+                    variant="light"
+                    rightSection={<CloseButton size="xs" variant="transparent" onClick={pill.onRemove}/>}
+                    style={{paddingRight: 4}}
+                >
+                    {pill.label}
+                </Badge>
+            ))}
+        </>
+    )
+}
+
 export function FilterBar({
                               filters,
                               onChange,
-                              availableEventIds,
-                              availableProviders,
-                              availableChannels,
-                              availableFiles,
                           }: FilterBarProps) {
     const count = activeFilterCount(filters)
 
@@ -28,109 +98,37 @@ export function FilterBar({
     }, [filters, onChange])
 
     return (
-        <Group gap="xs" py="xs" wrap="wrap" style={{flexShrink: 0}}>
-            <TagsInput
-                placeholder="Event IDs"
-                data={availableEventIds}
-                value={filters.eventIds}
-                onChange={(v) => update('eventIds', v)}
-                size="xs"
-                style={{minWidth: 160, maxWidth: 260}}
-                clearable
-            />
+        <Paper p="xs" radius="sm" withBorder style={{flexShrink: 0}}>
+            <Group gap="xs" wrap="wrap">
+                <Tooltip
+                    label={filters.textSearchRegex ? 'Regex mode (click to toggle)' : 'Text mode (click to toggle)'}>
+                    <TextInput
+                        placeholder="Search records..."
+                        value={filters.textSearch}
+                        onChange={(e) => update('textSearch', e.currentTarget.value)}
+                        size="xs"
+                        style={{minWidth: 200, flex: 1, maxWidth: 400}}
+                        rightSection={
+                            <ActionIcon
+                                size="xs"
+                                variant={filters.textSearchRegex ? 'filled' : 'subtle'}
+                                color={filters.textSearchRegex ? 'blue' : 'gray'}
+                                onClick={() => update('textSearchRegex', !filters.textSearchRegex)}
+                            >
+                                .*
+                            </ActionIcon>
+                        }
+                    />
+                </Tooltip>
 
-            <Chip.Group multiple value={filters.levels.map(String)} onChange={(v) => update('levels', v.map(Number))}>
-                <Group gap={4}>
-                    {Object.entries(LEVEL_CONFIG)
-                        .filter(([k]) => Number(k) >= 1 && Number(k) <= 5)
-                        .map(([k, cfg]) => (
-                            <Chip key={k} value={k} size="xs" color={cfg.color} variant="light">
-                                {cfg.label}
-                            </Chip>
-                        ))}
-                </Group>
-            </Chip.Group>
+                <ActiveFilterPills filters={filters} onChange={onChange}/>
 
-            <Select
-                placeholder="Provider"
-                data={availableProviders}
-                value={filters.provider}
-                onChange={(v) => update('provider', v)}
-                searchable
-                clearable
-                size="xs"
-                style={{minWidth: 180, maxWidth: 280}}
-            />
-
-            <Select
-                placeholder="Channel"
-                data={availableChannels}
-                value={filters.channel}
-                onChange={(v) => update('channel', v)}
-                searchable
-                clearable
-                size="xs"
-                style={{minWidth: 140, maxWidth: 200}}
-            />
-
-            <DateTimePicker
-                placeholder="Start time"
-                value={filters.timeRange[0]}
-                onChange={(v) => update('timeRange', [v ? new Date(v) : null, filters.timeRange[1]])}
-                size="xs"
-                clearable
-                style={{minWidth: 180}}
-            />
-
-            <DateTimePicker
-                placeholder="End time"
-                value={filters.timeRange[1]}
-                onChange={(v) => update('timeRange', [filters.timeRange[0], v ? new Date(v) : null])}
-                size="xs"
-                clearable
-                style={{minWidth: 180}}
-            />
-
-            {availableFiles && availableFiles.length > 1 && (
-                <MultiSelect
-                    placeholder="Source files"
-                    data={availableFiles}
-                    value={filters.fileIds}
-                    onChange={(v) => update('fileIds', v)}
-                    size="xs"
-                    clearable
-                    style={{minWidth: 180, maxWidth: 300}}
-                />
-            )}
-
-            <Tooltip label={filters.textSearchRegex ? 'Regex mode (click to toggle)' : 'Text mode (click to toggle)'}>
-                <TextInput
-                    placeholder="Search..."
-                    value={filters.textSearch}
-                    onChange={(e) => update('textSearch', e.currentTarget.value)}
-                    size="xs"
-                    style={{minWidth: 160}}
-                    rightSection={
-                        <ActionIcon
-                            size="xs"
-                            variant={filters.textSearchRegex ? 'filled' : 'subtle'}
-                            color={filters.textSearchRegex ? 'blue' : 'gray'}
-                            onClick={() => update('textSearchRegex', !filters.textSearchRegex)}
-                        >
-                            .*
-                        </ActionIcon>
-                    }
-                />
-            </Tooltip>
-
-            {count > 0 && (
-                <>
-                    <Badge size="sm" variant="filled" color="grape">{count} active</Badge>
+                {count > 0 && (
                     <Button size="xs" variant="subtle" color="gray" onClick={() => onChange(EMPTY_FILTERS)}>
-                        Clear all
+                        Clear all ({count})
                     </Button>
-                </>
-            )}
-        </Group>
+                )}
+            </Group>
+        </Paper>
     )
 }

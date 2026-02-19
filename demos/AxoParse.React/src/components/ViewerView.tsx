@@ -33,6 +33,10 @@ function getProvider(r: RecordMeta): string {
     return r.provider
 }
 
+function getComputer(r: RecordMeta): string {
+    return r.computer
+}
+
 function getChannel(r: RecordMeta): string {
     return r.channel
 }
@@ -106,6 +110,7 @@ export function ViewerView({
 
     const availableEventIds = useUniqueValues(allRecords, getEventId, compareNumeric)
     const availableProviders = useUniqueValues(allRecords, getProvider)
+    const availableComputers = useUniqueValues(allRecords, getComputer)
     const availableChannels = useUniqueValues(allRecords, getChannel)
 
     const fileMap = useMemo(() => {
@@ -225,6 +230,13 @@ export function ViewerView({
                 onSortingChange={setSorting}
                 columnVisibility={columnVisibility}
                 onColumnVisibilityChange={setColumnVisibility}
+                filters={filters}
+                onFiltersChange={setFilters}
+                availableEventIds={availableEventIds}
+                availableProviders={availableProviders}
+                availableChannels={availableChannels}
+                availableComputers={availableComputers}
+                availableFiles={availableFiles}
                 showFileColumn={files.length > 1}
                 files={files}
                 bookmarkKeys={bookmarkKeys}

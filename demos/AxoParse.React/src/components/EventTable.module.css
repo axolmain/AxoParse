@@ -1,7 +1,7 @@
 .container {
     flex: 1;
     overflow: auto;
-    border: 1px solid var(--mantine-color-gray-3);
+    border: 1px solid var(--mantine-color-default-border);
     border-radius: var(--mantine-radius-sm);
     min-height: 0;
     outline: none;
@@ -11,7 +11,7 @@
 .header {
     position: sticky;
     top: 0;
-    z-index: 1;
+    z-index: 10;
 }
 
 .headerRow {
@@ -20,39 +20,49 @@
 }
 
 .headerCell {
-    background: var(--mantine-color-dark-7);
-    color: var(--mantine-color-white);
-    padding: 0.5rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--mantine-primary-color-filled);
+    color: var(--mantine-primary-color-contrast);
+    padding: 0.5rem 0.5rem;
     white-space: nowrap;
     font-weight: 500;
     font-size: 0.8125rem;
     user-select: none;
+    box-sizing: border-box;
 }
 
-.sortable {
-    cursor: pointer;
+.headerLabelRow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
 }
 
-.sortable:hover {
-    background: var(--mantine-color-dark-5);
+.headerFilterRow {
+    width: 100%;
+}
+
+.headerFilterRow > * {
+    width: 100%;
 }
 
 .row {
-    border-bottom: 1px solid var(--mantine-color-gray-2);
+    border-bottom: 1px solid var(--mantine-color-default-border);
 }
 
 .row:hover .rowCells {
-    background: var(--mantine-color-gray-0);
+    background: var(--mantine-color-default-hover);
 }
 
 .focused .rowCells {
-    background: var(--mantine-color-blue-0);
-    outline: 2px solid var(--mantine-color-blue-4);
+    background: var(--mantine-primary-color-light);
+    outline: 2px solid var(--mantine-primary-color-filled);
     outline-offset: -2px;
 }
 
 .expanded {
-    background: var(--mantine-color-gray-0);
+    background: var(--mantine-color-default-hover);
 }
 
 .rowCells {
@@ -67,11 +77,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    box-sizing: border-box;
 }
 
 .detailPanel {
     padding: 0.5rem 0.75rem;
     max-height: 284px;
     overflow: auto;
-    border-top: 1px solid var(--mantine-color-gray-3);
+    border-top: 1px solid var(--mantine-color-default-border);
 }

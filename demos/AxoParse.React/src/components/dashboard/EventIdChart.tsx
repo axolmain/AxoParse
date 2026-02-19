@@ -12,7 +12,7 @@ export function EventIdChart({data}: EventIdChartProps) {
         <Paper p="sm" withBorder>
             <Text size="sm" fw={600} mb="xs">Top Event IDs</Text>
             <BarChart
-                h={Math.max(200, data.length * 28)}
+                h={data.length * 36 + 30}
                 data={data}
                 dataKey="eventId"
                 series={[{name: 'count', color: 'indigo.6'}]}

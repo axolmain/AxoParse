@@ -17,14 +17,21 @@ const PADDING_X = 40
 const PADDING_Y = 4
 const ZOOM_FACTOR = 0.2
 
-function formatTimestamp(ms: number): string {
+function formatTimestamp(ms: number, includeTime: boolean): string {
     const d = new Date(ms)
-    return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+    const date = `${d.getMonth() + 1}/${d.getDate()}`
+    if (!includeTime) return date
+    return `${date} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
 function formatTimestampLong(ms: number): string {
     const d = new Date(ms)
     return d.toLocaleString()
+}
+
+function formatDay(ms: number): string {
+    const d = new Date(ms)
+    return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
 }
 
 export function TimelineHeatmap({
@@ -134,13 +141,14 @@ export function TimelineHeatmap({
         }
 
         // Axis labels
+        const isZoomed = zoomDomain != null
         ctx.fillStyle = '#868e96'
         ctx.font = '10px system-ui, sans-serif'
         ctx.textAlign = 'left'
-        ctx.fillText(formatTimestamp(min), PADDING_X, CANVAS_HEIGHT - 1)
+        ctx.fillText(formatTimestamp(min, isZoomed), PADDING_X, CANVAS_HEIGHT - 1)
         ctx.textAlign = 'right'
-        ctx.fillText(formatTimestamp(max), width - PADDING_X, CANVAS_HEIGHT - 1)
-    }, [width, buckets, brushStart, brushEnd, activeTimeRange])
+        ctx.fillText(formatTimestamp(max, isZoomed), width - PADDING_X, CANVAS_HEIGHT - 1)
+    }, [width, buckets, brushStart, brushEnd, activeTimeRange, zoomDomain])
 
     useEffect(() => {
         draw()
@@ -202,15 +210,24 @@ export function TimelineHeatmap({
         const right = Math.max(brushStart, brushEnd)
 
         if (right - left < 5) {
+            // Single click — drill into the clicked bucket
             setBrushStart(null)
             setBrushEnd(null)
+            if (onZoomChange) {
+                const idx = xToBucketIndex(left)
+                if (idx >= 0 && idx < buckets.buckets.length) {
+                    const startMs = buckets.min + idx * buckets.bucketSize
+                    const endMs = startMs + buckets.bucketSize
+                    onZoomChange([startMs, endMs])
+                }
+            }
             return
         }
 
         const startTime = xToTime(left)
         const endTime = xToTime(right)
         onBrushSelect(new Date(startTime), new Date(endTime))
-    }, [brushStart, brushEnd, xToTime, onBrushSelect])
+    }, [brushStart, brushEnd, xToTime, xToBucketIndex, buckets, onBrushSelect, onZoomChange])
 
     const handleWheel = useCallback((e: React.WheelEvent) => {
         e.preventDefault()
@@ -260,11 +277,11 @@ export function TimelineHeatmap({
         <Paper p="sm" withBorder ref={containerRef}>
             <Text size="sm" fw={600} mb="xs">
                 Event Timeline
-                {zoomDomain && (
-                    <Text span size="xs" c="dimmed" ml="xs">
-                        (zoomed — double-click to reset)
-                    </Text>
-                )}
+                <Text span size="xs" c="dimmed" ml="xs">
+                    {zoomDomain
+                        ? '(click a bar to drill deeper, double-click to reset)'
+                        : '(click a day to drill in)'}
+                </Text>
             </Text>
             <div className={classes.wrapper}>
                 <canvas
@@ -282,7 +299,9 @@ export function TimelineHeatmap({
                         className={classes.tooltip}
                         style={{left: hoverX, top: -32}}
                     >
-                        {formatTimestampLong(hoverBucket.startMs)} — {hoverBucket.count} events
+                        {zoomDomain
+                            ? `${formatTimestampLong(hoverBucket.startMs)} — ${hoverBucket.count} events`
+                            : `${formatDay(hoverBucket.startMs)} — ${hoverBucket.count} events`}
                     </div>
                 )}
             </div>

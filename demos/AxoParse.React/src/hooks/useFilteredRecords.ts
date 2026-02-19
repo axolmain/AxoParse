@@ -40,6 +40,7 @@ export function useFilteredRecords(
             if (eventIdSet && !eventIdSet.has(r.eventId)) continue
             if (levelSet && !levelSet.has(r.level)) continue
             if (filters.provider !== null && r.provider !== filters.provider) continue
+            if (filters.computer !== null && r.computer !== filters.computer) continue
             if (filters.channel !== null && r.channel !== filters.channel) continue
             if (startIso !== null && r.timestamp < startIso) continue
             if (endIso !== null && r.timestamp > endIso) continue
