@@ -1,18 +1,24 @@
-import {useCallback, useMemo, useRef, useState} from "react"
+import {createFileRoute} from '@tanstack/react-router'
+import {useCallback, useMemo, useRef, useState} from "react";
 import {
     createColumnHelper,
     flexRender,
     getCoreRowModel,
     getFilteredRowModel,
     getSortedRowModel,
-    type SortingState,
-    useReactTable,
-} from "@tanstack/react-table"
-import {useVirtualizer} from "@tanstack/react-virtual"
-import {useEvtxWorker} from "./useEvtxWorker"
-import type {EvtxRecord} from "./types"
-import {exportRecords} from "./export"
-import {formatXml} from "./format-xml"
+    SortingState,
+    useReactTable
+} from "@tanstack/react-table";
+import {EvtxRecord} from "../types.ts";
+import {useEvtxWorker} from "../useEvtxWorker.ts";
+import {useVirtualizer} from "@tanstack/react-virtual";
+import {exportRecords} from "../export.ts";
+import {formatXml} from "../format-xml.ts";
+
+export const Route = createFileRoute('/')({
+    component: RouteComponent,
+})
+
 
 const ROW_HEIGHT = 29
 
@@ -50,7 +56,7 @@ const columns = [
     }),
 ]
 
-export default function App() {
+function RouteComponent() {
     const {wasmReady, wasmLoading, error, stats, records, parsing, loadProgress, parse} = useEvtxWorker()
     const [globalFilter, setGlobalFilter] = useState("")
     const [sorting, setSorting] = useState<SortingState>([])

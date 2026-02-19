@@ -10,15 +10,30 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@tanstack/react-table": "^8.21.2",
+    "@mantine/charts": "^8.3.15",
+    "@mantine/core": "^8.3.15",
+    "@mantine/dates": "^8.3.15",
+    "@mantine/dropzone": "^8.3.15",
+    "@mantine/hooks": "^8.3.15",
+    "@mantine/modals": "^8.3.15",
+    "@mantine/nprogress": "^8.3.15",
+    "@tanstack/react-router": "^1.161.1",
+    "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.13.18",
+    "dayjs": "^1.11.19",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "recharts": "^3.7.0"
   },
   "devDependencies": {
+    "@tanstack/react-router-devtools": "^1.161.1",
+    "@tanstack/router-plugin": "^1.161.1",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "postcss": "^8.5.6",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1",
     "typescript": "~5.7.2",
     "vite": "^6.0.5"
   }
