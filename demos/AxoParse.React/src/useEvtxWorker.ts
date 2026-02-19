@@ -10,8 +10,12 @@ import type {WorkerRequest, WorkerResponse} from "./worker/messages"
  */
 const WASM_FRAMEWORK_URL = `${window.location.origin}${import.meta.env.BASE_URL}wasm/_framework`
 
-/** Minimum ms between React state flushes during streaming. */
-const FLUSH_INTERVAL_MS = 250
+/**
+ * Minimum ms between React state flushes during streaming.
+ * Scales up with record count to avoid O(N) table rebuilds at high frequency.
+ */
+const FLUSH_MIN_MS = 250
+const FLUSH_MAX_MS = 2000
 
 export interface EvtxWorkerState {
     wasmReady: boolean
@@ -58,25 +62,34 @@ export function useEvtxWorker(): EvtxWorkerState {
     const workerRef = useRef<Worker | null>(null)
     const renderedRecordCache = useRef<Map<string, EvtxRecord>>(new Map())
     const pendingRenders = useRef<Map<string, { resolve: (r: EvtxRecord) => void }>>(new Map())
-    const pendingBatchRender = useRef<{ resolve: (records: EvtxRecord[]) => void } | null>(null)
+    const pendingBatchRenders = useRef<Map<string, { resolve: (records: EvtxRecord[]) => void }>>(new Map())
 
     // Per-file mutable accumulators
     const streamAccumulators = useRef<Map<string, RecordMeta[]>>(new Map())
     const sessionsRef = useRef<Map<string, FileSession>>(new Map())
     const lastFlushTime = useRef<number>(0)
     const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const streamDirty = useRef(false)
+
+    // Append-only merged array — avoids rebuilding from scratch every flush
+    const mergedRef = useRef<RecordMeta[]>([])
+    const flushedPerFile = useRef<Map<string, number>>(new Map())
 
     const flushStreamRecords = useCallback(() => {
-        // Merge all accumulators into a single array
-        const merged: RecordMeta[] = []
-        for (const acc of streamAccumulators.current.values()) {
-            for (let i = 0; i < acc.length; i++) {
-                merged.push(acc[i])
-            }
-        }
-        setAllRecords(merged)
+        if (!streamDirty.current) return
 
-        // Compute combined progress
+        // Append only new records since last flush
+        for (const [fileId, acc] of streamAccumulators.current.entries()) {
+            const prevLen = flushedPerFile.current.get(fileId) ?? 0
+            for (let i = prevLen; i < acc.length; i++) {
+                mergedRef.current.push(acc[i])
+            }
+            flushedPerFile.current.set(fileId, acc.length)
+        }
+
+        // Slice to create a new reference for React (native memcpy, much faster than JS loop)
+        setAllRecords(mergedRef.current.slice())
+
         let chunksProcessed = 0
         let totalChunks = 0
         for (const session of sessionsRef.current.values()) {
@@ -86,6 +99,7 @@ export function useEvtxWorker(): EvtxWorkerState {
         setStreamProgress({chunksProcessed, totalChunks})
         setFilesState(Array.from(sessionsRef.current.values()))
 
+        streamDirty.current = false
         lastFlushTime.current = performance.now()
         if (flushTimer.current !== null) {
             clearTimeout(flushTimer.current)
@@ -93,15 +107,30 @@ export function useEvtxWorker(): EvtxWorkerState {
         }
     }, [])
 
+    /** Flush interval scales with record count to keep main thread responsive. */
+    const getFlushInterval = useCallback((): number => {
+        const n = mergedRef.current.length
+        if (n < 20000) return FLUSH_MIN_MS
+        if (n < 80000) return 500
+        return FLUSH_MAX_MS
+    }, [])
+
     const scheduleFlush = useCallback(() => {
         const now = performance.now()
-        if (now - lastFlushTime.current >= FLUSH_INTERVAL_MS) {
+        const interval = getFlushInterval()
+        if (now - lastFlushTime.current >= interval) {
             flushStreamRecords()
         } else if (flushTimer.current === null) {
-            const remaining = FLUSH_INTERVAL_MS - (now - lastFlushTime.current)
+            const remaining = interval - (now - lastFlushTime.current)
             flushTimer.current = setTimeout(flushStreamRecords, remaining)
         }
-    }, [flushStreamRecords])
+    }, [flushStreamRecords, getFlushInterval])
+
+    // Store callbacks in refs so the worker useEffect has a stable dependency array
+    const flushRef = useRef(flushStreamRecords)
+    flushRef.current = flushStreamRecords
+    const scheduleFlushRef = useRef(scheduleFlush)
+    scheduleFlushRef.current = scheduleFlush
 
     useEffect(() => {
         const worker = new Worker(
@@ -172,7 +201,8 @@ export function useEvtxWorker(): EvtxWorkerState {
                         }
                     }
 
-                    scheduleFlush()
+                    streamDirty.current = true
+                    scheduleFlushRef.current()
                     break
                 }
 
@@ -184,8 +214,8 @@ export function useEvtxWorker(): EvtxWorkerState {
                             session.stats.totalRecords = msg.totalRecords
                         }
                     }
-                    // Final flush
-                    flushStreamRecords()
+                    streamDirty.current = true
+                    flushRef.current()
                     break
                 }
 
@@ -201,15 +231,15 @@ export function useEvtxWorker(): EvtxWorkerState {
                 }
 
                 case "renderedBatch": {
-                    const batchPending = pendingBatchRender.current
+                    for (let i = 0; i < msg.records.length; i++) {
+                        const rec = msg.records[i]
+                        const cacheKey = `${rec.fileId}:${rec.chunkIndex}:${rec.recordIndexInChunk}`
+                        renderedRecordCache.current.set(cacheKey, rec)
+                    }
+                    const batchPending = pendingBatchRenders.current.get(msg.batchId)
                     if (batchPending) {
-                        for (let i = 0; i < msg.records.length; i++) {
-                            const rec = msg.records[i]
-                            const cacheKey = `${rec.fileId}:${rec.chunkIndex}:${rec.recordId}`
-                            renderedRecordCache.current.set(cacheKey, rec)
-                        }
                         batchPending.resolve(msg.records)
-                        pendingBatchRender.current = null
+                        pendingBatchRenders.current.delete(msg.batchId)
                     }
                     break
                 }
@@ -229,7 +259,7 @@ export function useEvtxWorker(): EvtxWorkerState {
             worker.terminate()
             if (flushTimer.current !== null) clearTimeout(flushTimer.current)
         }
-    }, [flushStreamRecords, scheduleFlush])
+    }, [])
 
     const parse = useCallback((file: File) => {
         if (!wasmReady) {
@@ -284,25 +314,37 @@ export function useEvtxWorker(): EvtxWorkerState {
     const removeFile = useCallback((fileId: string) => {
         sessionsRef.current.delete(fileId)
         streamAccumulators.current.delete(fileId)
+        flushedPerFile.current.delete(fileId)
 
-        // Clear cache entries for this file
         for (const key of renderedRecordCache.current.keys()) {
             if (key.startsWith(fileId + ":")) {
                 renderedRecordCache.current.delete(key)
             }
         }
 
+        // Rebuild merged array from scratch since a file was removed
+        mergedRef.current = []
+        for (const [fid, acc] of streamAccumulators.current.entries()) {
+            for (let i = 0; i < acc.length; i++) {
+                mergedRef.current.push(acc[i])
+            }
+            flushedPerFile.current.set(fid, acc.length)
+        }
+
+        streamDirty.current = true
         flushStreamRecords()
     }, [flushStreamRecords])
 
-    const requestBatchRender = useCallback((fileId: string, file: File, records: RecordMeta[]): Promise<EvtxRecord[]> => {
+    const requestBatchRender = useCallback((fileId: string, file: File, batchRecords: RecordMeta[]): Promise<EvtxRecord[]> => {
         return new Promise((resolve) => {
-            pendingBatchRender.current = {resolve}
+            const batchId = crypto.randomUUID()
+            pendingBatchRenders.current.set(batchId, {resolve})
             const msg: WorkerRequest = {
                 type: "renderBatch",
                 file,
-                records: records.map((r) => ({chunkIndex: r.chunkIndex, recordIndex: r.recordIndexInChunk})),
+                records: batchRecords.map((r) => ({chunkIndex: r.chunkIndex, recordIndex: r.recordIndexInChunk})),
                 fileId,
+                batchId,
             }
             workerRef.current!.postMessage(msg)
         })

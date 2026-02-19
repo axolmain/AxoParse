@@ -64,8 +64,6 @@ export interface ViewerViewProps {
     streamProgress: StreamProgress
     files: FileSession[]
     error: string | null
-    addFile: (file: File) => void
-    removeFile: (fileId: string) => void
     requestRecordRender: (fileId: string, file: File, chunkIndex: number, recordIndex: number) => Promise<EvtxRecord>
     requestBatchRender: (fileId: string, file: File, records: RecordMeta[]) => Promise<EvtxRecord[]>
 }
@@ -76,8 +74,6 @@ export function ViewerView({
                                streamProgress,
                                files,
                                error,
-                               addFile: _addFile,
-                               removeFile: _removeFile,
                                requestRecordRender,
                                requestBatchRender,
                            }: ViewerViewProps) {
@@ -106,12 +102,15 @@ export function ViewerView({
     useStreamProgress(anyStreaming, streamProgress.chunksProcessed, streamProgress.totalChunks)
 
     const filteredRecords = useFilteredRecords(allRecords, filters, bookmarkKeys)
-    const dashboardStats = useDashboardStats(filteredRecords, zoomDomain)
 
-    const availableEventIds = useUniqueValues(allRecords, getEventId, compareNumeric)
-    const availableProviders = useUniqueValues(allRecords, getProvider)
-    const availableComputers = useUniqueValues(allRecords, getComputer)
-    const availableChannels = useUniqueValues(allRecords, getChannel)
+    // Defer expensive O(N) / O(N log N) computations until streaming finishes
+    const stableRecords = useMemo(() => anyStreaming ? [] : allRecords, [anyStreaming, allRecords])
+    const stableFiltered = useMemo(() => anyStreaming ? [] : filteredRecords, [anyStreaming, filteredRecords])
+    const dashboardStats = useDashboardStats(stableFiltered, zoomDomain)
+    const availableEventIds = useUniqueValues(stableRecords, getEventId, compareNumeric)
+    const availableProviders = useUniqueValues(stableRecords, getProvider)
+    const availableComputers = useUniqueValues(stableRecords, getComputer)
+    const availableChannels = useUniqueValues(stableRecords, getChannel)
 
     const fileMap = useMemo(() => {
         const m = new Map<string, File>()

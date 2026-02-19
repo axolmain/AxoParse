@@ -196,12 +196,6 @@ export function TimelineHeatmap({
         }
     }, [xToBucketIndex, buckets])
 
-    const handleMouseLeave = useCallback(() => {
-        setHoverX(null)
-        setHoverBucket(null)
-        if (isDragging.current) handleMouseUp()
-    }, [])
-
     const handleMouseUp = useCallback(() => {
         if (!isDragging.current || brushStart === null || brushEnd === null) return
         isDragging.current = false
@@ -210,7 +204,6 @@ export function TimelineHeatmap({
         const right = Math.max(brushStart, brushEnd)
 
         if (right - left < 5) {
-            // Single click — drill into the clicked bucket
             setBrushStart(null)
             setBrushEnd(null)
             if (onZoomChange) {
@@ -228,6 +221,12 @@ export function TimelineHeatmap({
         const endTime = xToTime(right)
         onBrushSelect(new Date(startTime), new Date(endTime))
     }, [brushStart, brushEnd, xToTime, xToBucketIndex, buckets, onBrushSelect, onZoomChange])
+
+    const handleMouseLeave = useCallback(() => {
+        setHoverX(null)
+        setHoverBucket(null)
+        if (isDragging.current) handleMouseUp()
+    }, [handleMouseUp])
 
     const handleWheel = useCallback((e: React.WheelEvent) => {
         e.preventDefault()
