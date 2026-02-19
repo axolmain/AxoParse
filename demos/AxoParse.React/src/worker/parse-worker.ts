@@ -22,6 +22,20 @@ function respond(msg: WorkerResponse): void {
     postMessage(msg)
 }
 
+/** Read a single EVTX chunk from a File, zero-padding if truncated. */
+async function readChunk(file: File, chunkIndex: number, headerBlockSize: number): Promise<Uint8Array> {
+    const offset = headerBlockSize + chunkIndex * EVTX_CHUNK_SIZE
+    const end = offset + EVTX_CHUNK_SIZE
+    const sliceBuf = await file.slice(offset, Math.min(end, file.size)).arrayBuffer()
+
+    if (sliceBuf.byteLength < EVTX_CHUNK_SIZE) {
+        const padded = new Uint8Array(EVTX_CHUNK_SIZE)
+        padded.set(new Uint8Array(sliceBuf))
+        return padded
+    }
+    return new Uint8Array(sliceBuf)
+}
+
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
     const msg = e.data
 
@@ -84,6 +98,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
         case "parseStream": {
             try {
                 const file = msg.file
+                const fileId = msg.fileId
 
                 // Step 1: Parse file header
                 const t0 = performance.now()
@@ -91,7 +106,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
                 const meta = parseFileHeader(new Uint8Array(headerBuf))
                 const parseTimeMs = Math.round(performance.now() - t0)
 
-                respond({type: "fileMeta", meta, fileName: msg.fileName, parseTimeMs})
+                respond({type: "fileMeta", meta, fileName: msg.fileName, parseTimeMs, fileId})
 
                 // Step 2: Compute actual chunk count from file size (header numChunks is a ushort, max 65535)
                 const actualChunkCount = Math.floor((file.size - meta.headerBlockSize) / EVTX_CHUNK_SIZE)
@@ -100,32 +115,25 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
                 // Step 3: Stream chunks one at a time
                 let totalRecords = 0
                 for (let i = 0; i < totalChunks; i++) {
-                    const offset = meta.headerBlockSize + i * EVTX_CHUNK_SIZE
-                    const end = offset + EVTX_CHUNK_SIZE
-                    const sliceBuf = await file.slice(offset, Math.min(end, file.size)).arrayBuffer()
-
-                    // Zero-pad if the last chunk is truncated
-                    let chunkBytes: Uint8Array
-                    if (sliceBuf.byteLength < EVTX_CHUNK_SIZE) {
-                        chunkBytes = new Uint8Array(EVTX_CHUNK_SIZE)
-                        chunkBytes.set(new Uint8Array(sliceBuf))
-                    } else {
-                        chunkBytes = new Uint8Array(sliceBuf)
+                    const chunkBytes = await readChunk(file, i, meta.headerBlockSize)
+                    const rawRecords: RecordMeta[] = parseChunkMetadata(chunkBytes, i)
+                    for (let j = 0; j < rawRecords.length; j++) {
+                        rawRecords[j].recordIndexInChunk = j
+                        rawRecords[j].fileId = fileId
                     }
-
-                    const records: RecordMeta[] = parseChunkMetadata(chunkBytes, i)
-                    totalRecords += records.length
+                    totalRecords += rawRecords.length
 
                     respond({
                         type: "chunkRecords",
-                        records,
+                        records: rawRecords,
                         chunkIndex: i,
                         chunksProcessed: i + 1,
                         totalChunks,
+                        fileId,
                     })
                 }
 
-                respond({type: "streamDone", totalRecords})
+                respond({type: "streamDone", totalRecords, fileId})
             } catch (err: unknown) {
                 const message = err instanceof Error ? err.message : String(err)
                 respond({type: "error", message: `Stream parse failed: ${message}`})
@@ -135,31 +143,52 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
 
         case "renderRecord": {
             try {
-                const file = msg.file
-                const offset = EVTX_HEADER_SIZE + msg.chunkIndex * EVTX_CHUNK_SIZE
-                const end = offset + EVTX_CHUNK_SIZE
-                const sliceBuf = await file.slice(offset, Math.min(end, file.size)).arrayBuffer()
-
-                // Zero-pad if truncated
-                let chunkBytes: Uint8Array
-                if (sliceBuf.byteLength < EVTX_CHUNK_SIZE) {
-                    chunkBytes = new Uint8Array(EVTX_CHUNK_SIZE)
-                    chunkBytes.set(new Uint8Array(sliceBuf))
-                } else {
-                    chunkBytes = new Uint8Array(sliceBuf)
-                }
-
+                const chunkBytes = await readChunk(msg.file, msg.chunkIndex, EVTX_HEADER_SIZE)
                 const record = renderRecord(chunkBytes, msg.chunkIndex, msg.recordIndex)
+                record.fileId = msg.fileId
 
                 respond({
                     type: "renderedRecord",
                     record,
                     chunkIndex: msg.chunkIndex,
                     recordIndex: msg.recordIndex,
+                    fileId: msg.fileId,
                 })
             } catch (err: unknown) {
                 const message = err instanceof Error ? err.message : String(err)
                 respond({type: "error", message: `Render record failed: ${message}`})
+            }
+            break
+        }
+
+        case "renderBatch": {
+            try {
+                const results: EvtxRecord[] = []
+                // Group by chunkIndex to avoid re-reading the same chunk
+                const byChunk = new Map<number, number[]>()
+                for (let i = 0; i < msg.records.length; i++) {
+                    const rec = msg.records[i]
+                    let list = byChunk.get(rec.chunkIndex)
+                    if (!list) {
+                        list = []
+                        byChunk.set(rec.chunkIndex, list)
+                    }
+                    list.push(rec.recordIndex)
+                }
+
+                for (const [chunkIndex, recordIndices] of byChunk) {
+                    const chunkBytes = await readChunk(msg.file, chunkIndex, EVTX_HEADER_SIZE)
+                    for (let j = 0; j < recordIndices.length; j++) {
+                        const rec = renderRecord(chunkBytes, chunkIndex, recordIndices[j])
+                        rec.fileId = msg.fileId
+                        results.push(rec)
+                    }
+                }
+
+                respond({type: "renderedBatch", records: results, fileId: msg.fileId})
+            } catch (err: unknown) {
+                const message = err instanceof Error ? err.message : String(err)
+                respond({type: "error", message: `Batch render failed: ${message}`})
             }
             break
         }

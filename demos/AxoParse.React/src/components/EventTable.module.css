@@ -1,0 +1,77 @@
+.container {
+    flex: 1;
+    overflow: auto;
+    border: 1px solid var(--mantine-color-gray-3);
+    border-radius: var(--mantine-radius-sm);
+    min-height: 0;
+    outline: none;
+    font-size: 0.8125rem;
+}
+
+.header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.headerRow {
+    display: flex;
+    width: 100%;
+}
+
+.headerCell {
+    background: var(--mantine-color-dark-7);
+    color: var(--mantine-color-white);
+    padding: 0.5rem 0.75rem;
+    white-space: nowrap;
+    font-weight: 500;
+    font-size: 0.8125rem;
+    user-select: none;
+}
+
+.sortable {
+    cursor: pointer;
+}
+
+.sortable:hover {
+    background: var(--mantine-color-dark-5);
+}
+
+.row {
+    border-bottom: 1px solid var(--mantine-color-gray-2);
+}
+
+.row:hover .rowCells {
+    background: var(--mantine-color-gray-0);
+}
+
+.focused .rowCells {
+    background: var(--mantine-color-blue-0);
+    outline: 2px solid var(--mantine-color-blue-4);
+    outline-offset: -2px;
+}
+
+.expanded {
+    background: var(--mantine-color-gray-0);
+}
+
+.rowCells {
+    display: flex;
+    height: 36px;
+    cursor: pointer;
+    align-items: center;
+}
+
+.cell {
+    padding: 0.35rem 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.detailPanel {
+    padding: 0.5rem 0.75rem;
+    max-height: 284px;
+    overflow: auto;
+    border-top: 1px solid var(--mantine-color-gray-3);
+}

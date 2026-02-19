@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useRef, useState} from "react"
-import type {EvtxRecord, RecordMeta} from "./types"
+import type {EvtxRecord, FileSession, RecordMeta, StreamProgress} from "./types"
 import type {WorkerRequest, WorkerResponse} from "./worker/messages"
 
 /**
@@ -10,56 +10,98 @@ import type {WorkerRequest, WorkerResponse} from "./worker/messages"
  */
 const WASM_FRAMEWORK_URL = `${window.location.origin}${import.meta.env.BASE_URL}wasm/_framework`
 
-interface Stats {
-    totalRecords: number
-    numChunks: number
-    parseTimeMs: number
-    fileName: string
-}
+/** Minimum ms between React state flushes during streaming. */
+const FLUSH_INTERVAL_MS = 250
 
-interface StreamProgress {
-    chunksProcessed: number
-    totalChunks: number
-}
-
-interface EvtxWorkerState {
+export interface EvtxWorkerState {
     wasmReady: boolean
     wasmLoading: boolean
     error: string | null
-    stats: Stats | null
     records: EvtxRecord[]
     parsing: boolean
     loadProgress: number
     parse: (file: File) => void
-    streamRecords: RecordMeta[]
-    streaming: boolean
+
+    /** All stream records merged across files. */
+    allRecords: RecordMeta[]
+    /** True if any file is still streaming. */
+    anyStreaming: boolean
+    /** Combined stream progress (summed across files). */
     streamProgress: StreamProgress
-    parseStream: (file: File) => void
-    requestRecordRender: (file: File, chunkIndex: number, recordIndex: number) => void
+    /** All active file sessions. */
+    files: FileSession[]
+
+    addFile: (file: File) => void
+    removeFile: (fileId: string) => void
+    requestRecordRender: (fileId: string, file: File, chunkIndex: number, recordIndex: number) => Promise<EvtxRecord>
+    requestBatchRender: (fileId: string, file: File, records: RecordMeta[]) => Promise<EvtxRecord[]>
 }
 
 /**
  * React hook that manages a Web Worker for off-main-thread EVTX parsing.
- * Handles worker lifecycle, WASM initialisation, and message passing.
+ * Supports multi-file concurrent streaming with merged record output.
  *
- * Supports two parsing modes:
- * - `parse`: reads the entire file into memory (legacy, for small files)
- * - `parseStream`: chunk-at-a-time streaming (for large files, progressive results)
- *
- * @returns Worker state and functions to trigger parsing.
+ * Streaming records accumulate in mutable refs per-file and flush to React state
+ * at most every {@link FLUSH_INTERVAL_MS} to avoid O(n²) array copies.
  */
 export function useEvtxWorker(): EvtxWorkerState {
     const [wasmReady, setWasmReady] = useState(false)
     const [wasmLoading, setWasmLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
-    const [stats, setStats] = useState<Stats | null>(null)
     const [records, setRecords] = useState<EvtxRecord[]>([])
     const [parsing, setParsing] = useState(false)
     const [loadProgress, setLoadProgress] = useState(0)
-    const [streamRecords, setStreamRecords] = useState<RecordMeta[]>([])
-    const [streaming, setStreaming] = useState(false)
+    const [allRecords, setAllRecords] = useState<RecordMeta[]>([])
+    const [filesState, setFilesState] = useState<FileSession[]>([])
     const [streamProgress, setStreamProgress] = useState<StreamProgress>({chunksProcessed: 0, totalChunks: 0})
+
     const workerRef = useRef<Worker | null>(null)
+    const renderedRecordCache = useRef<Map<string, EvtxRecord>>(new Map())
+    const pendingRenders = useRef<Map<string, { resolve: (r: EvtxRecord) => void }>>(new Map())
+    const pendingBatchRender = useRef<{ resolve: (records: EvtxRecord[]) => void } | null>(null)
+
+    // Per-file mutable accumulators
+    const streamAccumulators = useRef<Map<string, RecordMeta[]>>(new Map())
+    const sessionsRef = useRef<Map<string, FileSession>>(new Map())
+    const lastFlushTime = useRef<number>(0)
+    const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+    const flushStreamRecords = useCallback(() => {
+        // Merge all accumulators into a single array
+        const merged: RecordMeta[] = []
+        for (const acc of streamAccumulators.current.values()) {
+            for (let i = 0; i < acc.length; i++) {
+                merged.push(acc[i])
+            }
+        }
+        setAllRecords(merged)
+
+        // Compute combined progress
+        let chunksProcessed = 0
+        let totalChunks = 0
+        for (const session of sessionsRef.current.values()) {
+            chunksProcessed += session.streamProgress.chunksProcessed
+            totalChunks += session.streamProgress.totalChunks
+        }
+        setStreamProgress({chunksProcessed, totalChunks})
+        setFilesState(Array.from(sessionsRef.current.values()))
+
+        lastFlushTime.current = performance.now()
+        if (flushTimer.current !== null) {
+            clearTimeout(flushTimer.current)
+            flushTimer.current = null
+        }
+    }, [])
+
+    const scheduleFlush = useCallback(() => {
+        const now = performance.now()
+        if (now - lastFlushTime.current >= FLUSH_INTERVAL_MS) {
+            flushStreamRecords()
+        } else if (flushTimer.current === null) {
+            const remaining = FLUSH_INTERVAL_MS - (now - lastFlushTime.current)
+            flushTimer.current = setTimeout(flushStreamRecords, remaining)
+        }
+    }, [flushStreamRecords])
 
     useEffect(() => {
         const worker = new Worker(
@@ -72,7 +114,6 @@ export function useEvtxWorker(): EvtxWorkerState {
             setError(`Worker error: ${e.message}`)
             setWasmLoading(false)
             setParsing(false)
-            setStreaming(false)
         }
 
         worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
@@ -85,12 +126,6 @@ export function useEvtxWorker(): EvtxWorkerState {
                     break
 
                 case "meta":
-                    setStats({
-                        totalRecords: msg.totalRecords,
-                        numChunks: msg.numChunks,
-                        parseTimeMs: msg.parseTimeMs,
-                        fileName: msg.fileName,
-                    })
                     break
 
                 case "preview":
@@ -107,39 +142,82 @@ export function useEvtxWorker(): EvtxWorkerState {
                     setParsing(false)
                     break
 
-                case "fileMeta":
-                    setStats({
-                        totalRecords: 0,
-                        numChunks: msg.meta.numChunks,
-                        parseTimeMs: msg.parseTimeMs,
-                        fileName: msg.fileName,
-                    })
+                case "fileMeta": {
+                    const session = sessionsRef.current.get(msg.fileId)
+                    if (session) {
+                        session.stats = {
+                            totalRecords: 0,
+                            numChunks: msg.meta.numChunks,
+                            parseTimeMs: msg.parseTimeMs,
+                            fileName: msg.fileName,
+                        }
+                    }
                     break
+                }
 
-                case "chunkRecords":
-                    setStreamRecords((prev) => [...prev, ...msg.records])
-                    setStreamProgress({
-                        chunksProcessed: msg.chunksProcessed,
-                        totalChunks: msg.totalChunks,
-                    })
-                    break
+                case "chunkRecords": {
+                    const acc = streamAccumulators.current.get(msg.fileId)
+                    if (acc) {
+                        const incoming = msg.records
+                        for (let i = 0; i < incoming.length; i++) {
+                            acc.push(incoming[i])
+                        }
+                    }
 
-                case "streamDone":
-                    setStats((prev) => prev ? {...prev, totalRecords: msg.totalRecords} : prev)
-                    setStreaming(false)
-                    break
+                    const session = sessionsRef.current.get(msg.fileId)
+                    if (session) {
+                        session.streamProgress = {
+                            chunksProcessed: msg.chunksProcessed,
+                            totalChunks: msg.totalChunks,
+                        }
+                    }
 
-                case "renderedRecord":
-                    // Consumers handle this via a callback or additional state as needed.
-                    // For now, append to the full records list so it's accessible.
-                    setRecords((prev) => [...prev, msg.record])
+                    scheduleFlush()
                     break
+                }
+
+                case "streamDone": {
+                    const session = sessionsRef.current.get(msg.fileId)
+                    if (session) {
+                        session.streaming = false
+                        if (session.stats) {
+                            session.stats.totalRecords = msg.totalRecords
+                        }
+                    }
+                    // Final flush
+                    flushStreamRecords()
+                    break
+                }
+
+                case "renderedRecord": {
+                    const key = `${msg.fileId}:${msg.chunkIndex}:${msg.recordIndex}`
+                    renderedRecordCache.current.set(key, msg.record)
+                    const pending = pendingRenders.current.get(key)
+                    if (pending) {
+                        pending.resolve(msg.record)
+                        pendingRenders.current.delete(key)
+                    }
+                    break
+                }
+
+                case "renderedBatch": {
+                    const batchPending = pendingBatchRender.current
+                    if (batchPending) {
+                        for (let i = 0; i < msg.records.length; i++) {
+                            const rec = msg.records[i]
+                            const cacheKey = `${rec.fileId}:${rec.chunkIndex}:${rec.recordId}`
+                            renderedRecordCache.current.set(cacheKey, rec)
+                        }
+                        batchPending.resolve(msg.records)
+                        pendingBatchRender.current = null
+                    }
+                    break
+                }
 
                 case "error":
                     setError(msg.message)
                     setWasmLoading(false)
                     setParsing(false)
-                    setStreaming(false)
                     break
             }
         }
@@ -149,8 +227,9 @@ export function useEvtxWorker(): EvtxWorkerState {
 
         return () => {
             worker.terminate()
+            if (flushTimer.current !== null) clearTimeout(flushTimer.current)
         }
-    }, [])
+    }, [flushStreamRecords, scheduleFlush])
 
     const parse = useCallback((file: File) => {
         if (!wasmReady) {
@@ -161,7 +240,6 @@ export function useEvtxWorker(): EvtxWorkerState {
         setError(null)
         setParsing(true)
         setRecords([])
-        setStats(null)
         setLoadProgress(0)
 
         const reader = new FileReader()
@@ -177,46 +255,100 @@ export function useEvtxWorker(): EvtxWorkerState {
         reader.readAsArrayBuffer(file)
     }, [wasmReady])
 
-    const parseStream = useCallback((file: File) => {
+    const addFile = useCallback((file: File) => {
         if (!wasmReady) {
             setError("WASM module is still loading — please wait")
             return
         }
+
+        const fileId = crypto.randomUUID()
+        const session: FileSession = {
+            fileId,
+            file,
+            fileName: file.name,
+            stats: null,
+            streaming: true,
+            streamProgress: {chunksProcessed: 0, totalChunks: 0},
+        }
+
+        sessionsRef.current.set(fileId, session)
+        streamAccumulators.current.set(fileId, [])
+        setFilesState(Array.from(sessionsRef.current.values()))
 
         setError(null)
-        setStreaming(true)
-        setStreamRecords([])
-        setRecords([])
-        setStats(null)
-        setStreamProgress({chunksProcessed: 0, totalChunks: 0})
 
-        const msg: WorkerRequest = {type: "parseStream", file, fileName: file.name}
+        const msg: WorkerRequest = {type: "parseStream", file, fileName: file.name, fileId}
         workerRef.current!.postMessage(msg)
     }, [wasmReady])
 
-    const requestRecordRender = useCallback((file: File, chunkIndex: number, recordIndex: number) => {
-        if (!wasmReady) {
-            setError("WASM module is still loading — please wait")
-            return
+    const removeFile = useCallback((fileId: string) => {
+        sessionsRef.current.delete(fileId)
+        streamAccumulators.current.delete(fileId)
+
+        // Clear cache entries for this file
+        for (const key of renderedRecordCache.current.keys()) {
+            if (key.startsWith(fileId + ":")) {
+                renderedRecordCache.current.delete(key)
+            }
         }
 
-        const msg: WorkerRequest = {type: "renderRecord", file, chunkIndex, recordIndex}
-        workerRef.current!.postMessage(msg)
-    }, [wasmReady])
+        flushStreamRecords()
+    }, [flushStreamRecords])
+
+    const requestBatchRender = useCallback((fileId: string, file: File, records: RecordMeta[]): Promise<EvtxRecord[]> => {
+        return new Promise((resolve) => {
+            pendingBatchRender.current = {resolve}
+            const msg: WorkerRequest = {
+                type: "renderBatch",
+                file,
+                records: records.map((r) => ({chunkIndex: r.chunkIndex, recordIndex: r.recordIndexInChunk})),
+                fileId,
+            }
+            workerRef.current!.postMessage(msg)
+        })
+    }, [])
+
+    const requestRecordRender = useCallback((fileId: string, file: File, chunkIndex: number, recordIndex: number): Promise<EvtxRecord> => {
+        const key = `${fileId}:${chunkIndex}:${recordIndex}`
+
+        const cached = renderedRecordCache.current.get(key)
+        if (cached) return Promise.resolve(cached)
+
+        const existing = pendingRenders.current.get(key)
+        if (existing) {
+            return new Promise((resolve) => {
+                const original = existing.resolve
+                existing.resolve = (r: EvtxRecord) => {
+                    original(r)
+                    resolve(r)
+                }
+            })
+        }
+
+        return new Promise((resolve) => {
+            pendingRenders.current.set(key, {resolve})
+            const msg: WorkerRequest = {type: "renderRecord", file, chunkIndex, recordIndex, fileId}
+            workerRef.current!.postMessage(msg)
+        })
+    }, [])
+
+    const anyStreaming = filesState.some((s) => s.streaming)
 
     return {
         wasmReady,
         wasmLoading,
         error,
-        stats,
         records,
         parsing,
         loadProgress,
         parse,
-        streamRecords,
-        streaming,
+        allRecords,
+        anyStreaming,
         streamProgress,
-        parseStream,
+        files: filesState,
+        addFile,
+        removeFile,
         requestRecordRender,
+        requestBatchRender,
     }
 }

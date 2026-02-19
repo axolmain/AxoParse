@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:wasm": "dotnet publish ../../src/AxoParse.Browser -c Release -o ../../src/AxoParse.Browser/publish && mkdir -p public/wasm && rm -rf public/wasm/_framework && cp -r ../../src/AxoParse.Browser/publish/wwwroot/_framework public/wasm/_framework",
+    "build:wasm": "dotnet publish ../../src/AxoParse.Browser -c Release -o $(pwd)/build/wasm-publish && mkdir -p public/wasm && rm -rf public/wasm/_framework && cp -r build/wasm-publish/wwwroot/_framework public/wasm/_framework",
     "preview": "vite preview"
   },
   "dependencies": {
