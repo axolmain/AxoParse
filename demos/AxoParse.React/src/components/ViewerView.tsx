@@ -102,12 +102,15 @@ export function ViewerView({
     useStreamProgress(anyStreaming, streamProgress.chunksProcessed, streamProgress.totalChunks)
 
     const filteredRecords = useFilteredRecords(allRecords, filters, bookmarkKeys)
-    const dashboardStats = useDashboardStats(filteredRecords, zoomDomain)
 
-    const availableEventIds = useUniqueValues(allRecords, getEventId, compareNumeric)
-    const availableProviders = useUniqueValues(allRecords, getProvider)
-    const availableComputers = useUniqueValues(allRecords, getComputer)
-    const availableChannels = useUniqueValues(allRecords, getChannel)
+    // Defer expensive O(N) / O(N log N) computations until streaming finishes
+    const stableRecords = useMemo(() => anyStreaming ? [] : allRecords, [anyStreaming, allRecords])
+    const stableFiltered = useMemo(() => anyStreaming ? [] : filteredRecords, [anyStreaming, filteredRecords])
+    const dashboardStats = useDashboardStats(stableFiltered, zoomDomain)
+    const availableEventIds = useUniqueValues(stableRecords, getEventId, compareNumeric)
+    const availableProviders = useUniqueValues(stableRecords, getProvider)
+    const availableComputers = useUniqueValues(stableRecords, getComputer)
+    const availableChannels = useUniqueValues(stableRecords, getChannel)
 
     const fileMap = useMemo(() => {
         const m = new Map<string, File>()
