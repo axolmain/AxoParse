@@ -106,7 +106,7 @@ Bench run: February 2026.
 
 System: macOS Sequoia - Version 15.7.3
 
-Benchmark commit: 8c7f8bf.
+Benchmark commit: 7ae7110.
 
 Libraries benched:
 
@@ -114,10 +114,10 @@ Libraries benched:
 - [evtx](https://github.com/omerbenamram/evtx) - Rust-based
 - [evtx-parser](https://github.com/axolmain/evtx-parser) - Typescript-based (technically JS ig but hey)
 
-| File                                | C# (1 thread)     | C# (8 threads)   | C# WASM           | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node           | libevtx (C)       |
-|-------------------------------------|-------------------|------------------|-------------------|------------------------|-------------------------|-------------------|-------------------|
-| 30M security_big_sample.evtx (XML)  | 109.1 ms ± 6.6 ms | 81.9 ms ± 5.2 ms | N/A (web only)    | 305.0 ms ± 2.3 ms      | 88.3 ms ± 15.8 ms       | 1.922 s ± 0.040 s | 2.702 s ± 0.046 s |
-| 30M security_big_sample.evtx (JSON) | 128.2 ms ± 4.4 ms | 94.3 ms ± 1.8 ms | 215.5 ms ± 2.3 ms | 273.7 ms ± 2.6 ms      | 98.9 ms ± 7.8 ms        | 4.188 s ± 1.276 s | No support        |
+| File                                | C# (1 thread)      | C# (8 threads)   | C# WASM           | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node            | libevtx (C)       |
+|-------------------------------------|--------------------|------------------|-------------------|------------------------|-------------------------|--------------------|-------------------|
+| 30M security_big_sample.evtx (XML)  | 68.9 ms ± 0.5 ms   | 58.1 ms ± 1.0 ms | N/A (web only)    | 155.4 ms ± 0.4 ms      | 54.6 ms ± 2.5 ms        | 976.4 ms ± 15.8 ms | 1.397 s ± 0.029 s |
+| 30M security_big_sample.evtx (JSON) | 195.2 ms ± 21.7 ms | 86.7 ms ± 7.5 ms | 112.8 ms ± 1.1 ms | 140.3 ms ± 0.6 ms      | 49.6 ms ± 0.4 ms        | 1.306 s ± 0.012 s  | No support        |
 
 ## Documentation
 
