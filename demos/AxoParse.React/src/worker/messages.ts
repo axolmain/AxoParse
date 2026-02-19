@@ -6,7 +6,13 @@ export type WorkerRequest =
     | { type: "parse"; data: ArrayBuffer; fileName: string }
     | { type: "parseStream"; file: File; fileName: string; fileId: string }
     | { type: "renderRecord"; file: File; chunkIndex: number; recordIndex: number; fileId: string }
-    | { type: "renderBatch"; file: File; records: Array<{ chunkIndex: number; recordIndex: number }>; fileId: string }
+    | {
+    type: "renderBatch";
+    file: File;
+    records: Array<{ chunkIndex: number; recordIndex: number }>;
+    fileId: string;
+    batchId: string
+}
 
 /**
  * Messages sent from the parse worker back to the main thread.
@@ -33,4 +39,9 @@ export type WorkerResponse =
 }
     | { type: "streamDone"; totalRecords: number; fileId: string }
     | { type: "renderedRecord"; record: EvtxRecord; chunkIndex: number; recordIndex: number; fileId: string }
-    | { type: "renderedBatch"; records: EvtxRecord[]; fileId: string }
+    | {
+    type: "renderedBatch";
+    records: Array<EvtxRecord & { recordIndexInChunk: number }>;
+    fileId: string;
+    batchId: string
+}

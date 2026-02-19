@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useState} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import type {RecordMeta} from '../types'
 import {
     Bookmark,
@@ -21,14 +21,18 @@ export interface UseBookmarksReturn {
 
 export function useBookmarks(storageKey: string): UseBookmarksReturn {
     const [bookmarks, setBookmarks] = useState<Map<string, Bookmark>>(() => loadBookmarks(storageKey))
+    const isInitialMount = useRef(true)
 
-    // Reload when storageKey changes
     useEffect(() => {
         setBookmarks(loadBookmarks(storageKey))
+        isInitialMount.current = true
     }, [storageKey])
 
-    // Auto-save on every change
     useEffect(() => {
+        if (isInitialMount.current) {
+            isInitialMount.current = false
+            return
+        }
         saveBookmarks(storageKey, bookmarks)
     }, [storageKey, bookmarks])
 
@@ -56,7 +60,7 @@ export function useBookmarks(storageKey: string): UseBookmarksReturn {
         return bookmarks.has(makeBookmarkKey(record))
     }, [bookmarks])
 
-    const bookmarkKeys = new Set(bookmarks.keys())
+    const bookmarkKeys = useMemo(() => new Set(bookmarks.keys()), [bookmarks])
 
     return {bookmarks, bookmarkKeys, toggle, setNote, remove, clear, isBookmarked}
 }

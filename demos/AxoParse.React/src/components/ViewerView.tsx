@@ -64,8 +64,6 @@ export interface ViewerViewProps {
     streamProgress: StreamProgress
     files: FileSession[]
     error: string | null
-    addFile: (file: File) => void
-    removeFile: (fileId: string) => void
     requestRecordRender: (fileId: string, file: File, chunkIndex: number, recordIndex: number) => Promise<EvtxRecord>
     requestBatchRender: (fileId: string, file: File, records: RecordMeta[]) => Promise<EvtxRecord[]>
 }
@@ -76,8 +74,6 @@ export function ViewerView({
                                streamProgress,
                                files,
                                error,
-                               addFile: _addFile,
-                               removeFile: _removeFile,
                                requestRecordRender,
                                requestBatchRender,
                            }: ViewerViewProps) {

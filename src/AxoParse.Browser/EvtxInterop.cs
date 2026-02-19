@@ -206,8 +206,9 @@ public partial class EvtxInterop
             writer.Flush();
             return Encoding.UTF8.GetString(stream.ToArray());
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"ParseChunkMetadata failed for chunk {chunkIndex}: {ex.Message}");
             return "[]";
         }
     }
@@ -245,8 +246,9 @@ public partial class EvtxInterop
             writer.Flush();
             return Encoding.UTF8.GetString(stream.ToArray());
         }
-        catch
+        catch (Exception ex)
         {
+            Console.Error.WriteLine($"RenderRecord failed for chunk {chunkIndex}, record {recordIndex}: {ex.Message}");
             return "{}";
         }
     }
