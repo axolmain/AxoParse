@@ -1,0 +1,88 @@
+.container {
+    flex: 1;
+    overflow: auto;
+    border: 1px solid var(--mantine-color-default-border);
+    border-radius: var(--mantine-radius-sm);
+    min-height: 0;
+    outline: none;
+    font-size: 0.8125rem;
+}
+
+.header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.headerRow {
+    display: flex;
+    width: 100%;
+}
+
+.headerCell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    background: var(--mantine-primary-color-filled);
+    color: var(--mantine-primary-color-contrast);
+    padding: 0.5rem 0.5rem;
+    white-space: nowrap;
+    font-weight: 500;
+    font-size: 0.8125rem;
+    user-select: none;
+    box-sizing: border-box;
+}
+
+.headerLabelRow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.headerFilterRow {
+    width: 100%;
+}
+
+.headerFilterRow > * {
+    width: 100%;
+}
+
+.row {
+    border-bottom: 1px solid var(--mantine-color-default-border);
+}
+
+.row:hover .rowCells {
+    background: var(--mantine-color-default-hover);
+}
+
+.focused .rowCells {
+    background: var(--mantine-primary-color-light);
+    outline: 2px solid var(--mantine-primary-color-filled);
+    outline-offset: -2px;
+}
+
+.expanded {
+    background: var(--mantine-color-default-hover);
+}
+
+.rowCells {
+    display: flex;
+    height: 36px;
+    cursor: pointer;
+    align-items: center;
+}
+
+.cell {
+    padding: 0.35rem 0.75rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    box-sizing: border-box;
+}
+
+.detailPanel {
+    padding: 0.5rem 0.75rem;
+    max-height: 284px;
+    overflow: auto;
+    border-top: 1px solid var(--mantine-color-default-border);
+}

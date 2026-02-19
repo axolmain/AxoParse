@@ -6,20 +6,42 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:wasm": "dotnet publish ../../src/AxoParse.Browser -c Release -o ../../src/AxoParse.Browser/publish && mkdir -p public/wasm && rm -rf public/wasm/_framework && cp -r ../../src/AxoParse.Browser/publish/wwwroot/_framework public/wasm/_framework",
-    "preview": "vite preview"
+    "build:wasm": "dotnet publish ../../src/AxoParse.Browser -c Release -o $(pwd)/build/wasm-publish && mkdir -p public/wasm && rm -rf public/wasm/_framework && cp -r build/wasm-publish/wwwroot/_framework public/wasm/_framework",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
-    "@tanstack/react-table": "^8.21.2",
+    "@mantine/charts": "^8.3.15",
+    "@mantine/core": "^8.3.15",
+    "@mantine/dates": "^8.3.15",
+    "@mantine/dropzone": "^8.3.15",
+    "@mantine/hooks": "^8.3.15",
+    "@mantine/modals": "^8.3.15",
+    "@mantine/nprogress": "^8.3.15",
+    "@tanstack/react-router": "^1.161.1",
+    "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.13.18",
+    "dayjs": "^1.11.19",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "recharts": "^3.7.0"
   },
   "devDependencies": {
+    "@tanstack/react-router-devtools": "^1.161.1",
+    "@tanstack/router-plugin": "^1.161.1",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
     "@vitejs/plugin-react": "^4.3.4",
+    "jsdom": "^28.1.0",
+    "postcss": "^8.5.6",
+    "postcss-preset-mantine": "^1.18.0",
+    "postcss-simple-vars": "^7.0.1",
     "typescript": "~5.7.2",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "vitest": "^4.0.18"
   }
 }

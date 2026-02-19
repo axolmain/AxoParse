@@ -1,0 +1,25 @@
+.wrapper {
+    position: relative;
+}
+
+.canvas {
+    width: 100%;
+    cursor: crosshair;
+    display: block;
+}
+
+.tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--mantine-color-body);
+    color: var(--mantine-color-text);
+    border: 1px solid var(--mantine-color-default-border);
+    padding: 4px 8px;
+    border-radius: var(--mantine-radius-xs);
+    font-size: 11px;
+    line-height: 1.4;
+    white-space: nowrap;
+    z-index: 10;
+    transform: translateX(-50%);
+    box-shadow: var(--mantine-shadow-sm);
+}

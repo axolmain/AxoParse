@@ -62,7 +62,7 @@ internal sealed partial class BinXmlParser
         ReadOnlySpan<byte> eventData = record.GetEventData(_fileData);
         int binxmlChunkBase = record.EventDataFileOffset - _chunkFileOffset;
 
-        ValueStringBuilder vsb = new(stackalloc char[512]);
+        ValueStringBuilder vsb = new(stackalloc char[1024]);
         int pos = 0;
         ParseTopLevel(eventData, ref pos, binxmlChunkBase, ref vsb, handlePiTarget: true);
         string result = vsb.ToString();
@@ -470,34 +470,61 @@ internal sealed partial class BinXmlParser
     private void ParseTemplateInstance(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
                                        ref ValueStringBuilder vsb)
     {
-        TemplateInstanceData tid = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase);
+        // Peek at numValues to size the stackalloc buffers.
+        // Header layout: 6 skip + 4 defDataOffset [+ optional inline] + 4 numValues.
+        // ReadTemplateInstanceData handles the full parse; we just need numValues for buffer sizing.
+        int peekPos = pos + 6;
+        uint defDataOffset = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos, 4));
+        peekPos += 4;
+        uint peekChunkRel = (uint)(binxmlChunkBase + peekPos);
+        if (defDataOffset == peekChunkRel)
+        {
+            // inline: skip 4 next-ptr + 16 GUID + 4 dataSize + dataSize body
+            uint inlineDataSize = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos + 20, 4));
+            peekPos += 24 + (int)inlineDataSize;
+        }
+        int numVals = (int)BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos, 4));
 
-        if (tid.DataSize == 0) return;
+        // stackalloc for the common case (≤ 64 substitutions); heap fallback for rare large templates
+        const int StackThreshold = 64;
+        Span<int> valueOffsets = numVals <= StackThreshold ? stackalloc int[StackThreshold] : new int[numVals];
+        Span<int> valueSizes = numVals <= StackThreshold ? stackalloc int[StackThreshold] : new int[numVals];
+        Span<byte> valueTypes = numVals <= StackThreshold ? stackalloc byte[StackThreshold] : new byte[numVals];
 
-        int tplBodyFileOffset = _chunkFileOffset + (int)tid.DefDataOffset + 24;
-        if (tplBodyFileOffset + (int)tid.DataSize > _fileData.Length) return;
+        TemplateInstanceHeader hdr = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase,
+            valueOffsets, valueSizes, valueTypes);
 
-        // Check compiled cache (GetOrAdd may invoke factory concurrently for same key — harmless)
+        if (hdr.DataSize == 0) return;
+
+        int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
+        if (tplBodyFileOffset + (int)hdr.DataSize > _fileData.Length) return;
+
+        // Slice spans to actual value count
+        ReadOnlySpan<int> offsets = valueOffsets.Slice(0, hdr.NumValues);
+        ReadOnlySpan<int> sizes = valueSizes.Slice(0, hdr.NumValues);
+        ReadOnlySpan<byte> types = valueTypes.Slice(0, hdr.NumValues);
+
+        // Check compiled cache
         CompiledTemplate? compiled = null;
         if (_compiledCache != null)
         {
-            if (!_compiledCache.TryGetValue(tid.TemplateGuid, out compiled))
+            if (!_compiledCache.TryGetValue(hdr.TemplateGuid, out compiled))
             {
-                compiled = CompileTemplate((int)tid.DefDataOffset, (int)tid.DataSize);
-                _compiledCache[tid.TemplateGuid] = compiled;
+                compiled = CompileTemplate((int)hdr.DefDataOffset, (int)hdr.DataSize);
+                _compiledCache[hdr.TemplateGuid] = compiled;
             }
         }
 
         if (compiled != null)
         {
-            WriteCompiled(compiled, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, binxmlChunkBase, ref vsb);
+            WriteCompiled(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb);
         }
         else
         {
-            // Fallback: parse template body with substitutions
-            ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)tid.DataSize);
+            // Fallback: parse template body with substitutions (requires arrays for recursive ParseContent)
+            ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize);
             int tplPos = 0;
-            int tplChunkBase = (int)tid.DefDataOffset + 24;
+            int tplChunkBase = (int)hdr.DefDataOffset + 24;
 
             // Skip fragment header
             if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
@@ -505,7 +532,7 @@ internal sealed partial class BinXmlParser
 
             bool saved = _insideTemplateBody;
             _insideTemplateBody = true;
-            ParseContent(tplBody, ref tplPos, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, tplChunkBase, ref vsb);
+            ParseContent(tplBody, ref tplPos, offsets.ToArray(), sizes.ToArray(), types.ToArray(), tplChunkBase, ref vsb);
             _insideTemplateBody = saved;
         }
     }
@@ -547,13 +574,18 @@ internal sealed partial class BinXmlParser
     /// identity, substitution descriptors, and value metadata. Shared by both XML and JSON paths.
     /// Layout: 1 token + 1 unknown + 4 unknown + 4 defDataOffset [+ 24-byte inline header + body]
     /// + 4 numValues + descriptors + values.
+    /// Writes substitution metadata into caller-provided spans to avoid per-record heap allocations.
     /// </summary>
     /// <param name="data">BinXml byte stream.</param>
     /// <param name="pos">Current read position; advanced past the entire template instance data.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
-    /// <returns>Parsed template instance data for downstream rendering.</returns>
-    private TemplateInstanceData ReadTemplateInstanceData(
-        ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase)
+    /// <param name="valueOffsets">Caller-provided buffer; filled with absolute file offsets of each substitution value.</param>
+    /// <param name="valueSizes">Caller-provided buffer; filled with byte sizes of each substitution value.</param>
+    /// <param name="valueTypes">Caller-provided buffer; filled with BinXml value type codes.</param>
+    /// <returns>Parsed template instance header (guid, sizes, value count) for downstream rendering.</returns>
+    private TemplateInstanceHeader ReadTemplateInstanceData(
+        ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+        Span<int> valueOffsets, Span<int> valueSizes, Span<byte> valueTypes)
     {
         int p = pos;
 
@@ -615,10 +647,6 @@ internal sealed partial class BinXmlParser
             MemoryMarshal.Cast<byte, SubstitutionDescriptor>(data.Slice(p, numVals * 4));
         p += numVals * 4;
 
-        int[] valueOffsets = new int[numVals];
-        int[] valueSizes = new int[numVals];
-        byte[] valueTypes = new byte[numVals];
-
         int dataBaseFileOffset = _chunkFileOffset + binxmlChunkBase;
 
         for (int i = 0; i < numVals; i++)
@@ -634,13 +662,7 @@ internal sealed partial class BinXmlParser
 
         pos = p;
 
-        return new TemplateInstanceData(
-            templateGuid,
-            dataSize,
-            defDataOffset,
-            valueOffsets,
-            valueSizes,
-            valueTypes);
+        return new TemplateInstanceHeader(templateGuid, dataSize, defDataOffset, numVals);
     }
 
     /// <summary>
@@ -878,7 +900,8 @@ internal sealed partial class BinXmlParser
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
     /// <param name="vsb">String builder that receives the rendered XML output.</param>
     private void WriteCompiled(CompiledTemplate compiled,
-                               int[] valueOffsets, int[] valueSizes, byte[] valueTypes,
+                               scoped ReadOnlySpan<int> valueOffsets, scoped ReadOnlySpan<int> valueSizes,
+                               scoped ReadOnlySpan<byte> valueTypes,
                                int binxmlChunkBase, ref ValueStringBuilder vsb)
     {
         string[] parts = compiled.Parts;
@@ -965,69 +988,19 @@ internal sealed partial class BinXmlParser
     #region Nested Types
 
     /// <summary>
-    /// Parsed data from a TemplateInstance token (0x0C), shared between XML and JSON output paths.
-    /// Contains the template identity and all substitution value metadata needed for rendering.
+    /// Lightweight header from a TemplateInstance token (0x0C). Contains only the template
+    /// identity and value count; substitution data is written into caller-provided spans
+    /// by <see cref="ReadTemplateInstanceData"/> to avoid per-record heap allocations.
     /// </summary>
-    private readonly struct TemplateInstanceData
-    {
-        #region Constructors And Destructors
-
-        /// <summary>
-        /// Initialises a new template instance data result.
-        /// </summary>
-        /// <param name="templateGuid">Template GUID.</param>
-        /// <param name="dataSize">Template body size in bytes.</param>
-        /// <param name="defDataOffset">Chunk-relative definition offset.</param>
-        /// <param name="valueOffsets">Absolute file offsets of substitution values.</param>
-        /// <param name="valueSizes">Byte sizes of substitution values.</param>
-        /// <param name="valueTypes">BinXml value type codes.</param>
-        public TemplateInstanceData(Guid templateGuid, uint dataSize, uint defDataOffset,
-                                    int[] valueOffsets, int[] valueSizes, byte[] valueTypes)
-        {
-            TemplateGuid = templateGuid;
-            DataSize = dataSize;
-            DefDataOffset = defDataOffset;
-            ValueOffsets = valueOffsets;
-            ValueSizes = valueSizes;
-            ValueTypes = valueTypes;
-        }
-
-        #endregion
-
-        #region Fields
-
-        /// <summary>
-        /// Byte size of the template body (after the 24-byte definition header).
-        /// </summary>
-        public readonly uint DataSize;
-
-        /// <summary>
-        /// Chunk-relative offset of the template definition (before the 24-byte header).
-        /// </summary>
-        public readonly uint DefDataOffset;
-
-        /// <summary>
-        /// GUID identifying the template definition (used as compiled cache key).
-        /// </summary>
-        public readonly Guid TemplateGuid;
-
-        /// <summary>
-        /// Absolute file offsets of each substitution value within <see cref="_fileData"/>.
-        /// </summary>
-        public readonly int[] ValueOffsets;
-
-        /// <summary>
-        /// Byte sizes of each substitution value.
-        /// </summary>
-        public readonly int[] ValueSizes;
-
-        /// <summary>
-        /// BinXml value type codes for each substitution.
-        /// </summary>
-        public readonly byte[] ValueTypes;
-
-        #endregion
-    }
+    /// <param name="TemplateGuid">Template GUID (compiled cache key).</param>
+    /// <param name="DataSize">Template body size in bytes (after the 24-byte definition header).</param>
+    /// <param name="DefDataOffset">Chunk-relative offset of the template definition.</param>
+    /// <param name="NumValues">Number of substitution values in this instance.</param>
+    private readonly record struct TemplateInstanceHeader(
+        Guid TemplateGuid,
+        uint DataSize,
+        uint DefDataOffset,
+        int NumValues);
 
     #endregion
 }

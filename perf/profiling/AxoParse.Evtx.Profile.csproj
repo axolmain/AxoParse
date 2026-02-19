@@ -4,6 +4,7 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <PublishAot>true</PublishAot>
     </PropertyGroup>
     <ItemGroup>
         <ProjectReference Include="..\..\src\AxoParse.Evtx\AxoParse.Evtx.csproj"/>

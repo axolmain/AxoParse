@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Text;
 using AxoParse.Evtx.Evtx;
@@ -25,7 +26,7 @@ internal sealed partial class BinXmlParser
         ReadOnlySpan<byte> eventData = record.GetEventData(_fileData);
         int binxmlChunkBase = record.EventDataFileOffset - _chunkFileOffset;
 
-        ValueStringBuilder vsb = new(stackalloc char[512]);
+        ValueStringBuilder vsb = new(stackalloc char[1024]);
         int pos = 0;
         ParseTopLevelJson(eventData, ref pos, binxmlChunkBase, ref vsb);
         ReadOnlySpan<char> chars = vsb.AsSpan();
@@ -361,33 +362,55 @@ internal sealed partial class BinXmlParser
     private void ParseTemplateInstanceJson(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
                                            ref ValueStringBuilder vsb)
     {
-        TemplateInstanceData tid = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase);
+        // Peek at numValues to size the stackalloc buffers
+        int peekPos = pos + 6;
+        uint defDataOffset = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos, 4));
+        peekPos += 4;
+        uint peekChunkRel = (uint)(binxmlChunkBase + peekPos);
+        if (defDataOffset == peekChunkRel)
+        {
+            uint inlineDataSize = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos + 20, 4));
+            peekPos += 24 + (int)inlineDataSize;
+        }
+        int numVals = (int)BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos, 4));
 
-        if (tid.DataSize == 0) return;
+        const int StackThreshold = 64;
+        Span<int> valueOffsets = numVals <= StackThreshold ? stackalloc int[StackThreshold] : new int[numVals];
+        Span<int> valueSizes = numVals <= StackThreshold ? stackalloc int[StackThreshold] : new int[numVals];
+        Span<byte> valueTypes = numVals <= StackThreshold ? stackalloc byte[StackThreshold] : new byte[numVals];
 
-        int tplBodyFileOffset = _chunkFileOffset + (int)tid.DefDataOffset + 24;
-        if ((uint)(tplBodyFileOffset + tid.DataSize) > (uint)_fileData.Length) return;
+        TemplateInstanceHeader hdr = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase,
+            valueOffsets, valueSizes, valueTypes);
+
+        if (hdr.DataSize == 0) return;
+
+        int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
+        if ((uint)(tplBodyFileOffset + hdr.DataSize) > (uint)_fileData.Length) return;
+
+        ReadOnlySpan<int> offsets = valueOffsets.Slice(0, hdr.NumValues);
+        ReadOnlySpan<int> sizes = valueSizes.Slice(0, hdr.NumValues);
+        ReadOnlySpan<byte> types = valueTypes.Slice(0, hdr.NumValues);
 
         // Check compiled JSON cache
         if (_compiledJsonCache != null)
         {
-            if (!_compiledJsonCache.TryGetValue(tid.TemplateGuid, out CompiledJsonTemplate? compiled))
+            if (!_compiledJsonCache.TryGetValue(hdr.TemplateGuid, out CompiledJsonTemplate? compiled))
             {
-                compiled = CompileJsonTemplate((int)tid.DefDataOffset, (int)tid.DataSize);
-                _compiledJsonCache[tid.TemplateGuid] = compiled;
+                compiled = CompileJsonTemplate((int)hdr.DefDataOffset, (int)hdr.DataSize);
+                _compiledJsonCache[hdr.TemplateGuid] = compiled;
             }
 
             if (compiled != null)
             {
-                WriteCompiledJson(compiled, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, binxmlChunkBase, ref vsb);
+                WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb);
                 return;
             }
         }
 
-        // Fallback: parse template body with substitutions
-        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)tid.DataSize);
+        // Fallback: parse template body with substitutions (requires arrays for recursive ParseContentJson)
+        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize);
         int tplPos = 0;
-        int tplChunkBase = (int)tid.DefDataOffset + 24;
+        int tplChunkBase = (int)hdr.DefDataOffset + 24;
 
         if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
             tplPos += 4;
@@ -395,7 +418,7 @@ internal sealed partial class BinXmlParser
         bool saved = _insideTemplateBody;
         _insideTemplateBody = true;
         bool needsComma = false;
-        ParseContentJson(tplBody, ref tplPos, tid.ValueOffsets, tid.ValueSizes, tid.ValueTypes, tplChunkBase,
+        ParseContentJson(tplBody, ref tplPos, offsets.ToArray(), sizes.ToArray(), types.ToArray(), tplChunkBase,
             ref vsb, 0, needsComma: ref needsComma);
         _insideTemplateBody = saved;
     }
@@ -410,7 +433,8 @@ internal sealed partial class BinXmlParser
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
     /// <param name="vsb">String builder that receives the rendered JSON output.</param>
     private void WriteCompiledJson(CompiledJsonTemplate compiled,
-                                   int[] valueOffsets, int[] valueSizes, byte[] valueTypes,
+                                   scoped ReadOnlySpan<int> valueOffsets, scoped ReadOnlySpan<int> valueSizes,
+                                   scoped ReadOnlySpan<byte> valueTypes,
                                    int binxmlChunkBase, ref ValueStringBuilder vsb)
     {
         vsb.Append(compiled.Parts[0]);

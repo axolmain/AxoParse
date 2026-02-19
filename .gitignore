@@ -489,7 +489,8 @@ $RECYCLE.BIN/
 # esbuild benchmark bundle
 tools/bench/bench-cli.mjs
 demos/AxoParse.React/public/wasm/                                                                                                                                                                 
-demos/AxoParse.React/dist/            
+demos/AxoParse.React/dist/    
+demos/AxoParse.React/build/wasm-publish/           
 demos/publishclear/
 
 # npm package — WASM framework populated by CI

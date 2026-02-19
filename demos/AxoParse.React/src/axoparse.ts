@@ -1,10 +1,19 @@
-import type {EvtxRecord, ParseMeta} from "./types"
+import type {EvtxRecord, FileMeta, ParseMeta, RecordMeta} from "./types"
+
+/** Size of the EVTX file header in bytes. */
+export const EVTX_HEADER_SIZE = 4096
+
+/** Size of each EVTX chunk in bytes (64 KB). */
+export const EVTX_CHUNK_SIZE = 65536
 
 /** Interop function signatures exposed by the .NET WASM module. */
 interface WasmExports {
     ParseEvtxFile: (data: Uint8Array) => string
     GetRecordPage: (offset: number, limit: number) => string
     ParseEvtxToJson: (data: Uint8Array) => string
+    ParseFileHeader: (headerData: Uint8Array) => string
+    ParseChunkMetadata: (chunkData: Uint8Array, chunkIndex: number) => string
+    RenderRecord: (chunkData: Uint8Array, chunkIndex: number, recordIndex: number) => string
 }
 
 let exports: WasmExports | null = null
@@ -76,4 +85,39 @@ export function getRecordPage(offset: number, limit: number): EvtxRecord[] {
     return JSON.parse(exports.GetRecordPage(offset, limit)) as EvtxRecord[]
 }
 
+/**
+ * Parse the 4096-byte EVTX file header and return metadata.
+ *
+ * @param headerData - First 4096 bytes of the EVTX file.
+ * @returns Parsed file header metadata.
+ */
+export function parseFileHeader(headerData: Uint8Array): FileMeta {
+    if (!exports) throw new Error("WASM not initialised — call initAxoParse() first")
+    return JSON.parse(exports.ParseFileHeader(headerData)) as FileMeta
+}
 
+/**
+ * Parse a single 64KB chunk and return lightweight metadata for each record.
+ *
+ * @param chunkData - Exactly 65536 bytes covering one chunk.
+ * @param chunkIndex - Zero-based chunk index.
+ * @returns Array of lightweight record metadata objects.
+ */
+export function parseChunkMetadata(chunkData: Uint8Array, chunkIndex: number): RecordMeta[] {
+    if (!exports) throw new Error("WASM not initialised — call initAxoParse() first")
+    return JSON.parse(exports.ParseChunkMetadata(chunkData, chunkIndex)) as RecordMeta[]
+}
+
+/**
+ * Re-parse a chunk and return full detail JSON for a single record.
+ * Used for on-demand rendering when the user expands a table row.
+ *
+ * @param chunkData - Exactly 65536 bytes covering one chunk.
+ * @param chunkIndex - Zero-based chunk index.
+ * @param recordIndex - Zero-based index of the record within the chunk.
+ * @returns Full record object with all fields including XML and eventData.
+ */
+export function renderRecord(chunkData: Uint8Array, chunkIndex: number, recordIndex: number): EvtxRecord {
+    if (!exports) throw new Error("WASM not initialised — call initAxoParse() first")
+    return JSON.parse(exports.RenderRecord(chunkData, chunkIndex, recordIndex)) as EvtxRecord
+}
