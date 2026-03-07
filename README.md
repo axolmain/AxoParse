@@ -11,15 +11,15 @@
 
 <div align="center">
   <!-- NuGet version -->
-  <!-- <a href="https://www.nuget.org/packages/AxoParse.Evtx">
+  <a href="https://www.nuget.org/packages/AxoParse.Evtx">
     <img src="https://img.shields.io/nuget/v/AxoParse.Evtx.svg?style=flat-square"
       alt="NuGet version" />
-  </a> -->
+  </a>
   <!-- NuGet downloads -->
-  <!-- <a href="https://www.nuget.org/packages/AxoParse.Evtx">
+  <a href="https://www.nuget.org/packages/AxoParse.Evtx">
     <img src="https://img.shields.io/nuget/dt/AxoParse.Evtx.svg?style=flat-square"
       alt="NuGet downloads" />
-  </a> -->
+  </a>
   <!-- License -->
   <a href="LICENSE">
     <img src="https://img.shields.io/github/license/axolmain/AxoParse.svg?style=flat-square"
@@ -29,25 +29,20 @@
 
 <br />
 
-## A few words :)
+## Background
 
-> NOT FULLY FINISHED FOR USE - STILL IN DEVELOPMENT
-
-This project was inspired by work I did a few years ago as an intern, and by
+This project was inspired by work I did as an intern a few years ago and by
 omerbenamram's [Rust-based parser](https://github.com/omerbenamram/evtx/tree/master).
-I wanted to build an evtx parser that was faster than the one which uses the default Windows API, and ideally become the
-fastest open source evtx parser. So after reading through the fantastic documentation in
-the [libevtx](https://github.com/libyal/libevtx/blob/main/documentation/Windows%20XML%20Event%20Log%20(EVTX).asciidoc#name)
+The goal was to build an EVTX parser faster than the default Windows API — and ideally the fastest open-source
+option available. So after reading through the fantastic documentation
+in [libevtx](https://github.com/libyal/libevtx/blob/main/documentation/Windows%20XML%20Event%20Log%20(EVTX).asciidoc#name)
 project, and a few ai searches - I came up with a rough outline of a parser and then optimized it as best I can to get
 this.
 
 Much of my documentation/comments are inspired or taken from the libevtx, and Microsoft's docs, and much of the strategy
 for how to handle errors were inspired by omerbenamram.
 
-That all being said, I write this at 03:43 AM as caffeine and adderall wear off so if there are odd things in the
-codebase
-you see before I get to it, please do leave a GH issue. Feel free to contribute too! I'll leave instructions and such on
-that another day..
+If you find issues, please open a [GitHub issue](https://github.com/axolmain/AxoParse/issues). Contributions welcome!
 
 ## Features
 
@@ -59,24 +54,24 @@ that another day..
 - **Resilient** — gracefully handles corrupted records, bad checksums, and malformed chunks
 - **Minimal allocations** — span-based zero-copy parsing, stack allocations, and value types throughout
 
+## Install
+
+```
+dotnet add package AxoParse.Evtx
+```
+
 ## Usage
 
-> or rather how I expect this to be used - not on nuget yet
-
 ```csharp
-using AxoParse.Evtx;
+using AxoParse.Evtx.Evtx;
 
 byte[] fileData = File.ReadAllBytes("security.evtx");
+EvtxParser parser = EvtxParser.Parse(fileData);
 
-EvtxParser parser = EvtxParser.Parse(fileData, maxThreads: 0, format: OutputFormat.Xml);
-
-foreach (EvtxChunk chunk in parser.Chunks)
+foreach (EvtxEvent evt in parser.GetEvents())
 {
-    for (int i = 0; i < chunk.Records.Count; i++)
-    {
-        Console.WriteLine($"Record {chunk.Records[i].EventRecordId}:");
-        Console.WriteLine(chunk.ParsedXml[i]);
-    }
+    if (evt.IsSuccess)
+        Console.WriteLine(evt.Xml);
 }
 ```
 
@@ -121,6 +116,7 @@ Libraries benched:
 
 ## Documentation
 
+- [Release Notes & API Reference](docs/ReleaseNotes.md) — v0.1.0 notes, full public API docs
 - [Getting Started](docs/GettingStarted.md) — install, usage examples, options
 - [Architecture](docs/Architecture.md) — parsing pipeline, threading model, template compilation
 - [EVTX Format](docs/EvtxFormat.md) — binary format primer (headers, chunks, records, BinXml)

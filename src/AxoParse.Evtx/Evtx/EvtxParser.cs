@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
+using System.Threading.Channels;
 using AxoParse.Evtx.BinXml;
 using AxoParse.Evtx.Wevt;
 
@@ -245,6 +247,201 @@ public class EvtxParser
         }
 
         return new EvtxParser(fileData, fileHeader, chunks, totalRecords, diagnostics);
+    }
+
+    /// <summary>
+    /// Parses an EVTX file and streams events as chunks complete, without waiting for the entire file.
+    /// Chunks are parsed in parallel and yielded in file order via a reorder buffer.
+    /// Same parsing logic as <see cref="Parse"/> but events are available incrementally.
+    /// </summary>
+    /// <param name="fileData">Complete EVTX file bytes.</param>
+    /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
+    /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
+    /// <param name="wevtCache">Optional offline template cache built from provider PE binaries.</param>
+    /// <param name="cancellationToken">Token to cancel the parse operation.</param>
+    /// <returns>Events streamed in file order as chunks finish parsing.</returns>
+    public static async IAsyncEnumerable<EvtxEvent> ParseAsync(
+        byte[] fileData, int maxThreads = 0, OutputFormat format = OutputFormat.Xml,
+        bool validateChecksums = false, WevtCache? wevtCache = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(fileData);
+        int chunkStart = fileHeader.HeaderBlockSize;
+        int chunkCount = (fileData.Length - chunkStart) / EvtxChunk.ChunkSize;
+
+        // Phase 1 (sequential): validate chunks, collect valid/invalid offsets
+        ReadOnlySpan<byte> span = fileData;
+        int[] validOffsets = new int[chunkCount];
+        int validCount = 0;
+        int[] invalidOffsets = new int[chunkCount];
+        int invalidCount = 0;
+
+        for (int i = 0; i < chunkCount; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            int offset = chunkStart + i * EvtxChunk.ChunkSize;
+            if (offset + EvtxChunk.ChunkSize > fileData.Length)
+                break;
+
+            if (!span.Slice(offset, 8).SequenceEqual("ElfChnk\0"u8))
+            {
+                invalidOffsets[invalidCount++] = offset;
+                continue;
+            }
+
+            if (validateChecksums)
+            {
+                ReadOnlySpan<byte> chunkData = span.Slice(offset, EvtxChunk.ChunkSize);
+                EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
+                if (!header.ValidateHeaderChecksum(chunkData) || !header.ValidateDataChecksum(chunkData))
+                {
+                    invalidOffsets[invalidCount++] = offset;
+                    continue;
+                }
+            }
+
+            validOffsets[validCount++] = offset;
+        }
+
+        // Setup format-specific caches
+        ConcurrentDictionary<Guid, CompiledTemplate?>? compiledCache =
+            format == OutputFormat.Xml ? new ConcurrentDictionary<Guid, CompiledTemplate?>() : null;
+        ConcurrentDictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache =
+            format == OutputFormat.Json ? new ConcurrentDictionary<Guid, CompiledJsonTemplate?>() : null;
+
+        if (compiledCache != null)
+            wevtCache?.PopulateCache(compiledCache);
+
+        int parallelism = maxThreads > 0 ? maxThreads : -1;
+        // Unbounded channel: chunk count is finite (file size / 64KB) so memory is bounded by the file itself
+        Channel<(int Index, EvtxChunk Chunk)> channel = Channel.CreateUnbounded<(int, EvtxChunk)>(
+            new UnboundedChannelOptions { SingleReader = true });
+
+        // Capture counts for the producer closure
+        int validCountCopy = validCount;
+        int invalidCountCopy = invalidCount;
+
+        Task producer = Task.Run(() =>
+        {
+            try
+            {
+                // Phase 2: parallel parse valid chunks
+                if (format == OutputFormat.Json)
+                {
+                    Parallel.For(0, validCountCopy,
+                        new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                        () => new Dictionary<Guid, CompiledJsonTemplate?>(),
+                        (i, state, localJsonCache) =>
+                        {
+                            EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
+                                compiledCache: null, compiledJsonCache: localJsonCache, format);
+                            channel.Writer.TryWrite((i, chunk));
+                            return localJsonCache;
+                        },
+                        localJsonCache =>
+                        {
+                            foreach (KeyValuePair<Guid, CompiledJsonTemplate?> kv in localJsonCache)
+                                compiledJsonCache!.TryAdd(kv.Key, kv.Value);
+                        });
+                }
+                else
+                {
+                    Parallel.For(0, validCountCopy,
+                        new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                        () => new Dictionary<Guid, CompiledTemplate?>(),
+                        (i, state, localCache) =>
+                        {
+                            EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
+                                compiledCache: localCache, compiledJsonCache: null, format);
+                            channel.Writer.TryWrite((i, chunk));
+                            return localCache;
+                        },
+                        localCache =>
+                        {
+                            foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
+                                compiledCache!.TryAdd(kv.Key, kv.Value);
+                        });
+                }
+
+                // Phase 4: parallel recovery of headerless chunks (indices offset by validCount)
+                if (invalidCountCopy > 0)
+                {
+                    if (format == OutputFormat.Json)
+                    {
+                        Parallel.For(0, invalidCountCopy,
+                            new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                            () => new Dictionary<Guid, CompiledJsonTemplate?>(),
+                            (i, state, localJsonCache) =>
+                            {
+                                EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
+                                    compiledCache: null, compiledJsonCache: localJsonCache, format);
+                                if (recovered != null)
+                                    channel.Writer.TryWrite((validCountCopy + i, recovered));
+                                return localJsonCache;
+                            },
+                            localJsonCache =>
+                            {
+                                foreach (KeyValuePair<Guid, CompiledJsonTemplate?> kv in localJsonCache)
+                                    compiledJsonCache!.TryAdd(kv.Key, kv.Value);
+                            });
+                    }
+                    else
+                    {
+                        Parallel.For(0, invalidCountCopy,
+                            new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                            () => new Dictionary<Guid, CompiledTemplate?>(),
+                            (i, state, localCache) =>
+                            {
+                                EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
+                                    compiledCache: localCache, compiledJsonCache: null, format);
+                                if (recovered != null)
+                                    channel.Writer.TryWrite((validCountCopy + i, recovered));
+                                return localCache;
+                            },
+                            localCache =>
+                            {
+                                foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
+                                    compiledCache!.TryAdd(kv.Key, kv.Value);
+                            });
+                    }
+                }
+            }
+            finally
+            {
+                channel.Writer.Complete();
+            }
+        }, cancellationToken);
+
+        // Consumer: reorder buffer ensures events are yielded in file order
+        Dictionary<int, EvtxChunk> reorderBuffer = new();
+        int nextExpected = 0;
+
+        await foreach ((int index, EvtxChunk chunk) in channel.Reader.ReadAllAsync(cancellationToken))
+        {
+            reorderBuffer[index] = chunk;
+
+            while (reorderBuffer.Remove(nextExpected, out EvtxChunk? ready))
+            {
+                for (int i = 0; i < ready.Records.Count; i++)
+                    yield return ready.GetEvent(i);
+                nextExpected++;
+            }
+        }
+
+        // Flush any remaining buffered chunks (recovery chunks may have gaps from null results)
+        while (reorderBuffer.Count > 0)
+        {
+            if (reorderBuffer.Remove(nextExpected, out EvtxChunk? ready))
+            {
+                for (int i = 0; i < ready.Records.Count; i++)
+                    yield return ready.GetEvent(i);
+            }
+            nextExpected++;
+        }
+
+        await producer;
     }
 
     /// <summary>

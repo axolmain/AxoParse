@@ -219,6 +219,105 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
         Assert.Equal(sum, parser.TotalRecords);
     }
 
+    /// <summary>
+    /// Verifies that ParseAsync yields the same events in the same order as Parse().GetEvents()
+    /// for a single-threaded parse (deterministic chunk ordering).
+    /// </summary>
+    [Fact]
+    public async Task ParseAsyncMatchesSyncResults()
+    {
+        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"));
+
+        EvtxParser syncParser = EvtxParser.Parse(data, maxThreads: 1,
+            cancellationToken: TestContext.Current.CancellationToken);
+        List<EvtxEvent> syncEvents = new List<EvtxEvent>(syncParser.GetEvents());
+
+        List<EvtxEvent> asyncEvents = new List<EvtxEvent>();
+        await foreach (EvtxEvent evt in EvtxParser.ParseAsync(data, maxThreads: 1,
+                           cancellationToken: TestContext.Current.CancellationToken))
+        {
+            asyncEvents.Add(evt);
+        }
+
+        Assert.Equal(syncEvents.Count, asyncEvents.Count);
+
+        for (int i = 0; i < syncEvents.Count; i++)
+        {
+            Assert.Equal(syncEvents[i].Record.EventRecordId, asyncEvents[i].Record.EventRecordId);
+            Assert.Equal(syncEvents[i].Xml, asyncEvents[i].Xml);
+            Assert.Equal(syncEvents[i].IsSuccess, asyncEvents[i].IsSuccess);
+        }
+
+        testOutputHelper.WriteLine($"ParseAsync matched {asyncEvents.Count} events with sync Parse");
+    }
+
+    /// <summary>
+    /// Verifies that ParseAsync respects cancellation by throwing OperationCanceledException
+    /// when a pre-cancelled token is provided.
+    /// </summary>
+    [Fact]
+    public async Task ParseAsyncRespectsCancellation()
+    {
+        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"));
+        CancellationTokenSource cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(async () =>
+        {
+            await foreach (EvtxEvent _ in EvtxParser.ParseAsync(data, cancellationToken: cts.Token)) {}
+        });
+    }
+
+    /// <summary>
+    /// Verifies that ParseAsync with JSON format produces the same record count as sync Parse.
+    /// </summary>
+    [Fact]
+    public async Task ParseAsyncJsonMatchesSyncCount()
+    {
+        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"));
+
+        EvtxParser syncParser = EvtxParser.Parse(data, maxThreads: 1, format: OutputFormat.Json,
+            cancellationToken: TestContext.Current.CancellationToken);
+        int syncCount = syncParser.TotalRecords;
+
+        int asyncCount = 0;
+        await foreach (EvtxEvent evt in EvtxParser.ParseAsync(data, maxThreads: 1,
+                           format: OutputFormat.Json, cancellationToken: TestContext.Current.CancellationToken))
+        {
+            Assert.True(evt.Json.Length > 0);
+            asyncCount++;
+        }
+
+        Assert.Equal(syncCount, asyncCount);
+        testOutputHelper.WriteLine($"ParseAsync JSON matched {asyncCount} records");
+    }
+
+    /// <summary>
+    /// Verifies that multi-threaded ParseAsync produces the same event count as single-threaded.
+    /// </summary>
+    [Fact]
+    public async Task ParseAsyncMultiThreadedSameCount()
+    {
+        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"));
+
+        int singleCount = 0;
+        await foreach (EvtxEvent _ in EvtxParser.ParseAsync(data, maxThreads: 1,
+                           cancellationToken: TestContext.Current.CancellationToken))
+        {
+            singleCount++;
+        }
+
+        int multiCount = 0;
+        await foreach (EvtxEvent _ in EvtxParser.ParseAsync(data, maxThreads: 4,
+                           cancellationToken: TestContext.Current.CancellationToken))
+        {
+            multiCount++;
+        }
+
+        Assert.Equal(singleCount, multiCount);
+        testOutputHelper.WriteLine($"Single={singleCount}, Multi={multiCount}");
+    }
+
     #endregion
 
     #region Non-Public Fields
