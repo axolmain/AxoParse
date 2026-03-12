@@ -75,7 +75,7 @@ internal ref struct ValueStringBuilder : IDisposable
             Grow(len);
         }
 
-        s.CopyTo(_chars.Slice(_pos, len));
+        s.AsSpan().CopyTo(_chars.Slice(_pos, len));
         _pos += len;
     }
 
@@ -96,6 +96,7 @@ internal ref struct ValueStringBuilder : IDisposable
         _pos += value.Length;
     }
 
+#if NET6_0_OR_GREATER
     /// <summary>
     /// Formats and appends a value that implements <see cref="ISpanFormattable"/>, growing the buffer on demand.
     /// </summary>
@@ -132,6 +133,22 @@ internal ref struct ValueStringBuilder : IDisposable
 
         _pos += charsWritten;
     }
+#else
+    /// <summary>
+    /// Formats and appends a value using its ToString() representation.
+    /// Fallback for targets that lack <c>ISpanFormattable</c>.
+    /// </summary>
+    /// <typeparam name="T">A formattable type.</typeparam>
+    /// <param name="value">The value to format and append.</param>
+    /// <param name="format">Optional format specifier (used if <typeparamref name="T"/> implements <see cref="IFormattable"/>).</param>
+    public void AppendFormatted<T>(T value, ReadOnlySpan<char> format = default)
+    {
+        string? s = value is IFormattable f
+            ? f.ToString(format.Length > 0 ? format.ToString() : null, null)
+            : value?.ToString();
+        Append(s);
+    }
+#endif
 
     /// <summary>
     /// Returns the written portion of the buffer as a read-only span.

@@ -247,7 +247,7 @@ internal sealed partial class BinXmlParser
                 string before = partsArr[i];
                 string after = partsArr[i + 1];
                 int spacePos = before.LastIndexOf(' ');
-                if ((spacePos >= 0) && after.StartsWith('"'))
+                if ((spacePos >= 0) && after.StartsWith("\"", StringComparison.Ordinal))
                 {
                     prefix = before[spacePos..];
                     suffix = "\"";

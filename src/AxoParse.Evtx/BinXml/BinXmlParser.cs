@@ -566,7 +566,7 @@ internal sealed partial class BinXmlParser
         ushort numChars = MemoryMarshal.Read<ushort>(chunkData[(offset + 6)..]);
         if (offset + 8 + numChars * 2 > chunkData.Length) return string.Empty;
         ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(chunkData.Slice(offset + 8, numChars * 2));
-        return new string(chars);
+        return chars.ToString();
     }
 
     /// <summary>
@@ -607,7 +607,7 @@ internal sealed partial class BinXmlParser
             // inline
             p += 4; // next def offset
 
-            templateGuid = new Guid(data.Slice(p, 16));
+            templateGuid = new Guid(data.Slice(p, 16).ToArray());
             p += 16;
 
             dataSize =
@@ -629,7 +629,7 @@ internal sealed partial class BinXmlParser
 
             int baseOffset = (int)defDataOffset;
 
-            templateGuid = new Guid(chunkData.Slice(baseOffset + 4, 16));
+            templateGuid = new Guid(chunkData.Slice(baseOffset + 4, 16).ToArray());
 
             dataSize = BinaryPrimitives.ReadUInt32LittleEndian(
                 chunkData.Slice(baseOffset + 20, 4));

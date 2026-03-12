@@ -21,6 +21,13 @@ High-performance .NET library for parsing Windows Event Log (.evtx) files.
 - No LINQ in hot paths
 - Pre-compiled templates avoid repeated parsing overhead
 
+### Supported Frameworks
+
+- .NET 10+
+- .NET Standard 2.0 (.NET Framework 4.6.1+, .NET Core 2.0+)
+
 ### Dependencies
 
 - [PeNet](https://github.com/secana/PeNet) — PE binary resource extraction for WEVT templates
+- [PolySharp](https://github.com/Sergio0694/PolySharp) — compile-time polyfills for modern C# on older targets (build-only)
+- [System.Memory](https://www.nuget.org/packages/System.Memory) — `Span<T>`, `Memory<T>` for netstandard2.0 (runtime dependency on older targets only)

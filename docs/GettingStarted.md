@@ -1,5 +1,13 @@
 # Getting Started
 
+## Supported Frameworks
+
+| Target | Min Version |
+|--------|-------------|
+| .NET | 10.0+ |
+| .NET Standard | 2.0 |
+| .NET Framework (via netstandard2.0) | 4.6.1+ |
+
 ## Install
 
 [Todo] NuGet install command once published:

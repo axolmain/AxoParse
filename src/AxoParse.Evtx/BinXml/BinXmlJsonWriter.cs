@@ -29,10 +29,8 @@ internal sealed partial class BinXmlParser
         ValueStringBuilder vsb = new(stackalloc char[1024]);
         int pos = 0;
         ParseTopLevelJson(eventData, ref pos, binxmlChunkBase, ref vsb);
-        ReadOnlySpan<char> chars = vsb.AsSpan();
-        int byteCount = Encoding.UTF8.GetByteCount(chars);
-        byte[] result = new byte[byteCount];
-        Encoding.UTF8.GetBytes(chars, result);
+        string jsonStr = vsb.ToString();
+        byte[] result = Encoding.UTF8.GetBytes(jsonStr);
         vsb.Dispose();
 
         return result;
@@ -135,7 +133,7 @@ internal sealed partial class BinXmlParser
                     needsComma = true;
                     vsb.Append('"');
                     char ch = (char)charVal;
-                    BinXmlValueFormatter.AppendJsonEscaped(ref vsb, new ReadOnlySpan<char>(in ch));
+                    BinXmlValueFormatter.AppendJsonEscaped(ref vsb, stackalloc char[] { ch });
                     vsb.Append('"');
                     break;
                 }
