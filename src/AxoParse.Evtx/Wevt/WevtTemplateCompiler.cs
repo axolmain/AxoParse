@@ -261,7 +261,7 @@ internal static class WevtTemplateCompiler
         pos += stringBytes;
         pos += 2; // nul terminator
 
-        return new string(chars);
+        return chars.ToString();
     }
 
     #endregion

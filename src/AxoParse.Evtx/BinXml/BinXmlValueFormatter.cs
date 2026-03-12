@@ -292,10 +292,10 @@ internal static class BinXmlValueFormatter
     internal static void AppendXmlEscaped(ref ValueStringBuilder vsb, scoped ReadOnlySpan<char> text)
     {
         // Fast path: no XML entity chars — check surrogates separately (extremely rare in EVTX)
-        int idx = text.IndexOfAny(XmlEscapeChars);
+        int idx = IndexOfAnyXmlEscapeChar(text);
         if (idx < 0)
         {
-            int surIdx = text.IndexOfAnyInRange('\uD800', '\uDFFF');
+            int surIdx = IndexOfAnySurrogate(text);
             if (surIdx < 0)
             {
                 vsb.Append(text);
@@ -307,7 +307,7 @@ internal static class BinXmlValueFormatter
         }
 
         // Check if surrogates are also present
-        int firstSurrogate = text.IndexOfAnyInRange('\uD800', '\uDFFF');
+        int firstSurrogate = IndexOfAnySurrogate(text);
         bool hasSurrogates = firstSurrogate >= 0;
 
         // Bulk-copy clean prefix up to first entity char
@@ -328,12 +328,12 @@ internal static class BinXmlValueFormatter
             remaining = remaining[1..];
 
             // Scan ahead for next entity char and bulk-copy the clean run
-            int next = remaining.IndexOfAny(XmlEscapeChars);
+            int next = IndexOfAnyXmlEscapeChar(remaining);
             if (next < 0)
             {
                 // No more entities — handle remaining surrogates if needed, else bulk-copy
-                if (hasSurrogates && (remaining.IndexOfAnyInRange('\uD800', '\uDFFF') >= 0))
-                    AppendWithSurrogateFixup(ref vsb, remaining, remaining.IndexOfAnyInRange('\uD800', '\uDFFF'));
+                if (hasSurrogates && (IndexOfAnySurrogate(remaining) >= 0))
+                    AppendWithSurrogateFixup(ref vsb, remaining, IndexOfAnySurrogate(remaining));
                 else
                     vsb.Append(remaining);
                 return;
@@ -344,6 +344,31 @@ internal static class BinXmlValueFormatter
             vsb.Append(remaining[..next]);
             remaining = remaining[next..];
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int IndexOfAnyXmlEscapeChar(ReadOnlySpan<char> text)
+    {
+#if NET8_0_OR_GREATER
+        return text.IndexOfAny(XmlEscapeChars);
+#else
+        return text.IndexOfAny(XmlEscapeCharsArray.AsSpan());
+#endif
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int IndexOfAnySurrogate(ReadOnlySpan<char> text)
+    {
+#if NET8_0_OR_GREATER
+        return text.IndexOfAnyInRange('\uD800', '\uDFFF');
+#else
+        for (int i = 0; i < text.Length; i++)
+        {
+            if (text[i] >= '\uD800' && text[i] <= '\uDFFF')
+                return i;
+        }
+        return -1;
+#endif
     }
 
     /// <summary>
@@ -513,7 +538,7 @@ internal static class BinXmlValueFormatter
         pos += 2;
         ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(data.Slice(pos, numChars * 2));
         pos += numChars * 2;
-        return new string(chars);
+        return chars.ToString();
     }
 
     /// <summary>
@@ -590,10 +615,17 @@ internal static class BinXmlValueFormatter
     /// </summary>
     internal static readonly char[] HexChars = InitHexChars();
 
+#if NET8_0_OR_GREATER
     /// <summary>
     /// Vectorised search set for XML characters needing entity escaping: &amp; &lt; &gt; &quot; &apos;.
     /// </summary>
     private static readonly SearchValues<char> XmlEscapeChars = SearchValues.Create("&<>\"'");
+#else
+    /// <summary>
+    /// Characters needing XML entity escaping: &amp; &lt; &gt; &quot; &apos;.
+    /// </summary>
+    private static readonly char[] XmlEscapeCharsArray = ['&', '<', '>', '"', '\''];
+#endif
 
     /// <summary>
     /// Lowercase hex digit chars for nibble-to-char conversion.
