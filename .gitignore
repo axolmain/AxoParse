@@ -495,3 +495,5 @@ demos/publishclear/
 
 # npm package — WASM framework populated by CI
 packages/axoparse-wasm/_framework/
+# BenchmarkDotNet named runs (tools/bench/bdn-run.ps1)
+perf/results/

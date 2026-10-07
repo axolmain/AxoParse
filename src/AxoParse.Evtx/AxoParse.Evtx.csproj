@@ -21,6 +21,7 @@
 
     <ItemGroup>
         <InternalsVisibleTo Include="AxoParse.Evtx.Tests"/>
+        <InternalsVisibleTo Include="AxoParse.Benchmarks"/>
     </ItemGroup>
 
     <ItemGroup>

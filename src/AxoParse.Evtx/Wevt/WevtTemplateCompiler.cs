@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 using AxoParse.Evtx.BinXml;
 
@@ -105,7 +106,7 @@ internal static class WevtTemplateCompiler
                     pos++;
                     ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
-                    parts[^1] += $"&#{charVal};";
+                    parts[^1] += string.Create(CultureInfo.InvariantCulture, $"&#{charVal};");
                     break;
 
                 case BinXmlToken.EntityRef:

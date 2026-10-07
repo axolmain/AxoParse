@@ -14,32 +14,6 @@ namespace AxoParse.Evtx.BinXml;
 /// </summary>
 internal sealed partial class BinXmlParser
 {
-    #region Public Methods
-
-    /// <summary>
-    /// Parses a single record's BinXml event data into UTF-8 JSON bytes using the structural format.
-    /// </summary>
-    /// <param name="record">The EVTX record whose BinXml event data will be parsed.</param>
-    /// <returns>UTF-8 encoded JSON bytes.</returns>
-    public byte[] ParseRecordJson(EvtxRecord record)
-    {
-        ReadOnlySpan<byte> eventData = record.GetEventData(_fileData);
-        int binxmlChunkBase = record.EventDataFileOffset - _chunkFileOffset;
-
-        ValueStringBuilder vsb = new(stackalloc char[1024]);
-        int pos = 0;
-        ParseTopLevelJson(eventData, ref pos, binxmlChunkBase, ref vsb);
-        ReadOnlySpan<char> chars = vsb.AsSpan();
-        int byteCount = Encoding.UTF8.GetByteCount(chars);
-        byte[] result = new byte[byteCount];
-        Encoding.UTF8.GetBytes(chars, result);
-        vsb.Dispose();
-
-        return result;
-    }
-
-    #endregion
-
     #region Non-Public Methods
 
     /// <summary>
@@ -57,7 +31,7 @@ internal sealed partial class BinXmlParser
     /// <param name="needsComma">Ref tracking whether a comma is needed before the next array item.</param>
     private void ParseContentJson(ReadOnlySpan<byte> data, ref int pos,
                                   int[]? valueOffsets, int[]? valueSizes, byte[]? valueTypes,
-                                  int binxmlChunkBase, ref ValueStringBuilder vsb, int depth,
+                                  int binxmlChunkBase, ref ValueUtf8Builder vsb, int depth,
                                   ref bool needsComma)
     {
         while (pos < data.Length)
@@ -75,7 +49,7 @@ internal sealed partial class BinXmlParser
             switch (baseTok)
             {
                 case BinXmlToken.OpenStartElement:
-                    if (needsComma) vsb.Append(',');
+                    if (needsComma) vsb.Append((byte)',');
                     needsComma = true;
                     ParseElementJson(data, ref pos, valueOffsets, valueSizes, valueTypes, binxmlChunkBase, ref vsb, depth + 1);
                     break;
@@ -85,11 +59,11 @@ internal sealed partial class BinXmlParser
                     pos++; // token
                     pos++; // value type
                     ReadOnlySpan<char> chars = BinXmlValueFormatter.ReadUnicodeTextString(data, ref pos);
-                    if (needsComma) vsb.Append(',');
+                    if (needsComma) vsb.Append((byte)',');
                     needsComma = true;
-                    vsb.Append('"');
+                    vsb.Append((byte)'"');
                     BinXmlValueFormatter.AppendJsonEscaped(ref vsb, chars);
-                    vsb.Append('"');
+                    vsb.Append((byte)'"');
                     break;
                 }
 
@@ -109,18 +83,18 @@ internal sealed partial class BinXmlParser
 
                         if (!optional || ((valType != BinXmlValueType.Null) && (valSize > 0)))
                         {
-                            if (needsComma) vsb.Append(',');
+                            if (needsComma) vsb.Append((byte)',');
                             needsComma = true;
-                            vsb.Append('"');
+                            vsb.Append((byte)'"');
                             WriteJsonValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
-                            vsb.Append('"');
+                            vsb.Append((byte)'"');
                         }
                         else
                         {
                             // Optional null/empty: emit empty string to keep structure static
-                            if (needsComma) vsb.Append(',');
+                            if (needsComma) vsb.Append((byte)',');
                             needsComma = true;
-                            vsb.Append("\"\"");
+                            vsb.Append("\"\""u8);
                         }
                     }
                     break;
@@ -131,12 +105,12 @@ internal sealed partial class BinXmlParser
                     pos++;
                     ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
-                    if (needsComma) vsb.Append(',');
+                    if (needsComma) vsb.Append((byte)',');
                     needsComma = true;
-                    vsb.Append('"');
+                    vsb.Append((byte)'"');
                     char ch = (char)charVal;
                     BinXmlValueFormatter.AppendJsonEscaped(ref vsb, new ReadOnlySpan<char>(in ch));
-                    vsb.Append('"');
+                    vsb.Append((byte)'"');
                     break;
                 }
 
@@ -155,11 +129,11 @@ internal sealed partial class BinXmlParser
                         "apos" => "'",
                         _ => $"&{entityName};"
                     };
-                    if (needsComma) vsb.Append(',');
+                    if (needsComma) vsb.Append((byte)',');
                     needsComma = true;
-                    vsb.Append('"');
+                    vsb.Append((byte)'"');
                     BinXmlValueFormatter.AppendJsonEscaped(ref vsb, resolved.AsSpan());
-                    vsb.Append('"');
+                    vsb.Append((byte)'"');
                     break;
                 }
 
@@ -167,16 +141,16 @@ internal sealed partial class BinXmlParser
                 {
                     pos++;
                     ReadOnlySpan<char> cdataChars = BinXmlValueFormatter.ReadUnicodeTextString(data, ref pos);
-                    if (needsComma) vsb.Append(',');
+                    if (needsComma) vsb.Append((byte)',');
                     needsComma = true;
-                    vsb.Append('"');
+                    vsb.Append((byte)'"');
                     BinXmlValueFormatter.AppendJsonEscaped(ref vsb, cdataChars);
-                    vsb.Append('"');
+                    vsb.Append((byte)'"');
                     break;
                 }
 
                 case BinXmlToken.TemplateInstance:
-                    if (needsComma) vsb.Append(',');
+                    if (needsComma) vsb.Append((byte)',');
                     needsComma = true;
                     ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, ref vsb);
                     break;
@@ -203,7 +177,12 @@ internal sealed partial class BinXmlParser
     /// <param name="pos">Current read position; advanced past consumed tokens.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="vsb">String builder that receives the JSON output.</param>
-    private void ParseTopLevelJson(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueStringBuilder vsb)
+    /// <param name="escaped">
+    /// When true, output is emitted JSON-string-escaped (embedded BinXml 0x21 context): identical to rendering
+    /// unescaped and passing the result through <see cref="BinXmlValueFormatter.AppendJsonEscaped"/>.
+    /// </param>
+    private void ParseTopLevelJson(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueUtf8Builder vsb,
+                                   bool escaped = false)
     {
         while (pos < data.Length)
         {
@@ -219,11 +198,14 @@ internal sealed partial class BinXmlParser
                     break;
 
                 case BinXmlToken.TemplateInstance:
-                    ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, ref vsb);
+                    ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, ref vsb, escaped);
                     break;
 
                 case BinXmlToken.OpenStartElement:
-                    ParseElementJson(data, ref pos, null, null, null, binxmlChunkBase, ref vsb);
+                    if (escaped)
+                        ParseElementJsonEscaped(data, ref pos, binxmlChunkBase, ref vsb);
+                    else
+                        ParseElementJson(data, ref pos, null, null, null, binxmlChunkBase, ref vsb);
                     break;
 
                 case BinXmlToken.PiTarget:
@@ -245,6 +227,23 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
+    /// Renders a bare top-level element of an embedded BinXml fragment in escaped mode: renders it unescaped
+    /// into a temporary buffer, then JSON-escapes it into <paramref name="vsb"/>.
+    /// Kept out of the <see cref="ParseTopLevelJson"/> loop so its stackalloc is not repeated per iteration.
+    /// </summary>
+    /// <param name="data">BinXml byte stream.</param>
+    /// <param name="pos">Current read position; advanced past the entire element.</param>
+    /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
+    /// <param name="vsb">String builder that receives the escaped JSON output.</param>
+    private void ParseElementJsonEscaped(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueUtf8Builder vsb)
+    {
+        ValueUtf8Builder tempVsb = new(stackalloc byte[512]);
+        ParseElementJson(data, ref pos, null, null, null, binxmlChunkBase, ref tempVsb);
+        BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, tempVsb.AsSpan());
+        tempVsb.Dispose();
+    }
+
+    /// <summary>
     /// Fallback JSON element renderer for uncompilable templates. Produces the structural format
     /// {"#name":"...","#attrs":{...},"#content":[...]} by walking BinXml tokens directly.
     /// </summary>
@@ -258,7 +257,7 @@ internal sealed partial class BinXmlParser
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
     private void ParseElementJson(ReadOnlySpan<byte> data, ref int pos,
                                   int[]? valueOffsets, int[]? valueSizes, byte[]? valueTypes,
-                                  int binxmlChunkBase, ref ValueStringBuilder vsb, int depth = 0)
+                                  int binxmlChunkBase, ref ValueUtf8Builder vsb, int depth = 0)
     {
         if (depth >= _maxRecursionDepth) return;
 
@@ -275,9 +274,9 @@ internal sealed partial class BinXmlParser
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase)) return;
 
         string elemName = ReadName(nameOffset);
-        vsb.Append("{\"#name\":\"");
+        vsb.Append("{\"#name\":\""u8);
         BinXmlValueFormatter.AppendJsonEscaped(ref vsb, elemName.AsSpan());
-        vsb.Append('"');
+        vsb.Append((byte)'"');
 
         // Parse attributes
         if (hasAttrs)
@@ -286,8 +285,12 @@ internal sealed partial class BinXmlParser
             pos += 4;
             int attrEnd = pos + (int)attrListSize;
 
-            vsb.Append(",\"#attrs\":{");
+            vsb.Append(",\"#attrs\":{"u8);
             bool firstAttr = true;
+
+            // One scratch buffer reused by every attribute of this element: each value is fully rendered and
+            // escaped into vsb before the next attribute overwrites it. Longer values spill to ArrayPool.
+            Span<byte> attrScratch = stackalloc byte[_attrScratchBytes];
 
             while (pos < attrEnd)
             {
@@ -301,29 +304,29 @@ internal sealed partial class BinXmlParser
                 if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase)) break;
 
                 string attrName = ReadName(attrNameOff);
-                if (!firstAttr) vsb.Append(',');
+                if (!firstAttr) vsb.Append((byte)',');
                 firstAttr = false;
-                vsb.Append('"');
+                vsb.Append((byte)'"');
                 BinXmlValueFormatter.AppendJsonEscaped(ref vsb, attrName.AsSpan());
-                vsb.Append("\":\"");
+                vsb.Append("\":\""u8);
 
                 // Render attribute value content — reuse ParseContent with resolveEntities for plain text,
-                // then JSON-escape into the string. Heap-allocate to avoid stackalloc inside loop.
-                ValueStringBuilder attrVsb = new(new char[64]);
+                // then JSON-escape into the string.
+                ValueUtf8Builder attrVsb = new(attrScratch);
                 ParseContent(data, ref pos, valueOffsets, valueSizes, valueTypes, binxmlChunkBase, ref attrVsb, depth + 1,
                     resolveEntities: true);
-                BinXmlValueFormatter.AppendJsonEscaped(ref vsb, attrVsb.AsSpan());
+                BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, attrVsb.AsSpan());
                 attrVsb.Dispose();
-                vsb.Append('"');
+                vsb.Append((byte)'"');
             }
 
-            vsb.Append('}');
+            vsb.Append((byte)'}');
         }
 
         // Close token
         if (pos >= data.Length)
         {
-            vsb.Append('}');
+            vsb.Append((byte)'}');
             return;
         }
 
@@ -331,22 +334,22 @@ internal sealed partial class BinXmlParser
         if (closeTok == BinXmlToken.CloseEmptyElement)
         {
             pos++;
-            vsb.Append('}');
+            vsb.Append((byte)'}');
         }
         else if (closeTok == BinXmlToken.CloseStartElement)
         {
             pos++;
-            vsb.Append(",\"#content\":[");
+            vsb.Append(",\"#content\":["u8);
             bool contentNeedsComma = false;
             ParseContentJson(data, ref pos, valueOffsets, valueSizes, valueTypes, binxmlChunkBase, ref vsb, depth + 1,
                 needsComma: ref contentNeedsComma);
             if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
-            vsb.Append("]}");
+            vsb.Append("]}"u8);
         }
         else
         {
-            vsb.Append('}');
+            vsb.Append((byte)'}');
         }
     }
 
@@ -359,8 +362,9 @@ internal sealed partial class BinXmlParser
     /// <param name="pos">Current read position; advanced past the entire template instance.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="vsb">String builder that receives the JSON output.</param>
+    /// <param name="escaped">When true, emit the instance JSON-string-escaped (embedded BinXml 0x21 context).</param>
     private void ParseTemplateInstanceJson(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                           ref ValueStringBuilder vsb)
+                                           ref ValueUtf8Builder vsb, bool escaped = false)
     {
         // Peek at numValues to size the stackalloc buffers
         int peekPos = pos + 6;
@@ -402,7 +406,22 @@ internal sealed partial class BinXmlParser
 
             if (compiled != null)
             {
-                WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb);
+                if (!escaped)
+                {
+                    WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb);
+                }
+                else if (compiled.EscapedUtf8Parts != null)
+                {
+                    WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb, escaped: true);
+                }
+                else
+                {
+                    // Parts contain surrogates, so per-part escaping is not exact: render, then escape the whole
+                    ValueUtf8Builder tempVsb = new(stackalloc byte[512]);
+                    WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref tempVsb);
+                    BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, tempVsb.AsSpan());
+                    tempVsb.Dispose();
+                }
                 return;
             }
         }
@@ -418,8 +437,19 @@ internal sealed partial class BinXmlParser
         bool saved = _insideTemplateBody;
         _insideTemplateBody = true;
         bool needsComma = false;
-        ParseContentJson(tplBody, ref tplPos, offsets.ToArray(), sizes.ToArray(), types.ToArray(), tplChunkBase,
-            ref vsb, 0, needsComma: ref needsComma);
+        if (escaped)
+        {
+            ValueUtf8Builder tempVsb = new(stackalloc byte[512]);
+            ParseContentJson(tplBody, ref tplPos, offsets.ToArray(), sizes.ToArray(), types.ToArray(), tplChunkBase,
+                ref tempVsb, 0, needsComma: ref needsComma);
+            BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, tempVsb.AsSpan());
+            tempVsb.Dispose();
+        }
+        else
+        {
+            ParseContentJson(tplBody, ref tplPos, offsets.ToArray(), sizes.ToArray(), types.ToArray(), tplChunkBase,
+                ref vsb, 0, needsComma: ref needsComma);
+        }
         _insideTemplateBody = saved;
     }
 
@@ -432,12 +462,18 @@ internal sealed partial class BinXmlParser
     /// <param name="valueTypes">BinXml value type codes for each substitution.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
     /// <param name="vsb">String builder that receives the rendered JSON output.</param>
+    /// <param name="escaped">
+    /// When true, emit <see cref="CompiledJsonTemplate.EscapedParts"/> (must be non-null) and double-escaped values
+    /// (embedded BinXml 0x21 context).
+    /// </param>
     private void WriteCompiledJson(CompiledJsonTemplate compiled,
                                    scoped ReadOnlySpan<int> valueOffsets, scoped ReadOnlySpan<int> valueSizes,
                                    scoped ReadOnlySpan<byte> valueTypes,
-                                   int binxmlChunkBase, ref ValueStringBuilder vsb)
+                                   int binxmlChunkBase, ref ValueUtf8Builder vsb, bool escaped = false)
     {
-        vsb.Append(compiled.Parts[0]);
+        string[] parts = compiled.Parts;
+        byte[]?[] utf8Parts = escaped ? compiled.EscapedUtf8Parts! : compiled.Utf8Parts;
+        CompiledTemplate.AppendPart(ref vsb, utf8Parts[0], parts[0]);
         for (int i = 0; i < compiled.SubIds.Length; i++)
         {
             int subId = compiled.SubIds[i];
@@ -447,11 +483,11 @@ internal sealed partial class BinXmlParser
                 int valSize = valueSizes[subId];
                 if (!compiled.IsOptional[i] || ((valType != BinXmlValueType.Null) && (valSize > 0)))
                 {
-                    WriteJsonValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
+                    WriteJsonValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb, escaped);
                 }
             }
 
-            vsb.Append(compiled.Parts[i + 1]);
+            CompiledTemplate.AppendPart(ref vsb, utf8Parts[i + 1], parts[i + 1]);
         }
     }
 
@@ -464,8 +500,9 @@ internal sealed partial class BinXmlParser
     /// <param name="fileOffset">Absolute byte offset of the value data within <see cref="_fileData"/>.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset for nested value rendering.</param>
     /// <param name="vsb">String builder that receives the comma-separated rendered elements.</param>
+    /// <param name="escaped">When true, string elements are escaped twice (embedded BinXml 0x21 context).</param>
     private void WriteJsonArray(ReadOnlySpan<byte> valueBytes, byte baseType, int fileOffset,
-                                int binxmlChunkBase, ref ValueStringBuilder vsb)
+                                int binxmlChunkBase, ref ValueUtf8Builder vsb, bool escaped)
     {
         if (baseType == BinXmlValueType.String)
         {
@@ -478,8 +515,11 @@ internal sealed partial class BinXmlParser
                 {
                     if (i > start)
                     {
-                        if (!first) vsb.Append(", ");
-                        BinXmlValueFormatter.AppendJsonEscaped(ref vsb, chars.Slice(start, i - start));
+                        if (!first) vsb.Append(", "u8);
+                        if (escaped)
+                            BinXmlValueFormatter.AppendJsonEscapedTwice(ref vsb, chars.Slice(start, i - start));
+                        else
+                            BinXmlValueFormatter.AppendJsonEscaped(ref vsb, chars.Slice(start, i - start));
                         first = false;
                     }
                     start = i + 1;
@@ -494,8 +534,8 @@ internal sealed partial class BinXmlParser
             bool first = true;
             for (int i = 0; i + elemSize <= valueBytes.Length; i += elemSize)
             {
-                if (!first) vsb.Append(", ");
-                WriteJsonValue(elemSize, baseType, fileOffset + i, binxmlChunkBase, ref vsb);
+                if (!first) vsb.Append(", "u8);
+                WriteJsonValue(elemSize, baseType, fileOffset + i, binxmlChunkBase, ref vsb, escaped);
                 first = false;
             }
             return;
@@ -516,7 +556,13 @@ internal sealed partial class BinXmlParser
     /// <param name="fileOffset">Absolute byte offset of the value data within <see cref="_fileData"/>.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset for embedded BinXml (type 0x21) resolution.</param>
     /// <param name="vsb">String builder that receives the rendered text (no surrounding quotes).</param>
-    private void WriteJsonValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueStringBuilder vsb)
+    /// <param name="escaped">
+    /// When true, the value sits inside an embedded BinXml (0x21) fragment that is itself emitted as a JSON string,
+    /// so text values are escaped twice. Numeric, GUID, SID, time and hex output contains no JSON-special
+    /// characters and is identical in both modes.
+    /// </param>
+    private void WriteJsonValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueUtf8Builder vsb,
+                                bool escaped = false)
     {
         if (size == 0) return;
         ReadOnlySpan<byte> valueBytes = _fileData.AsSpan(fileOffset, size);
@@ -524,7 +570,7 @@ internal sealed partial class BinXmlParser
         // Array flag — render as comma-separated values
         if ((valueType & BinXmlValueType.ArrayFlag) != 0)
         {
-            WriteJsonArray(valueBytes, (byte)(valueType & 0x7F), fileOffset, binxmlChunkBase, ref vsb);
+            WriteJsonArray(valueBytes, (byte)(valueType & 0x7F), fileOffset, binxmlChunkBase, ref vsb, escaped);
             return;
         }
 
@@ -538,46 +584,28 @@ internal sealed partial class BinXmlParser
                 ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(valueBytes);
                 if ((chars.Length > 0) && (chars[^1] == '\0'))
                     chars = chars[..^1];
-                BinXmlValueFormatter.AppendJsonEscaped(ref vsb, chars);
+                if (escaped)
+                    BinXmlValueFormatter.AppendJsonEscapedTwice(ref vsb, chars);
+                else
+                    BinXmlValueFormatter.AppendJsonEscaped(ref vsb, chars);
                 break;
             }
 
-            case BinXmlValueType.AnsiString:
+            case BinXmlValueType.AnsiString when escaped:
             {
+                // ANSI bytes map 1:1 to U+0000..U+00FF (no surrogates), so double escaping is per character
                 for (int i = 0; i < valueBytes.Length; i++)
                 {
                     byte b = valueBytes[i];
                     if (b == 0) break;
-                    char c = (char)b;
-                    if ((c == '\\') || (c == '"'))
-                    {
-                        vsb.Append('\\');
-                        vsb.Append(c);
-                    }
-                    else if (c < '\u0020')
-                    {
-                        switch (c)
-                        {
-                            case '\n': vsb.Append("\\n"); break;
-                            case '\r': vsb.Append("\\r"); break;
-                            case '\t': vsb.Append("\\t"); break;
-                            case '\b': vsb.Append("\\b"); break;
-                            case '\f': vsb.Append("\\f"); break;
-                            default:
-                                vsb.Append("\\u00");
-                                int hIdx = b * 2;
-                                vsb.Append(BinXmlValueFormatter.HexChars[hIdx]);
-                                vsb.Append(BinXmlValueFormatter.HexChars[hIdx + 1]);
-                                break;
-                        }
-                    }
-                    else
-                    {
-                        vsb.Append(c);
-                    }
+                    BinXmlValueFormatter.AppendJsonEscapedTwiceChar(ref vsb, (char)b);
                 }
                 break;
             }
+
+            case BinXmlValueType.AnsiString:
+                BinXmlValueFormatter.AppendAnsiJsonEscaped(ref vsb, valueBytes);
+                break;
 
             case BinXmlValueType.Int8:
                 vsb.AppendFormatted((sbyte)valueBytes[0]);
@@ -620,7 +648,7 @@ internal sealed partial class BinXmlParser
                 break;
 
             case BinXmlValueType.Bool:
-                vsb.Append(MemoryMarshal.Read<uint>(valueBytes) != 0 ? "true" : "false");
+                vsb.Append(MemoryMarshal.Read<uint>(valueBytes) != 0 ? "true"u8 : "false"u8);
                 break;
 
             case BinXmlValueType.Binary:
@@ -636,7 +664,7 @@ internal sealed partial class BinXmlParser
 
             case BinXmlValueType.SizeT:
             {
-                vsb.Append("0x");
+                vsb.Append("0x"u8);
                 if (size == 8)
                     BinXmlValueFormatter.AppendHexUInt64Min(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 else
@@ -666,26 +694,35 @@ internal sealed partial class BinXmlParser
             }
 
             case BinXmlValueType.HexInt32:
-                vsb.Append("0x");
+                vsb.Append("0x"u8);
                 BinXmlValueFormatter.AppendHexUInt32Padded(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
                 break;
 
             case BinXmlValueType.HexInt64:
-                vsb.Append("0x");
+                vsb.Append("0x"u8);
                 BinXmlValueFormatter.AppendHexUInt64Padded(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 break;
 
             case BinXmlValueType.BinXml:
             {
-                // Render embedded BinXml into a temp VSB, then JSON-escape the result
+                // The fragment's JSON is emitted as a JSON string. Escaped mode writes it pre-escaped straight
+                // into vsb (compiled templates use EscapedParts) instead of rendering to a temp buffer and escaping.
                 bool saved = _insideTemplateBody;
                 _insideTemplateBody = false;
-                ValueStringBuilder tempVsb = new(stackalloc char[256]);
                 int embeddedChunkBase = fileOffset - _chunkFileOffset;
                 int embeddedPos = 0;
-                ParseTopLevelJson(valueBytes, ref embeddedPos, embeddedChunkBase, ref tempVsb);
-                BinXmlValueFormatter.AppendJsonEscaped(ref vsb, tempVsb.AsSpan());
-                tempVsb.Dispose();
+                if (!escaped)
+                {
+                    ParseTopLevelJson(valueBytes, ref embeddedPos, embeddedChunkBase, ref vsb, escaped: true);
+                }
+                else
+                {
+                    // Already one escape level deep: render the first level into a temp buffer, then escape again
+                    ValueUtf8Builder tempVsb = new(stackalloc byte[512]);
+                    ParseTopLevelJson(valueBytes, ref embeddedPos, embeddedChunkBase, ref tempVsb, escaped: true);
+                    BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, tempVsb.AsSpan());
+                    tempVsb.Dispose();
+                }
                 _insideTemplateBody = saved;
                 break;
             }
@@ -697,6 +734,16 @@ internal sealed partial class BinXmlParser
                 break;
         }
     }
+
+    #endregion
+
+    #region Non-Public Fields
+
+    /// <summary>
+    /// Size in bytes of the per-element stack buffer used to render attribute values on the JSON fallback path
+    /// before JSON-escaping them. Longer values spill to ArrayPool.
+    /// </summary>
+    private const int _attrScratchBytes = 256;
 
     #endregion
 }

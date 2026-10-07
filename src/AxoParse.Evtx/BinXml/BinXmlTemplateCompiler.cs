@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.InteropServices;
 
 namespace AxoParse.Evtx.BinXml;
@@ -27,7 +28,7 @@ internal sealed partial class BinXmlParser
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
     /// <param name="insideAttrValue">True when compiling content inside an attribute value context.</param>
     private void CompileContent(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                List<string> parts, List<int> subIds, List<bool> isOptional,
+                                TemplatePartsBuilder parts, List<int> subIds, List<bool> isOptional,
                                 List<bool> inAttrValue, ref bool bail, int depth = 0,
                                 bool insideAttrValue = false)
     {
@@ -54,7 +55,7 @@ internal sealed partial class BinXmlParser
                     pos++; // token
                     pos++; // value type
                     string str = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
-                    parts[^1] += BinXmlValueFormatter.XmlEscapeString(str);
+                    parts.Current.Append(BinXmlValueFormatter.XmlEscapeString(str));
                     break;
 
                 case BinXmlToken.NormalSubstitution:
@@ -66,14 +67,14 @@ internal sealed partial class BinXmlParser
                     subIds.Add(subId);
                     isOptional.Add(baseTok == BinXmlToken.OptionalSubstitution);
                     inAttrValue.Add(insideAttrValue);
-                    parts.Add(string.Empty);
+                    parts.NextPart();
                     break;
 
                 case BinXmlToken.CharRef:
                     pos++;
                     ushort charVal = MemoryMarshal.Read<ushort>(data[pos..]);
                     pos += 2;
-                    parts[^1] += $"&#{charVal};";
+                    parts.Current.Append("&#").Append(charVal.ToString(NumberFormatInfo.InvariantInfo)).Append(';');
                     break;
 
                 case BinXmlToken.EntityRef:
@@ -81,13 +82,13 @@ internal sealed partial class BinXmlParser
                     uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
                     pos += 4;
                     string entityName = ReadName(nameOff);
-                    parts[^1] += $"&{entityName};";
+                    parts.Current.Append('&').Append(entityName).Append(';');
                     break;
 
                 case BinXmlToken.CDataSection:
                     pos++;
                     string cdataStr = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
-                    parts[^1] += $"<![CDATA[{cdataStr}]]>";
+                    parts.Current.Append("<![CDATA[").Append(cdataStr).Append("]]>");
                     break;
 
                 default:
@@ -112,7 +113,7 @@ internal sealed partial class BinXmlParser
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
     private void CompileElement(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                List<string> parts, List<int> subIds, List<bool> isOptional,
+                                TemplatePartsBuilder parts, List<int> subIds, List<bool> isOptional,
                                 List<bool> inAttrValue, ref bool bail, int depth = 0)
     {
         if (depth >= _maxRecursionDepth)
@@ -137,7 +138,7 @@ internal sealed partial class BinXmlParser
         }
 
         string elemName = ReadName(nameOffset);
-        parts[^1] += $"<{elemName}";
+        parts.Current.Append('<').Append(elemName);
 
         if (hasAttrs)
         {
@@ -162,16 +163,16 @@ internal sealed partial class BinXmlParser
                 }
 
                 string attrName = ReadName(attrNameOff);
-                parts[^1] += $" {attrName}=\"";
+                parts.Current.Append(' ').Append(attrName).Append("=\"");
                 CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, inAttrValue, ref bail, depth + 1, insideAttrValue: true);
                 if (bail) return;
-                parts[^1] += "\"";
+                parts.Current.Append('"');
             }
         }
 
         if (pos >= data.Length)
         {
-            parts[^1] += $"></{elemName}>";
+            parts.Current.Append("></").Append(elemName).Append('>');
             return;
         }
 
@@ -179,21 +180,21 @@ internal sealed partial class BinXmlParser
         if (closeTok == BinXmlToken.CloseEmptyElement)
         {
             pos++;
-            parts[^1] += $"></{elemName}>";
+            parts.Current.Append("></").Append(elemName).Append('>');
         }
         else if (closeTok == BinXmlToken.CloseStartElement)
         {
             pos++;
-            parts[^1] += ">";
+            parts.Current.Append('>');
             CompileContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, inAttrValue, ref bail, depth + 1);
             if (bail) return;
             if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
-            parts[^1] += $"</{elemName}>";
+            parts.Current.Append("</").Append(elemName).Append('>');
         }
         else
         {
-            parts[^1] += $"></{elemName}>";
+            parts.Current.Append("></").Append(elemName).Append('>');
         }
     }
 
@@ -213,7 +214,7 @@ internal sealed partial class BinXmlParser
         ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, dataSize);
         int tplChunkBase = defDataOffset + 24;
 
-        List<string> parts = new() { string.Empty };
+        TemplatePartsBuilder parts = new();
         List<int> subIds = new();
         List<bool> isOptional = new();
         List<bool> inAttrValue = new();
