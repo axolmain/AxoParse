@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
+using System.Text;
 using AxoParse.Evtx.BinXml;
 
 namespace AxoParse.Evtx.Evtx;
@@ -41,18 +43,22 @@ public class EvtxChunk
     /// <param name="header">Parsed chunk header.</param>
     /// <param name="templates">Template definitions keyed by chunk-relative offset.</param>
     /// <param name="records">Parsed event records.</param>
-    /// <param name="parsedXml">Rendered XML strings (empty array when using JSON output).</param>
-    /// <param name="parsedJson">Rendered JSON byte arrays, or null when using XML output.</param>
+    /// <param name="format">Format of <paramref name="output"/>, or null when records were not rendered.</param>
+    /// <param name="output">Rendered UTF-8 output of every record, back to back.</param>
+    /// <param name="recordEnds">End offset in <paramref name="output"/> of each record's output (record i spans
+    /// <c>recordEnds[i - 1]..recordEnds[i]</c>, starting at 0).</param>
     /// <param name="renderDiagnostics">Diagnostic messages for failed renders, keyed by record index.</param>
     private EvtxChunk(EvtxChunkHeader header, Dictionary<uint, BinXmlTemplateDefinition> templates,
-                      List<EvtxRecord> records, string[] parsedXml, byte[][]? parsedJson = null,
+                      List<EvtxRecord> records, OutputFormat? format, byte[] output, int[] recordEnds,
                       Dictionary<int, string>? renderDiagnostics = null)
     {
         Header = header;
         Templates = templates;
         Records = records;
-        ParsedXml = parsedXml;
-        ParsedJson = parsedJson;
+        RecordOutputList utf8 = new(output, recordEnds);
+        ParsedUtf8 = utf8;
+        ParsedXml = format == OutputFormat.Xml ? new RecordXmlList(utf8) : Array.Empty<string>();
+        ParsedJson = format == OutputFormat.Json ? utf8 : null;
         RenderDiagnostics = renderDiagnostics ?? new Dictionary<int, string>();
     }
 
@@ -66,13 +72,21 @@ public class EvtxChunk
     public EvtxChunkHeader Header { get; }
 
     /// <summary>
-    /// BinXml-rendered UTF-8 JSON byte arrays, one per record, in the same order as <see cref="Records"/>.
-    /// Null when output format is XML.
+    /// BinXml-rendered UTF-8 JSON, one slice per record, in the same order as <see cref="Records"/>.
+    /// Slices share the chunk's single output buffer. Null when output format is XML.
     /// </summary>
-    public IReadOnlyList<byte[]>? ParsedJson { get; }
+    public IReadOnlyList<ReadOnlyMemory<byte>>? ParsedJson { get; }
+
+    /// <summary>
+    /// Rendered output of each record as UTF-8 (XML or JSON, whichever was requested), in the same order as
+    /// <see cref="Records"/>. Slices share the chunk's single output buffer; prefer this over <see cref="ParsedXml"/>
+    /// when the output is written or hashed rather than inspected as text. Empty when records were not rendered.
+    /// </summary>
+    public IReadOnlyList<ReadOnlyMemory<byte>> ParsedUtf8 { get; }
 
     /// <summary>
     /// BinXml-rendered XML strings, one per record, in the same order as <see cref="Records"/>.
+    /// Each string is decoded from <see cref="ParsedUtf8"/> on first access and then cached.
     /// Empty when output format is JSON.
     /// </summary>
     public IReadOnlyList<string> ParsedXml { get; }
@@ -115,7 +129,7 @@ public class EvtxChunk
         int expectedRecords = (int)(header.LastEventRecordId - header.FirstEventRecordId + 1);
         List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, header.FreeSpaceOffset, expectedRecords);
 
-        return new EvtxChunk(header, templates, records, Array.Empty<string>());
+        return new EvtxChunk(header, templates, records, null, Array.Empty<byte>(), Array.Empty<int>());
     }
 
     /// <summary>
@@ -200,9 +214,7 @@ public class EvtxChunk
         List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, header.FreeSpaceOffset, expectedRecords);
 
         BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache);
-        (string[] xml, byte[][]? json, Dictionary<int, string> diagnostics) = RenderRecords(records, binXml, format);
-
-        return new EvtxChunk(header, templates, records, xml, json, diagnostics);
+        return RenderRecords(header, templates, records, binXml, format, headerless: false)!;
     }
 
     /// <summary>
@@ -248,45 +260,73 @@ public class EvtxChunk
 
         Dictionary<uint, BinXmlTemplateDefinition> templates = new();
         BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache);
+        return RenderRecords(default, templates, records, binXml, format, headerless: true);
+    }
 
-        // Render and filter — only keep records that produce non-empty output.
-        // Diagnostic indices must be remapped since filtering changes the record list positions.
-        (string[] xml, byte[][]? json, Dictionary<int, string> rawDiagnostics) = RenderRecords(records, binXml, format);
-
-        List<EvtxRecord> validRecords = new List<EvtxRecord>(records.Count);
-        Dictionary<int, string> remappedDiagnostics = new();
-        if (json is not null)
+    /// <summary>
+    /// Renders every record of the chunk at <paramref name="chunkFileOffset"/> and appends the UTF-8 output to
+    /// <paramref name="sink"/> in record order. Produces the same bytes as concatenating the rendered output of
+    /// <see cref="Parse(byte[], int, Dictionary{Guid, CompiledTemplate?}?, Dictionary{Guid, CompiledJsonTemplate?}?, OutputFormat)"/>
+    /// (or <see cref="ParseHeaderless"/> when <paramref name="headerless"/> is true), without retaining any record output.
+    /// Records whose rendering throws contribute no bytes, matching the empty output those parses store for them.
+    /// </summary>
+    /// <param name="fileData">Complete EVTX file bytes.</param>
+    /// <param name="chunkFileOffset">Absolute byte offset of this 64KB region within the file.</param>
+    /// <param name="headerless">True to recover records from a region whose chunk header is damaged or missing.</param>
+    /// <param name="compiledCache">Cache of compiled XML templates. Null when using JSON output.</param>
+    /// <param name="compiledJsonCache">Cache of compiled JSON templates. Null when using XML output.</param>
+    /// <param name="format">Output format for rendered event records.</param>
+    /// <param name="sink">Buffer that receives the UTF-8 output.</param>
+    /// <returns>
+    /// Records the equivalent parse would keep: every record of a normal chunk; for a headerless region,
+    /// only records that rendered non-empty output.
+    /// </returns>
+    internal static int RenderTo(byte[] fileData, int chunkFileOffset, bool headerless,
+                                 Dictionary<Guid, CompiledTemplate?>? compiledCache,
+                                 Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache,
+                                 OutputFormat format, ArrayBufferWriter<byte> sink)
+    {
+        ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, ChunkSize);
+        Dictionary<uint, BinXmlTemplateDefinition> templates;
+        uint dataEnd;
+        if (headerless)
         {
-            List<byte[]> validJson = new List<byte[]>(records.Count);
-            for (int i = 0; i < records.Count; i++)
-            {
-                if (json[i].Length > 0)
-                {
-                    if (rawDiagnostics.TryGetValue(i, out string? msg))
-                        remappedDiagnostics[validRecords.Count] = msg;
-                    validRecords.Add(records[i]);
-                    validJson.Add(json[i]);
-                }
-            }
-            if (validRecords.Count == 0)
-                return null;
-            return new EvtxChunk(default, templates, validRecords, Array.Empty<string>(), validJson.ToArray(), remappedDiagnostics);
+            templates = new Dictionary<uint, BinXmlTemplateDefinition>();
+            dataEnd = (uint)chunkData.Length;
+        }
+        else
+        {
+            EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
+            templates = BinXmlTemplateDefinition.PreloadFromChunk(chunkData,
+                MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128)), chunkFileOffset);
+            dataEnd = header.FreeSpaceOffset;
         }
 
-        List<string> validXml = new List<string>(records.Count);
-        for (int i = 0; i < records.Count; i++)
+        // Render each record as soon as the walk finds it, while its bytes are still in cache. The parser is created
+        // on the first record, as Parse/ParseHeaderless only construct it once records exist (its constructor
+        // validates the common string table and can throw on a corrupt one).
+        uint scanEnd = Math.Min(dataEnd, (uint)chunkData.Length);
+        BinXmlParser? binXml = null;
+        int kept = 0;
+        int offset = _chunkHeaderSize;
+        while (TryReadNextRecord(chunkData, chunkFileOffset, scanEnd, ref offset, out EvtxRecord record))
         {
-            if (!string.IsNullOrEmpty(xml[i]))
+            binXml ??= new BinXmlParser(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache);
+            int before = sink.WrittenCount;
+            try
             {
-                if (rawDiagnostics.TryGetValue(i, out string? msg))
-                    remappedDiagnostics[validRecords.Count] = msg;
-                validRecords.Add(records[i]);
-                validXml.Add(xml[i]);
+                binXml.AppendRecordUtf8(record, format, sink);
             }
+            catch (Exception)
+            {
+                // Same policy as RenderRecords: a record that fails to render produces no output
+            }
+
+            if (!headerless || (sink.WrittenCount > before))
+                kept++;
         }
-        if (validRecords.Count == 0)
-            return null;
-        return new EvtxChunk(default, templates, validRecords, validXml.ToArray(), null, remappedDiagnostics);
+
+        return kept;
     }
 
     /// <summary>
@@ -308,77 +348,110 @@ public class EvtxChunk
         List<EvtxRecord> records = new List<EvtxRecord>(capacityHint);
 
         int offset = _chunkHeaderSize;
-        while (offset + 28 <= scanEnd)
-        {
-            ReadOnlySpan<byte> magic = chunkData.Slice(offset, 4);
-
-            if (!magic.SequenceEqual("\x2a\x2a\x00\x00"u8))
-            {
-                offset += 4;
-                continue;
-            }
-
-            EvtxRecord? record = EvtxRecord.ParseEvtxRecord(chunkData[offset..], chunkFileOffset + offset);
-            if (record == null)
-            {
-                // Magic matched but record is invalid — advance by declared size if available,
-                // otherwise by 4. Prevents re-scanning the same record's header bytes as new records.
-                uint declaredSize = MemoryMarshal.Read<uint>(chunkData.Slice(offset + 4, 4));
-                offset += declaredSize >= 28 ? (int)declaredSize : 4;
-                continue;
-            }
-
-            records.Add(record.Value);
-            offset += (int)record.Value.Size;
-        }
+        while (TryReadNextRecord(chunkData, chunkFileOffset, scanEnd, ref offset, out EvtxRecord record))
+            records.Add(record);
 
         return records;
     }
 
     /// <summary>
-    /// Renders BinXml for all records, capturing diagnostics for any that fail.
+    /// Advances from <paramref name="offset"/> to the next valid event record and returns it, positioning
+    /// <paramref name="offset"/> just past it. Non-record bytes are skipped 4 at a time (records are 4-byte aligned);
+    /// a record whose magic (0x00002A2A) matches but whose size fields are invalid is skipped by its declared size
+    /// when that is at least the 28-byte minimum, otherwise by 4, so its header is never re-read as a new record.
     /// </summary>
+    /// <param name="chunkData">Full 64KB chunk span.</param>
+    /// <param name="chunkFileOffset">Absolute file offset of this chunk.</param>
+    /// <param name="scanEnd">Upper scan boundary (exclusive), already clamped to the chunk length.</param>
+    /// <param name="offset">Chunk-relative scan position; updated past the returned record or to the end.</param>
+    /// <param name="record">The record found, when the method returns true.</param>
+    /// <returns>True if a record was found before <paramref name="scanEnd"/>.</returns>
+    private static bool TryReadNextRecord(ReadOnlySpan<byte> chunkData, int chunkFileOffset, uint scanEnd,
+                                          ref int offset, out EvtxRecord record)
+    {
+        // 28 bytes = 24-byte record header + 4-byte trailing size copy, the smallest possible record
+        while (offset + 28 <= scanEnd)
+        {
+            if (!chunkData.Slice(offset, 4).SequenceEqual("\x2a\x2a\x00\x00"u8))
+            {
+                offset += 4;
+                continue;
+            }
+
+            EvtxRecord? parsed = EvtxRecord.ParseEvtxRecord(chunkData[offset..], chunkFileOffset + offset);
+            if (parsed == null)
+            {
+                uint declaredSize = MemoryMarshal.Read<uint>(chunkData.Slice(offset + 4, 4));
+                offset += declaredSize >= 28 ? (int)declaredSize : 4;
+                continue;
+            }
+
+            record = parsed.Value;
+            offset += (int)record.Size;
+            return true;
+        }
+
+        record = default;
+        return false;
+    }
+
+    /// <summary>
+    /// Renders every record into one UTF-8 buffer for the chunk, capturing diagnostics for records that fail
+    /// (a failed record keeps empty output). Records are rendered into a reusable per-thread scratch buffer and then
+    /// copied once into an exact-size array, so a chunk costs one allocation instead of one per record.
+    /// </summary>
+    /// <param name="header">Chunk header (default for a headerless recovery region).</param>
+    /// <param name="templates">Template definitions keyed by chunk-relative offset.</param>
     /// <param name="records">Records to render.</param>
     /// <param name="binXml">Configured BinXml parser for this chunk.</param>
     /// <param name="format">Output format (XML or JSON).</param>
-    /// <returns>Rendered XML array, rendered JSON array (or null), and diagnostics for failed records.</returns>
-    private static (string[] xml, byte[][]? json, Dictionary<int, string> diagnostics)
-        RenderRecords(List<EvtxRecord> records, BinXmlParser binXml, OutputFormat format)
+    /// <param name="headerless">True for a recovery region: only records that render non-empty output are kept,
+    /// and null is returned if there are none.</param>
+    /// <returns>The rendered chunk, or null for a headerless region with no renderable records.</returns>
+    private static EvtxChunk? RenderRecords(EvtxChunkHeader header, Dictionary<uint, BinXmlTemplateDefinition> templates,
+                                            List<EvtxRecord> records, BinXmlParser binXml, OutputFormat format,
+                                            bool headerless)
     {
+        ArrayBufferWriter<byte> scratch = _threadRenderScratch ??= new ArrayBufferWriter<byte>(_initialScratchBytes);
+        scratch.ResetWrittenCount();
+        List<EvtxRecord> kept = headerless ? new List<EvtxRecord>(records.Count) : records;
+        int[] recordEnds = new int[records.Count];
         Dictionary<int, string> diagnostics = new();
-
-        if (format == OutputFormat.Json)
-        {
-            byte[][] parsedJson = new byte[records.Count][];
-            for (int i = 0; i < records.Count; i++)
-            {
-                try
-                {
-                    parsedJson[i] = binXml.ParseRecordJson(records[i]);
-                }
-                catch (Exception ex)
-                {
-                    parsedJson[i] = Array.Empty<byte>();
-                    diagnostics[i] = $"BinXml render failed: {ex.Message}";
-                }
-            }
-            return (Array.Empty<string>(), parsedJson, diagnostics);
-        }
-
-        string[] parsedXml = new string[records.Count];
+        int count = 0;
         for (int i = 0; i < records.Count; i++)
         {
+            int before = scratch.WrittenCount;
+            string? diagnostic = null;
             try
             {
-                parsedXml[i] = binXml.ParseRecord(records[i]);
+                binXml.AppendRecordUtf8(records[i], format, scratch);
             }
             catch (Exception ex)
             {
-                parsedXml[i] = string.Empty;
-                diagnostics[i] = $"BinXml render failed: {ex.Message}";
+                diagnostic = $"BinXml render failed: {ex.Message}";
             }
+
+            if (headerless)
+            {
+                // Recovery keeps only records that produced output; a failed render produced none
+                if (scratch.WrittenCount == before)
+                    continue;
+                kept.Add(records[i]);
+            }
+
+            if (diagnostic != null)
+                diagnostics[count] = diagnostic;
+            recordEnds[count++] = scratch.WrittenCount;
         }
-        return (parsedXml, null, diagnostics);
+
+        if (headerless && (count == 0))
+            return null;
+        if (count != recordEnds.Length)
+            Array.Resize(ref recordEnds, count);
+
+        byte[] output = GC.AllocateUninitializedArray<byte>(scratch.WrittenCount);
+        scratch.WrittenSpan.CopyTo(output);
+        return new EvtxChunk(header, templates, kept, format, output, recordEnds, diagnostics);
     }
 
     #endregion
@@ -386,9 +459,107 @@ public class EvtxChunk
     #region Non-Public Fields
 
     /// <summary>
+    /// Initial size of the per-thread render scratch buffer (256 KB): a 64 KB chunk typically renders to 100-200 KB.
+    /// </summary>
+    private const int _initialScratchBytes = 256 * 1024;
+
+    /// <summary>
+    /// Per-thread scratch buffer records are rendered into before a chunk's output is copied to its exact-size array.
+    /// Safe because chunk rendering is synchronous and never re-enters on one thread.
+    /// </summary>
+    [ThreadStatic]
+    private static ArrayBufferWriter<byte>? _threadRenderScratch;
+
+    /// <summary>
     /// Size of the chunk header in bytes. Event record data begins immediately after.
     /// </summary>
     private const int _chunkHeaderSize = 512;
+
+    #endregion
+
+    #region Nested Types
+
+    /// <summary>
+    /// Per-record views over a chunk's single UTF-8 output buffer.
+    /// </summary>
+    /// <param name="output">Rendered output of every record, back to back.</param>
+    /// <param name="recordEnds">End offset of each record's output.</param>
+    private sealed class RecordOutputList(byte[] output, int[] recordEnds) : IReadOnlyList<ReadOnlyMemory<byte>>
+    {
+        /// <summary>
+        /// Number of records.
+        /// </summary>
+        public int Count => recordEnds.Length;
+
+        /// <summary>
+        /// The UTF-8 output of record <paramref name="index"/>.
+        /// </summary>
+        /// <param name="index">Zero-based record index.</param>
+        public ReadOnlyMemory<byte> this[int index]
+        {
+            get
+            {
+                int start = index == 0 ? 0 : recordEnds[index - 1];
+                return new ReadOnlyMemory<byte>(output, start, recordEnds[index] - start);
+            }
+        }
+
+        /// <summary>
+        /// Enumerates each record's UTF-8 output in order.
+        /// </summary>
+        /// <returns>An enumerator over the records' output.</returns>
+        public IEnumerator<ReadOnlyMemory<byte>> GetEnumerator()
+        {
+            for (int i = 0; i < recordEnds.Length; i++)
+                yield return this[i];
+        }
+
+        /// <summary>
+        /// Non-generic enumerator.
+        /// </summary>
+        /// <returns>An enumerator over the records' output.</returns>
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    /// <summary>
+    /// XML strings decoded from a chunk's UTF-8 output on first access, then cached.
+    /// </summary>
+    /// <param name="utf8">Per-record UTF-8 output.</param>
+    private sealed class RecordXmlList(RecordOutputList utf8) : IReadOnlyList<string>
+    {
+        /// <summary>
+        /// Number of records.
+        /// </summary>
+        public int Count => utf8.Count;
+
+        /// <summary>
+        /// The XML of record <paramref name="index"/>.
+        /// </summary>
+        /// <param name="index">Zero-based record index.</param>
+        // Benign race: concurrent first reads decode identical strings
+        public string this[int index] => (_strings ??= new string?[utf8.Count])[index] ??= Encoding.UTF8.GetString(utf8[index].Span);
+
+        /// <summary>
+        /// Enumerates each record's XML in order.
+        /// </summary>
+        /// <returns>An enumerator over the records' XML.</returns>
+        public IEnumerator<string> GetEnumerator()
+        {
+            for (int i = 0; i < utf8.Count; i++)
+                yield return this[i];
+        }
+
+        /// <summary>
+        /// Non-generic enumerator.
+        /// </summary>
+        /// <returns>An enumerator over the records' XML.</returns>
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        /// <summary>
+        /// Decoded strings, created on first access.
+        /// </summary>
+        private string?[]? _strings;
+    }
 
     #endregion
 }

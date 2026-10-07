@@ -1,6 +1,7 @@
 <Solution>
     <Folder Name="/perf/">
         <Project Path="perf/AxoParse.Bench/AxoParse.Bench.csproj"/>
+        <Project Path="perf/AxoParse.Benchmarks/AxoParse.Benchmarks.csproj"/>
         <Project Path="perf/profiling/AxoParse.Evtx.Profile.csproj"/>
     </Folder>
     <Folder Name="/src/">

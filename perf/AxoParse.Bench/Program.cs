@@ -1,3 +1,4 @@
+using System.Globalization;
 using AxoParse.Evtx.Evtx;
 
 if (args.Length == 0) return 1;
@@ -7,47 +8,19 @@ OutputFormat format = OutputFormat.Xml;
 for (int i = 1; i < args.Length; i++)
 {
     if ((args[i] == "-t") && (i + 1 < args.Length))
-        threads = int.Parse(args[++i]);
+        threads = int.Parse(args[++i], NumberStyles.Integer, NumberFormatInfo.InvariantInfo);
     else if ((args[i] == "-o") && (i + 1 < args.Length))
     {
-        string fmt = args[++i].ToLowerInvariant();
-        format = fmt == "json" ? OutputFormat.Json : OutputFormat.Xml;
+        // Ordinal comparison: culture-aware casing would initialise globalization and load ICU (~5 ms on Windows)
+        format = string.Equals(args[++i], "json", StringComparison.OrdinalIgnoreCase) ? OutputFormat.Json : OutputFormat.Xml;
     }
 }
 
 byte[] data = File.ReadAllBytes(args[0]);
-EvtxParser parser = EvtxParser.Parse(data, threads, format);
 
+// Stream each chunk's UTF-8 output straight to stdout (matches Rust evtx_dump output to a pipe/file):
+// no per-record strings or arrays are kept, so memory stays flat and no gen1/gen2 collections run
 using Stream stdout = Console.OpenStandardOutput();
-
-if (format == OutputFormat.Json)
-{
-    // Write UTF-8 JSON bytes directly — no string conversion
-    for (int index = 0; index < parser.Chunks.Count; index++)
-    {
-        EvtxChunk chunk = parser.Chunks[index];
-        if (chunk.ParsedJson != null)
-        {
-            for (int i = 0; i < chunk.ParsedJson.Count; i++)
-                stdout.Write(chunk.ParsedJson[i]);
-        }
-    }
-}
-else
-{
-    // Write serialized XML to stdout (matches Rust evtx_dump default XML output)
-    using StreamWriter writer = new StreamWriter(stdout, bufferSize: 65536);
-    for (int index = 0; index < parser.Chunks.Count; index++)
-    {
-        EvtxChunk chunk = parser.Chunks[index];
-        for (int i = 0; i < chunk.ParsedXml.Count; i++)
-        {
-            string xml = chunk.ParsedXml[i];
-            writer.Write(xml);
-        }
-    }
-
-    writer.Flush();
-}
+EvtxParser.WriteTo(data, stdout, format, threads);
 
 return 0;

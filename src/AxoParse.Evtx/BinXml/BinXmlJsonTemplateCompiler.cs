@@ -30,7 +30,7 @@ internal sealed partial class BinXmlParser
     /// <param name="insideAttrValue">True when compiling content inside an attribute value (JSON string literal context).</param>
     /// <param name="needsComma">Ref tracking whether a comma is needed before the next array item in #content.</param>
     private void CompileJsonContent(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                    List<string> parts, List<int> subIds, List<bool> isOptional,
+                                    TemplatePartsBuilder parts, List<int> subIds, List<bool> isOptional,
                                     List<bool> inAttrValue, ref bool bail, int depth,
                                     bool insideAttrValue, ref bool needsComma)
     {
@@ -52,7 +52,7 @@ internal sealed partial class BinXmlParser
                 case BinXmlToken.OpenStartElement:
                     if (!insideAttrValue)
                     {
-                        if (needsComma) parts[^1] += ",";
+                        if (needsComma) parts.Current.Append(',');
                         needsComma = true;
                     }
                     CompileJsonElement(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, inAttrValue, ref bail, depth + 1);
@@ -64,13 +64,13 @@ internal sealed partial class BinXmlParser
                     string str = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
                     if (insideAttrValue)
                     {
-                        parts[^1] += BinXmlValueFormatter.JsonEscapeString(str);
+                        parts.Current.Append(BinXmlValueFormatter.JsonEscapeString(str));
                     }
                     else
                     {
-                        if (needsComma) parts[^1] += ",";
+                        if (needsComma) parts.Current.Append(',');
                         needsComma = true;
-                        parts[^1] += "\"" + BinXmlValueFormatter.JsonEscapeString(str) + "\"";
+                        parts.Current.Append('"').Append(BinXmlValueFormatter.JsonEscapeString(str)).Append('"');
                     }
                     break;
 
@@ -82,21 +82,16 @@ internal sealed partial class BinXmlParser
                     pos++; // subValType
                     if (!insideAttrValue)
                     {
-                        if (needsComma) parts[^1] += ",";
+                        if (needsComma) parts.Current.Append(',');
                         needsComma = true;
-                        parts[^1] += "\"";
+                        parts.Current.Append('"');
                     }
                     subIds.Add(subId);
                     isOptional.Add(baseTok == BinXmlToken.OptionalSubstitution);
                     inAttrValue.Add(insideAttrValue);
+                    parts.NextPart();
                     if (!insideAttrValue)
-                    {
-                        parts.Add("\"");
-                    }
-                    else
-                    {
-                        parts.Add(string.Empty);
-                    }
+                        parts.Current.Append('"');
                     break;
 
                 case BinXmlToken.CharRef:
@@ -108,13 +103,13 @@ internal sealed partial class BinXmlParser
                     string escaped = BinXmlValueFormatter.JsonEscapeString(ch.ToString());
                     if (insideAttrValue)
                     {
-                        parts[^1] += escaped;
+                        parts.Current.Append(escaped);
                     }
                     else
                     {
-                        if (needsComma) parts[^1] += ",";
+                        if (needsComma) parts.Current.Append(',');
                         needsComma = true;
-                        parts[^1] += "\"" + escaped + "\"";
+                        parts.Current.Append('"').Append(escaped).Append('"');
                     }
                     break;
                 }
@@ -137,13 +132,13 @@ internal sealed partial class BinXmlParser
                     string escapedEntity = BinXmlValueFormatter.JsonEscapeString(resolved);
                     if (insideAttrValue)
                     {
-                        parts[^1] += escapedEntity;
+                        parts.Current.Append(escapedEntity);
                     }
                     else
                     {
-                        if (needsComma) parts[^1] += ",";
+                        if (needsComma) parts.Current.Append(',');
                         needsComma = true;
-                        parts[^1] += "\"" + escapedEntity + "\"";
+                        parts.Current.Append('"').Append(escapedEntity).Append('"');
                     }
                     break;
                 }
@@ -155,13 +150,13 @@ internal sealed partial class BinXmlParser
                     string escapedCdata = BinXmlValueFormatter.JsonEscapeString(cdataStr);
                     if (insideAttrValue)
                     {
-                        parts[^1] += escapedCdata;
+                        parts.Current.Append(escapedCdata);
                     }
                     else
                     {
-                        if (needsComma) parts[^1] += ",";
+                        if (needsComma) parts.Current.Append(',');
                         needsComma = true;
-                        parts[^1] += "\"" + escapedCdata + "\"";
+                        parts.Current.Append('"').Append(escapedCdata).Append('"');
                     }
                     break;
                 }
@@ -192,7 +187,7 @@ internal sealed partial class BinXmlParser
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
     private void CompileJsonElement(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                    List<string> parts, List<int> subIds, List<bool> isOptional,
+                                    TemplatePartsBuilder parts, List<int> subIds, List<bool> isOptional,
                                     List<bool> inAttrValue, ref bool bail, int depth = 0)
     {
         if (depth >= _maxRecursionDepth)
@@ -217,7 +212,7 @@ internal sealed partial class BinXmlParser
         }
 
         string elemName = BinXmlValueFormatter.JsonEscapeString(ReadName(nameOffset));
-        parts[^1] += "{\"#name\":\"" + elemName + "\"";
+        parts.Current.Append("{\"#name\":\"").Append(elemName).Append('"');
 
         // Compile attributes
         if (hasAttrs)
@@ -226,7 +221,7 @@ internal sealed partial class BinXmlParser
             pos += 4;
             int attrEnd = pos + (int)attrListSize;
 
-            parts[^1] += ",\"#attrs\":{";
+            parts.Current.Append(",\"#attrs\":{");
             bool firstAttr = true;
 
             while (pos < attrEnd)
@@ -246,25 +241,25 @@ internal sealed partial class BinXmlParser
                 }
 
                 string attrName = BinXmlValueFormatter.JsonEscapeString(ReadName(attrNameOff));
-                if (!firstAttr) parts[^1] += ",";
+                if (!firstAttr) parts.Current.Append(',');
                 firstAttr = false;
-                parts[^1] += "\"" + attrName + "\":\"";
+                parts.Current.Append('"').Append(attrName).Append("\":\"");
 
                 // Compile attribute value content in attr-value context (inside JSON string literal)
                 bool attrNeedsComma = false;
                 CompileJsonContent(data, ref pos, binxmlChunkBase, parts, subIds, isOptional, inAttrValue, ref bail, depth + 1,
                     insideAttrValue: true, needsComma: ref attrNeedsComma);
                 if (bail) return;
-                parts[^1] += "\"";
+                parts.Current.Append('"');
             }
 
-            parts[^1] += "}";
+            parts.Current.Append('}');
         }
 
         // Close token
         if (pos >= data.Length)
         {
-            parts[^1] += "}";
+            parts.Current.Append('}');
             return;
         }
 
@@ -272,12 +267,12 @@ internal sealed partial class BinXmlParser
         if (closeTok == BinXmlToken.CloseEmptyElement)
         {
             pos++;
-            parts[^1] += "}";
+            parts.Current.Append('}');
         }
         else if (closeTok == BinXmlToken.CloseStartElement)
         {
             pos++;
-            parts[^1] += ",\"#content\":[";
+            parts.Current.Append(",\"#content\":[");
 
             // Compile child content as array items
             bool contentNeedsComma = false;
@@ -287,11 +282,11 @@ internal sealed partial class BinXmlParser
 
             if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
-            parts[^1] += "]}";
+            parts.Current.Append("]}");
         }
         else
         {
-            parts[^1] += "}";
+            parts.Current.Append('}');
         }
     }
 
@@ -311,7 +306,7 @@ internal sealed partial class BinXmlParser
         ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, dataSize);
         int tplChunkBase = defDataOffset + 24;
 
-        List<string> parts = new() { string.Empty };
+        TemplatePartsBuilder parts = new();
         List<int> subIds = new();
         List<bool> isOptional = new();
         List<bool> inAttrValueList = new();
