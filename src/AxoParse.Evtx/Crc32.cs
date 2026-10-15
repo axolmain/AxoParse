@@ -13,17 +13,34 @@ internal static class Crc32
     /// </summary>
     /// <param name="data">Input bytes to checksum.</param>
     /// <returns>The CRC32 value.</returns>
-    public static uint Compute(ReadOnlySpan<byte> data)
-    {
-        uint crc = 0xFFFFFFFFu;
-        for (int i = 0; i < data.Length; i++)
-            crc = _table[(byte)(crc ^ data[i])] ^ (crc >> 8);
-        return crc ^ 0xFFFFFFFFu;
-    }
+    public static uint Compute(ReadOnlySpan<byte> data) => Update(0xFFFFFFFFu, data) ^ 0xFFFFFFFFu;
+
+    /// <summary>
+    /// Computes one CRC32 over two spans as if they were contiguous (the CRC state carries across, so this is not the
+    /// same as combining two separate CRCs). Used for the chunk header checksum, which covers bytes 0-120 and 128-512.
+    /// </summary>
+    /// <param name="first">First range of input bytes.</param>
+    /// <param name="second">Second range, checksummed as if it directly followed <paramref name="first"/>.</param>
+    /// <returns>The CRC32 value of <paramref name="first"/> followed by <paramref name="second"/>.</returns>
+    public static uint Compute(ReadOnlySpan<byte> first, ReadOnlySpan<byte> second) =>
+        Update(Update(0xFFFFFFFFu, first), second) ^ 0xFFFFFFFFu;
 
     #endregion
 
     #region Non-Public Methods
+
+    /// <summary>
+    /// Advances a running (pre-inversion) CRC32 state over <paramref name="data"/>.
+    /// </summary>
+    /// <param name="crc">Running state; start from 0xFFFFFFFF.</param>
+    /// <param name="data">Bytes to fold in.</param>
+    /// <returns>The updated running state (XOR with 0xFFFFFFFF to finalise).</returns>
+    private static uint Update(uint crc, ReadOnlySpan<byte> data)
+    {
+        for (int i = 0; i < data.Length; i++)
+            crc = _table[(byte)(crc ^ data[i])] ^ (crc >> 8);
+        return crc;
+    }
 
     /// <summary>
     /// Builds the 256-entry CRC32 lookup table by computing the remainder for each possible byte value.
