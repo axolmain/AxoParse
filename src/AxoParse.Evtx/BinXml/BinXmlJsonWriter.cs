@@ -376,7 +376,7 @@ internal sealed partial class BinXmlParser
             uint inlineDataSize = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos + 20, 4));
             peekPos += 24 + (int)inlineDataSize;
         }
-        int numVals = (int)BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos, 4));
+        int numVals = ReadSubstitutionCount(data, peekPos);
 
         const int StackThreshold = 64;
         Span<int> valueOffsets = numVals <= StackThreshold ? stackalloc int[StackThreshold] : new int[numVals];
