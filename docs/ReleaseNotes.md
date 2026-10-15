@@ -212,7 +212,8 @@ public static int WriteTo(
 
 Parses the file and writes every record's rendered UTF-8 output to `output`. The order and bytes match concatenating
 `Parse` output: valid chunks in file order, then records recovered from regions whose chunk header is damaged.
-Workers render a window of chunks into reusable buffers and write it in order, so no per-record output is retained.
+Workers render chunks into a bounded ring of reusable buffers while the calling thread writes them in order, so no
+per-record output is retained and rendering overlaps with writing.
 The stream is written to but not flushed or closed.
 
 Per-record render diagnostics aren't reported. A record that fails to render writes nothing. `WriteTo` doesn't take a

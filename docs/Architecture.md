@@ -29,7 +29,7 @@ There are three entry points over the same pipeline:
 |-------------|--------|
 | `EvtxParser.Parse` | Holds every chunk. Each `EvtxChunk` keeps its records plus one UTF-8 buffer of rendered output, exposed per record as `ParsedUtf8` / `ParsedJson` slices or as lazily decoded `ParsedXml` strings. |
 | `EvtxParser.ParseAsync` | Same phases, but parsed chunks go through a channel and a reorder buffer, so `EvtxEvent`s are yielded in file order as soon as each chunk is ready. |
-| `EvtxParser.WriteTo` | Same chunk classification, but doesn't build `EvtxChunk`s. Workers render a window of chunks into reusable scratch buffers, the window is written to the output `Stream` in file order, and the buffers are reused. Output bytes match `Parse`. |
+| `EvtxParser.WriteTo` | Same chunk classification, but doesn't build `EvtxChunk`s. Workers claim chunks in order and render each into a buffer from a bounded ring. The calling thread writes each chunk to the output `Stream` as soon as it's next in file order and returns the buffer, so rendering and writing overlap with no batch barrier. Output bytes match `Parse`. |
 
 ## Threading model
 
