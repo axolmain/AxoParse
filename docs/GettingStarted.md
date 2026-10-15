@@ -83,13 +83,17 @@ foreach (EvtxChunk chunk in parser.Chunks)
 | `maxThreads`        | `0`     | Thread count. `0`/`-1` = all cores, `1` = single-threaded |
 | `format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.Json`                 |
 | `validateChecksums` | `false` | Skip chunks that fail CRC32 validation                    |
-| `wevtCache`         | `null`  | Pre-built template cache from provider PE binaries        |
+| `wevtCache`         | `null`  | Currently has no effect (fallback for damaged templates planned for 0.3.0) |
 
 `WriteTo` takes the same options except `wevtCache`.
 
 ## WEVT template cache
 
-For richer event data, pre-load templates from Windows provider DLLs:
+> **Note:** `WevtCache` currently has no effect on output. `EvtxParser` never consults its templates; the
+> templates embedded in the EVTX file are always used. Making it a fallback for chunks whose embedded templates are
+> missing or corrupt (as the Rust `evtx` crate does) is planned for 0.3.0.
+
+`WevtCache` extracts templates from Windows provider DLLs:
 
 ```csharp
 using AxoParse.Evtx.Wevt;
@@ -100,4 +104,5 @@ cache.AddFromDirectory(@"C:\Windows\System32", "*.dll");
 EvtxParser parser = EvtxParser.Parse(fileData, wevtCache: cache);
 ```
 
-This extracts WEVT_TEMPLATE resources from PE binaries so templates are compiled before any records are parsed.
+This extracts and compiles WEVT_TEMPLATE resources from PE binaries. Passing the cache to `Parse` or `ParseAsync` is
+accepted but changes nothing yet (see the note above); JSON output and `WriteTo` don't take one at all.
