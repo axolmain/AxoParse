@@ -33,7 +33,7 @@ catch (EvtxParseException ex) when (ex.ErrorCode == EvtxParseError.InvalidFileSi
 Most corruption is handled silently to maximise data recovery:
 
 - **Chunks with bad magic** — skipped during Phase 1, then Phase 4 scans the 64KB region for individual records by looking for `0x2A2A` record magic
-- **Records that fail BinXml parsing** — produce empty output (`""` for XML, `[]` for JSON) rather than throwing
+- **Records that fail BinXml parsing** — produce empty output (`""` for XML, a zero-length slice for JSON) rather than throwing. The reason is in `EvtxEvent.Diagnostic` / `EvtxChunk.RenderDiagnostics`. `WriteTo` writes nothing for such records and doesn't report diagnostics.
 - **CRC32 checksum failures** — only enforced when `validateChecksums: true`. When enabled, failing chunks are skipped entirely
 
 The design philosophy is: throw on "this isn't an EVTX file" errors, recover silently from "this EVTX file has corruption" errors.

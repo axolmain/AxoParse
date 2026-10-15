@@ -44,15 +44,25 @@ for how to handle errors were inspired by omerbenamram.
 
 If you find issues, please open a [GitHub issue](https://github.com/axolmain/AxoParse/issues). Contributions welcome!
 
+## AI Disclosure
+
+Heads up: a fair bit of this project was built with help from Claude (via Claude Code), especially the performance
+work, tests, benchmark tooling, and docs. I also use it to write commit messages, since it writes far more detail than
+I'd ever bother to, which keeps the history really clean to track. Commits with significant AI involvement carry a
+`Co-Authored-By` trailer. Everything gets reviewed by me and has to pass the test suite and benchmarks before it lands.
+
 ## Features
 
-- **XML and JSON output** — converts BinXml directly to XML or UTF-8 JSON (no xml-to-json conversion)
+- **XML and JSON output** — renders BinXml straight to UTF-8 XML or JSON (no xml-to-json conversion, no UTF-16 detour)
+- **Streaming output** — `WriteTo` writes rendered records to any `Stream` with flat memory use
+- **Async enumeration** — `ParseAsync` yields events in file order as chunks finish parsing
 - **Multi-threaded** — parallel chunk processing with configurable thread count
 - **Template pre-compilation** — compiles BinXml templates once for zero repeated overhead
 - **WEVT template cache** — extracts templates from Windows PE binaries (DLL/EXE) for offline parsing
 - **CRC32 validation** — optional checksum verification on chunks
 - **Resilient** — gracefully handles corrupted records, bad checksums, and malformed chunks
 - **Minimal allocations** — span-based zero-copy parsing, stack allocations, and value types throughout
+- **Culture-invariant** — output is identical regardless of the machine's locale
 
 ## Install
 
@@ -75,9 +85,27 @@ foreach (EvtxEvent evt in parser.GetEvents())
 }
 ```
 
+### Stream straight to a file
+
+The fastest way to export: no per-record objects, output is byte-identical to `Parse`.
+
+```csharp
+using FileStream output = File.Create("security.json");
+EvtxParser.WriteTo(fileData, output, OutputFormat.Json);
+```
+
+### Consume events as they're parsed
+
+```csharp
+await foreach (EvtxEvent evt in EvtxParser.ParseAsync(fileData))
+    Console.WriteLine(evt.Xml);
+```
+
 ### With WEVT template cache
 
 ```csharp
+using AxoParse.Evtx.Wevt;
+
 WevtCache cache = new WevtCache();
 cache.AddFromDirectory(@"C:\Windows\System32", "*.dll");
 
@@ -95,33 +123,42 @@ EvtxParser parser = EvtxParser.Parse(fileData, wevtCache: cache);
 
 ## Benchmark Results
 
-I'm running tests on a 2025 Macbook Air with an M4 chip and benching used hyperfine (statistical measurements tool).
-
-Bench run: February 2026.
-
-System: macOS Sequoia - Version 15.7.3
-
-Benchmark commit: 7ae7110.
+Measured with [hyperfine](https://github.com/sharkdp/hyperfine) (5 warmup runs, 10 measured) on a 2025 MacBook Air
+(Apple M4, macOS 26.6), October 2026. AxoParse commit `0972526`; Rust `evtx` at upstream `7479d02`. Reproduce with
+`tools/bench/bench-all.sh` (see `tools/bench/scripts/README.md`).
 
 Libraries benched:
 
-- [libevtx](https://github.com/libyal/libevtx) - C-based
 - [evtx](https://github.com/omerbenamram/evtx) - Rust-based
-- [evtx-parser](https://github.com/axolmain/evtx-parser) - Typescript-based (technically JS ig but hey)
+- [libevtx](https://github.com/libyal/libevtx) - C-based
+- [evtx-parser](https://github.com/axolmain/evtx-parser) - TypeScript-based (run on Node)
 
-| File                                | C# (1 thread)      | C# (8 threads)   | C# WASM           | evtx (Rust - 1 thread) | evtx (Rust - 8 threads) | JS Node            | libevtx (C)       |
-|-------------------------------------|--------------------|------------------|-------------------|------------------------|-------------------------|--------------------|-------------------|
-| 30M security_big_sample.evtx (XML)  | 68.9 ms ± 0.5 ms   | 58.1 ms ± 1.0 ms | N/A (web only)    | 155.4 ms ± 0.4 ms      | 54.6 ms ± 2.5 ms        | 976.4 ms ± 15.8 ms | 1.397 s ± 0.029 s |
-| 30M security_big_sample.evtx (JSON) | 195.2 ms ± 21.7 ms | 86.7 ms ± 7.5 ms | 112.8 ms ± 1.1 ms | 140.3 ms ± 0.6 ms      | 49.6 ms ± 0.4 ms        | 1.306 s ± 0.012 s  | No support        |
+| 30 MB `security_big_sample.evtx` | XML               | JSON              |
+|----------------------------------|-------------------|-------------------|
+| **C# (1 thread)**                | 36.1 ms ± 2.4 ms  | 40.0 ms ± 0.9 ms  |
+| **C# (8 threads)**               | 16.4 ms ± 0.7 ms  | 18.6 ms ± 0.8 ms  |
+| evtx (Rust, 1 thread)            | 38.5 ms ± 0.3 ms  | 37.4 ms ± 0.3 ms  |
+| evtx (Rust, 8 threads)           | 9.7 ms ± 0.3 ms   | 9.3 ms ± 0.4 ms   |
+| JS Node                          | 930.7 ms ± 13 ms  | 1.129 s ± 0.011 s |
+| libevtx (C, 1 thread)            | 1.396 s ± 0.016 s | No support        |
+
+Single-threaded, AxoParse and Rust `evtx` are neck and neck. With 8 threads, Rust is currently 1.7–2× faster.
+
+WASM builds on Node (not like-for-like, so listed separately):
+
+| WASM, JSON                                                    | Time              |
+|---------------------------------------------------------------|-------------------|
+| C# WASM (`ParseEvtxFile` + `GetRecordPage`, with field extraction) | 1.165 s ± 0.005 s |
+| Rust `evtx-wasm` (Arrow IPC per chunk; no JSON output upstream) | 748.4 ms ± 3.8 ms |
 
 ## Documentation
 
-- [Release Notes & API Reference](docs/ReleaseNotes.md) — v0.1.0 notes, full public API docs
+- [Release Notes & API Reference](docs/ReleaseNotes.md) — release notes, full public API docs
 - [Getting Started](docs/GettingStarted.md) — install, usage examples, options
 - [Architecture](docs/Architecture.md) — parsing pipeline, threading model, template compilation
 - [EVTX Format](docs/EvtxFormat.md) — binary format primer (headers, chunks, records, BinXml)
 - [Error Handling](docs/ErrorHandling.md) — `EvtxParseException`, error codes, corruption resilience
-- [Performance](docs/Performance.md) — threading, memory, XML vs JSON
+- [Performance](docs/Performance.md) — choosing an entry point, threading, memory, benchmarks
 - [WASM Integration](docs/WasmIntegration.md) — using the WASM build in browser apps
 - [Contributing](docs/Contributing.md) — build, test, code style, project structure
 

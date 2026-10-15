@@ -6,7 +6,7 @@
         <Nullable>enable</Nullable>
 
         <!-- NuGet package metadata -->
-        <Version>0.1.0</Version>
+        <Version>0.2.0</Version>
         <Description>High-performance .NET library for parsing Windows Event Log (.evtx) files. Converts binary XML to XML or JSON with parallel chunk processing, template pre-compilation, and WEVT cache support.</Description>
         <PackageTags>evtx;event-log;windows;parser;forensics;dfir;binxml</PackageTags>
         <PackageReadmeFile>README.md</PackageReadmeFile>

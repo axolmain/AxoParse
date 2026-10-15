@@ -1,6 +1,36 @@
-# AxoParse.Evtx — v0.1.0 Release Notes & API Reference
+# AxoParse.Evtx — Release Notes & API Reference
 
 ## Release Notes
+
+### v0.2.0 — Faster UTF-8 rendering
+
+Rendering now goes straight from BinXml to UTF-8, with no UTF-16 strings in between. On the 30 MB benchmark file
+(Apple M4, single thread) XML output went from 68.9 ms to 36.1 ms and JSON from 195.2 ms to 40.0 ms. With 8 threads,
+XML went from 58.1 ms to 16.4 ms and JSON from 86.7 ms to 18.6 ms.
+
+**New:**
+
+- `EvtxParser.WriteTo(fileData, stream, ...)` — renders every record and writes the UTF-8 output straight to a
+  `Stream`, using reusable per-worker buffers. Memory stays flat regardless of file size. Output is byte-identical
+  to concatenating `Parse` output.
+- `EvtxChunk.ParsedUtf8` — each record's rendered UTF-8 bytes (XML or JSON) as slices of the chunk's output buffer.
+
+**Breaking changes:**
+
+- `EvtxChunk.ParsedJson` is now `IReadOnlyList<ReadOnlyMemory<byte>>?` (was `IReadOnlyList<byte[]>?`). Use
+  `.Span` where you previously passed the array, e.g. `Encoding.UTF8.GetString(chunk.ParsedJson[i].Span)`.
+  `EvtxEvent.Json` was already `ReadOnlyMemory<byte>` and is unchanged.
+
+**Changes:**
+
+- `EvtxChunk.ParsedXml` decodes each record from UTF-8 on first access and caches it. If you don't read it, it
+  costs nothing.
+- Numbers are formatted with the invariant culture. Previously, output could vary with the machine's locale.
+- JSON escaping is vectorised. Embedded BinXml in JSON is written pre-escaped instead of rendered and then escaped
+  (about 2× faster on those records).
+- FILETIME, GUID, and hex formatting are span-based, and template parts are pre-encoded as UTF-8.
+
+---
 
 ### v0.1.0 — Initial Release
 
@@ -15,6 +45,7 @@ High-performance .NET library for parsing Windows Event Log (.evtx) files.
 - Parallel chunk processing — configurable thread count for multi-core throughput
 - CRC32 validation — optional checksum verification on file headers, chunk headers, and chunk data
 - Resilient parsing — gracefully handles corrupted records, bad checksums, and malformed chunks
+- Async enumeration — `EvtxParser.ParseAsync` yields events in file order as chunks finish parsing
 
 **Target Framework:** .NET 10.0
 
@@ -33,7 +64,7 @@ dotnet add package AxoParse.Evtx
 Or add directly to your `.csproj`:
 
 ```xml
-<PackageReference Include="AxoParse.Evtx" Version="0.1.0" />
+<PackageReference Include="AxoParse.Evtx" Version="0.2.0" />
 ```
 
 ---
@@ -66,6 +97,23 @@ foreach (EvtxEvent evt in parser.GetEvents())
 {
     string json = System.Text.Encoding.UTF8.GetString(evt.Json.Span);
     Console.WriteLine(json);
+}
+```
+
+### Stream output to a file
+
+```csharp
+using FileStream output = File.Create("security.json");
+int written = EvtxParser.WriteTo(fileData, output, OutputFormat.Json);
+```
+
+### Consume events as they're parsed
+
+```csharp
+await foreach (EvtxEvent evt in EvtxParser.ParseAsync(fileData, cancellationToken: token))
+{
+    if (evt.IsSuccess)
+        Console.WriteLine(evt.Xml);
 }
 ```
 
@@ -112,6 +160,8 @@ foreach (EvtxChunk chunk in parser.Chunks)
 }
 ```
 
+To write or hash output without decoding to `string`, use `chunk.ParsedUtf8[i].Span` instead.
+
 ---
 
 ## API Reference
@@ -146,6 +196,45 @@ public static EvtxParser Parse(
 **Returns:** Fully parsed `EvtxParser` instance.
 
 **Throws:** `EvtxParseException` if data is too short or missing the EVTX magic signature.
+
+#### `WriteTo` (static method)
+
+```csharp
+public static int WriteTo(
+    byte[] fileData,
+    Stream output,
+    OutputFormat format = OutputFormat.Xml,
+    int maxThreads = 0,
+    bool validateChecksums = false,
+    CancellationToken cancellationToken = default)
+```
+
+Parses the file and writes every record's rendered UTF-8 output to `output`. The order and bytes match concatenating
+`Parse` output: valid chunks in file order, then records recovered from regions whose chunk header is damaged.
+Workers render a window of chunks into reusable buffers and write it in order, so no per-record output is retained.
+The stream is written to but not flushed or closed.
+
+Per-record render diagnostics aren't reported. A record that fails to render writes nothing. `WriteTo` doesn't take a
+`WevtCache`.
+
+**Returns:** Number of records written, counted the same way as `TotalRecords` for the same input.
+
+**Throws:** `EvtxParseException` under the same conditions as `Parse`.
+
+#### `ParseAsync` (static method)
+
+```csharp
+public static IAsyncEnumerable<EvtxEvent> ParseAsync(
+    byte[] fileData,
+    int maxThreads = 0,
+    OutputFormat format = OutputFormat.Xml,
+    bool validateChecksums = false,
+    WevtCache? wevtCache = null,
+    CancellationToken cancellationToken = default)
+```
+
+Same parsing as `Parse`, but events are streamed. Chunks are parsed in parallel and yielded in file order through a
+reorder buffer, so the first events are available before the whole file is parsed. Parameters are the same as `Parse`.
 
 #### `GetEvents`
 
@@ -259,8 +348,9 @@ event records in BinXml, and trailing unused space.
 |---------------------|-------------------------------------------------------|-------------------------------------------------------------|
 | `Header`            | `EvtxChunkHeader`                                     | Parsed chunk header with record ranges, offsets, checksums  |
 | `Records`           | `IReadOnlyList<EvtxRecord>`                           | Event records parsed from chunk's data area                 |
-| `ParsedXml`         | `IReadOnlyList<string>`                               | Rendered XML strings (empty when format is JSON)            |
-| `ParsedJson`        | `IReadOnlyList<byte[]>?`                              | Rendered UTF-8 JSON byte arrays (`null` when format is XML) |
+| `ParsedUtf8`        | `IReadOnlyList<ReadOnlyMemory<byte>>`                 | Rendered UTF-8 output (XML or JSON) per record; slices of one chunk buffer |
+| `ParsedXml`         | `IReadOnlyList<string>`                               | Rendered XML strings, decoded lazily from `ParsedUtf8` (empty when format is JSON) |
+| `ParsedJson`        | `IReadOnlyList<ReadOnlyMemory<byte>>?`                | Rendered UTF-8 JSON per record (`null` when format is XML)  |
 | `RenderDiagnostics` | `IReadOnlyDictionary<int, string>`                    | Error messages for failed renders, keyed by record index    |
 | `Templates`         | `IReadOnlyDictionary<uint, BinXmlTemplateDefinition>` | Template definitions from chunk's template pointer table    |
 
@@ -513,8 +603,8 @@ file has corruption" errors.**
 ### What recovers silently
 
 - **Chunks with bad magic** — skipped, then the 64KB region is scanned for individual records by `0x2A2A` record magic
-- **Records that fail BinXml parsing** — produce empty output (`""` for XML, `[]` for JSON) with a diagnostic message on
-  the `EvtxEvent`
+- **Records that fail BinXml parsing** — produce empty output (`""` for XML, a zero-length slice for JSON) with a
+  diagnostic message on the `EvtxEvent` (`WriteTo` writes nothing for them)
 - **CRC32 checksum failures** — only enforced when `validateChecksums: true`; failing chunks are skipped entirely
 
 Check `parser.Diagnostics` for parser-level warnings and `evt.IsSuccess` / `evt.Diagnostic` for per-record status.
