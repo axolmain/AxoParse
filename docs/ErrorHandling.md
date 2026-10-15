@@ -35,6 +35,6 @@ Most corruption is handled silently to maximise data recovery:
 - **Chunks with bad magic** — skipped during Phase 1, then Phase 4 scans the 64KB region for individual records by looking for `0x2A2A` record magic
 - **Records that fail BinXml parsing** — produce empty output (`""` for XML, a zero-length slice for JSON) rather than throwing. The reason is in `EvtxEvent.Diagnostic` / `EvtxChunk.RenderDiagnostics`. `WriteTo` writes nothing for such records and doesn't report diagnostics.
 - **CRC32 checksum failures** — only enforced when `validateChecksums: true`. When enabled, failing chunks are skipped entirely. Chunks flagged `NoCrc32` carry no checksums and always pass. The file header's checksum is read but not validated
-- **Implausible sizes from the file** — a chunk's record ID range is only used as a capacity hint and ignored when it's inverted or too large, and a template instance claiming more substitutions than its record can hold fails just that record, before anything is allocated from the count
+- **Implausible sizes and offsets from the file** — a chunk's record ID range is only used as a capacity hint and ignored when it's inverted or too large, and a template instance claiming more substitutions than its record can hold fails just that record, before anything is allocated from the count
 
 The design philosophy is: throw on "this isn't an EVTX file" errors, recover silently from "this EVTX file has corruption" errors.

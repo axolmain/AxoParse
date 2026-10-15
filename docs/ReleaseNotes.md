@@ -18,6 +18,9 @@
 - **A record claiming a huge number of substitutions** allocated memory sized from that count before rejecting it
   (about 430 MB for one bad record). The count is now checked against the record's remaining bytes first; only that
   record fails, with a diagnostic.
+- **Two more ways a corrupt file could throw**, found by the new seeded corruption test. A record whose declared size
+  was 2 GB or more wrapped the record-scan offset negative. A template pointer or size near `uint.MaxValue` slipped past
+  the bounds check. Both now just end or skip the bad region.
 
 **Documentation:**
 

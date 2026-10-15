@@ -397,7 +397,8 @@ public class EvtxChunk
             if (parsed == null)
             {
                 uint declaredSize = MemoryMarshal.Read<uint>(chunkData.Slice(offset + 4, 4));
-                offset += declaredSize >= 28 ? (int)declaredSize : 4;
+                // 64-bit sum, clamped to the scan end: a declared size >= 2^31 must not wrap the offset negative
+                offset = declaredSize >= 28 ? (int)Math.Min(offset + (long)declaredSize, scanEnd) : offset + 4;
                 continue;
             }
 
