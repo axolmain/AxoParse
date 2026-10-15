@@ -21,6 +21,24 @@ dotnet test --project tests/AxoParse.Evtx.Tests --filter-class "AxoParse.Evtx.Te
 dotnet test --project tests/AxoParse.Evtx.Tests --filter-method "*ThrowsOnTruncatedData*"
 ```
 
+### Golden output
+
+`GoldenOutputTests` locks the exact output of every sample in `tests/data`. It stores a SHA-256 of `WriteTo` output
+per sample and format (XML/JSON) in `tests/AxoParse.Evtx.Tests/Golden/output-sha256.txt`, and checks it at 1 and 8
+threads. Any byte change fails the test. The failure message lists the affected sample and format, and the path of a
+temp folder holding the new output so you can diff it against output from a known-good build.
+
+If the change is intended, re-bless and commit the updated hash file with your change:
+
+```bash
+AXOPARSE_REBLESS=1 dotnet test --project tests/AxoParse.Evtx.Tests --filter-class "AxoParse.Evtx.Tests.GoldenOutputTests"
+```
+
+On Windows PowerShell: `$env:AXOPARSE_REBLESS=1; dotnet test ...; Remove-Item Env:AXOPARSE_REBLESS`.
+
+Equality tests also check that `WriteTo` and `ParseAsync` produce exactly what `Parse` produces, for every sample,
+format and thread count, with checksum validation off and on.
+
 ## Code style
 
 - **Explicit types** — avoid `var` unless required (anonymous types)
@@ -59,6 +77,7 @@ tests/
 perf/
   AxoParse.Bench/           # AOT CLI used by tools/bench for cross-parser comparisons
   AxoParse.Benchmarks/      # BenchmarkDotNet suite for internals (file / chunk / formatter)
+  AxoParse.CliHash/         # Checks a built CLI's output against the golden hashes
   profiling/                # Profiling harness
 tools/
   bench/                    # hyperfine comparison vs Rust/C/JS parsers, BenchmarkDotNet run/compare scripts
@@ -76,7 +95,14 @@ pwsh tools/bench/bdn-compare.ps1 perf/results/baseline perf/results/candidate
 
 # End to end vs other parsers (see tools/bench/scripts/README.md)
 tools/bench/bench-all.sh
+
+# Check a published AOT CLI's output against the golden hashes (bench-all.sh runs this before timing)
+dotnet publish perf/AxoParse.Bench -c Release -o perf/AxoParse.Bench/bin/publish
+dotnet run --project perf/AxoParse.CliHash -c Release -- perf/AxoParse.Bench/bin/publish/AxoParse.Bench
 ```
+
+On Windows, pass `AxoParse.Bench.exe`. `AxoParse.CliHash` and the BenchmarkDotNet scripts (`pwsh`) work on every
+platform. `bench-all.sh` is bash: use WSL or Git Bash.
 
 ## Pull requests
 

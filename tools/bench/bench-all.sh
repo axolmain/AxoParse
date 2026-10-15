@@ -9,12 +9,14 @@ FORMAT_FILTER=""
 SINGLE_FILE=""
 PARSER_FILTER=""
 LIST_PARSERS=false
+SKIP_VERIFY=false
 
 # ── Path variables (set BEFORE sourcing helpers) ────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 CSHARP_PROJECT="$ROOT_DIR/perf/AxoParse.Bench/AxoParse.Bench.csproj"
 CSHARP_BIN="$ROOT_DIR/perf/AxoParse.Bench/bin/publish/AxoParse.Bench"
+CLIHASH_PROJECT="$ROOT_DIR/perf/AxoParse.CliHash/AxoParse.CliHash.csproj"
 CS_WASM_CLI="$SCRIPT_DIR/bench-wasm-cli.mjs"
 CS_WASM_PROJECT="$ROOT_DIR/src/AxoParse.Browser/AxoParse.Browser.csproj"
 RUST_WASM_CLI="$SCRIPT_DIR/bench-rust-wasm-cli.mjs"
@@ -84,6 +86,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --native-only)
       NATIVE_ONLY=true
+      shift
+      ;;
+    --skip-verify)
+      SKIP_VERIFY=true
       shift
       ;;
     --parsers)
