@@ -463,7 +463,7 @@ internal sealed partial class BinXmlParser
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
     /// <param name="vsb">String builder that receives the rendered JSON output.</param>
     /// <param name="escaped">
-    /// When true, emit <see cref="CompiledJsonTemplate.EscapedParts"/> (must be non-null) and double-escaped values
+    /// When true, emit <see cref="CompiledJsonTemplate.EscapedUtf8Parts"/> (must be non-null) and double-escaped values
     /// (embedded BinXml 0x21 context).
     /// </param>
     private void WriteCompiledJson(CompiledJsonTemplate compiled,

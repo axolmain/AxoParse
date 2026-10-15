@@ -226,7 +226,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public async Task ParseAsyncMatchesSyncResults()
     {
-        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"));
+        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"), TestContext.Current.CancellationToken);
 
         EvtxParser syncParser = EvtxParser.Parse(data, maxThreads: 1,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -258,7 +258,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public async Task ParseAsyncRespectsCancellation()
     {
-        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"));
+        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"), TestContext.Current.CancellationToken);
         CancellationTokenSource cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
@@ -274,7 +274,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public async Task ParseAsyncJsonMatchesSyncCount()
     {
-        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"));
+        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"), TestContext.Current.CancellationToken);
 
         EvtxParser syncParser = EvtxParser.Parse(data, maxThreads: 1, format: OutputFormat.Json,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -298,7 +298,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
     [Fact]
     public async Task ParseAsyncMultiThreadedSameCount()
     {
-        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"));
+        byte[] data = await File.ReadAllBytesAsync(Path.Combine(_testDataDir, "security.evtx"), TestContext.Current.CancellationToken);
 
         int singleCount = 0;
         await foreach (EvtxEvent _ in EvtxParser.ParseAsync(data, maxThreads: 1,

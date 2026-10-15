@@ -658,7 +658,7 @@ internal static class BinXmlValueFormatter
     private static ReadOnlySpan<byte> LowerHexDigitsUtf8 => "0123456789abcdef"u8;
 
     /// <summary>
-    /// Uppercase hex digits as UTF-8 bytes (JSON \u00XX escapes use uppercase, matching <see cref="HexChars"/>).
+    /// Uppercase hex digits as UTF-8 bytes (JSON \u00XX escapes use uppercase).
     /// </summary>
     private static ReadOnlySpan<byte> UpperHexDigitsUtf8 => "0123456789ABCDEF"u8;
 

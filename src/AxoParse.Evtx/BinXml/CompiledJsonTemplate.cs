@@ -68,13 +68,15 @@ internal sealed record CompiledJsonTemplate(string[] Parts, int[] SubIds, bool[]
     private static byte[][]? BuildEscapedParts(string[] parts)
     {
         byte[][] escaped = new byte[parts.Length][];
+        // Fixed-size seed shared by every part: parts can be several KB, so never stackalloc by input size, and
+        // stackalloc inside the loop would keep 512 bytes of stack per part until the method returns
+        Span<byte> seed = stackalloc byte[512];
         for (int i = 0; i < parts.Length; i++)
         {
             string part = parts[i];
             if (part.AsSpan().ContainsAnyInRange('\uD800', '\uDFFF'))
                 return null;
-            // Fixed-size seed: parts can be several KB, so never stackalloc by input size
-            ValueUtf8Builder vub = new(stackalloc byte[512]);
+            ValueUtf8Builder vub = new(seed);
             BinXmlValueFormatter.AppendJsonEscaped(ref vub, part.AsSpan());
             escaped[i] = vub.AsSpan().ToArray();
             vub.Dispose();
