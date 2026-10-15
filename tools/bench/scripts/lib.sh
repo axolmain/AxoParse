@@ -25,8 +25,13 @@ ncpus() { nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4; }
 get_formatted() {
   node -e "
     const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
-    const r = d.results[parseInt(process.argv[2])];
+    const res = d.results[parseInt(process.argv[2])];
+    // hyperfine 2.x nests stats under summary.time_wall_clock; 1.x has them at the top level
+    const r = res && (res.summary ? res.summary.time_wall_clock : res);
     if (!r || r.mean == null) { console.log('ERR'); process.exit(0); }
+    // --ignore-failure keeps crashed runs in the stats; report them instead of a misleading time
+    const codes = res.measurements ? res.measurements.map(m => m.exit_code) : (res.exit_codes || []);
+    if (codes.some(c => c !== 0)) { console.log('FAILED (exit ' + codes.find(c => c !== 0) + ')'); process.exit(0); }
     const mean = r.mean, sd = r.stddev;
     if (mean < 1.0) {
       console.log((mean*1000).toFixed(1) + ' ms \u00b1 ' + (sd*1000).toFixed(1) + ' ms');

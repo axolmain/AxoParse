@@ -72,7 +72,7 @@ run_benchmark() {
     idx_libevtx=$next; ((next++))
   fi
 
-  hyperfine --warmup "$WARMUP" --runs "$RUNS" --style basic \
+  hyperfine --warmup "$WARMUP" --runs "$RUNS" --style basic --shell=bash \
     --ignore-failure \
     --export-json "$tmp_file" \
     "${cmds[@]}" \
