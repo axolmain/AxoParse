@@ -1,7 +1,9 @@
 # Plan: format-neutral renderer ("decode once, write many")
 
-Branch: `features/format-neutral-renderer` (off `features/nuget` @ `0972526`).
-Status: **plan only — no code changes yet.**
+Branch: `features/format-neutral-renderer` (rebased onto `master` @ `09f130e`, v0.2.0).
+Status: **plan only — no code changes yet.** Revised 2026-10-15. Start after PRs #11–#14 (golden output test,
+checksum/robustness fixes, pipelined `WriteTo`, corruption test) are merged, and rebase onto that.
+Release: **0.3.0** (minor: adds `WriteTo(..., wevtCache)` and makes `WevtCache` do something).
 
 ## Goal
 
@@ -13,24 +15,33 @@ per-format writers. Two outcomes, in priority order:
    to be done two or three times.
 
 Hard constraint, unchanged from today: **output stays byte-identical** (XML and JSON, every sample, 1 and 8 threads),
-and the test suite (including `ReferenceComparison`, which mirrors the Rust `evtx` project's `test_full_samples.rs`)
-stays green. The Rust project's benchmark (hyperfine over the CLI on `security_big_sample.evtx`) must keep working
-through `perf/AxoParse.Bench` with an unchanged command line.
+enforced by `GoldenOutputTests` and `AxoParse.CliHash`. The rest of the suite (including `ReferenceComparison`, which
+mirrors the Rust `evtx` project's `test_full_samples.rs`, and `CorruptionFuzzTests`) stays green. The Rust project's
+benchmark (hyperfine over the CLI on `security_big_sample.evtx`) must keep working through `perf/AxoParse.Bench` with
+an unchanged command line. The one intended output change is phase 5's WEVT fallback. It only affects records whose
+embedded template is missing or corrupt, and only when a `WevtCache` is passed.
 
-## Where we are (features/nuget @ 0972526)
+## Where we are
 
-Hyperfine, AOT CLI, 30 MB `security_big_sample.evtx`, this Windows laptop (best clean runs):
+Hyperfine, AOT CLI, 30 MB `security_big_sample.evtx`, 2025 MacBook Air (M4: 4 P + 6 E cores). These numbers include
+the pipelined `WriteTo` and bench CLI changes from #13:
 
-| Case | Original | Now |
+| Case | AxoParse | Rust `evtx` (same runs) |
 |---|---|---|
-| XML, 1 thread | 267 ms | ~100 ms |
-| XML, 8 threads | 175 ms | ~77 ms |
-| JSON, 1 thread | 365 ms | ~108 ms |
-| JSON, 8 threads | 207 ms | ~81 ms |
+| XML, 1 thread | 34.0 ms | 38.1 ms |
+| JSON, 1 thread | 37.4 ms | 37.1 ms |
+| XML, 8 threads | 12.9 ms | 9.4 ms |
+| JSON, 8 threads | 14.1 ms | 8.7 ms |
 
-~50 ms of every run is process start/exit, incl. the CrowdStrike sensor (`csagent.sys`, ~13 ms/run) — not ours.
+Of the 1-thread time, ~3.5 ms is process start/exit and ~3.5 ms reading the file. In-process and warm, `WriteTo` takes
+~29 ms on 1 thread and ~6 ms on 8. So this refactor mainly targets the ~29 ms of single-thread render CPU. The
+remaining 8-thread gap is mostly the up-front file read and memory footprint (see "Streaming input" under Out of scope).
 
-ETW profile, XML 1 thread, CPU ms per run (92 ms total; 44.5 ms in our code + runtime):
+For reference, the original Windows laptop measured XML 1 thread 267 → ~100 ms, JSON 365 → ~108 ms at `0972526`. About
+50 ms of every run there was process start/exit, including a corporate security agent.
+
+ETW profile from that Windows laptop, XML 1 thread, CPU ms per run (92 ms total; 44.5 ms in our code + runtime). The
+proportions should carry over, but re-profile on the Mac with `dotnet-trace` or Instruments before phase 6:
 
 | ms | What |
 |---|---|
@@ -123,21 +134,22 @@ quoting (writer callbacks). Phase 7 then tries per-gap type caching and a small 
 
 ## Phases (each ends with all gates green)
 
-**Gates for every phase:** `dotnet test` green · in-process output hashes identical for all `tests/data` samples
-(XML + JSON) · CLI output hashes identical for all 108 combos (samples × xml/json × 1/8 threads) · no hyperfine
-regression beyond noise.
+**Gates for every phase:** `dotnet test` green (incl. `GoldenOutputTests` and `CorruptionFuzzTests`) ·
+`AxoParse.CliHash` passes all 104 AOT runs (samples × xml/json × 1/8 threads) · no regression beyond noise, measured
+with `tools/bench/bdn-run.ps1` + `bdn-compare.ps1` (>3% and non-overlapping 99.9% CIs) for internals, and hyperfine
+(alternating base/candidate/base) end to end.
 
-0. **Commit the safety net** (it currently lives only in a temp folder):
-   - Golden-output test: SHA-256 per (sample, format) of concatenated `WriteTo` output, stored in the repo; a test
-     regenerates and compares (with an env var to rebless intentionally).
-   - `tools/bench/clihash.sh` — hash CLI stdout for every sample × format × 1/8 threads against a stored list.
-   - `tools/bench/ab` — in-process A/B harness: loads two builds of `AxoParse.Evtx.dll` in separate
-     `AssemblyLoadContext`s, alternates them every round on one pinned P-core with `DOTNET_TieredCompilation=0`,
-     reports median ratio + p10..p90 + allocated KB. (A/A agrees within ~1.5%; BenchmarkDotNet runs on this laptop
-     swing far more.)
-   - `tools/bench/profile-cli.ps1` — elevated ETW capture (xperf kernel logger, PROFILE+CSWITCH stacks, large file
-     buffers, lost-event check); analysis via `xperf -a profile -detail` with the AOT PDB on `_NT_SYMBOL_PATH`.
-   - `tools/bench/clibench.sh` — publish AOT CLI (needs VS `vswhere` on PATH), verify hashes, hyperfine vs a baseline.
+0. **Safety net — done** (#11, #14). The original phase-0 scripts only ever existed in a temp folder on the Windows
+   laptop and were rebuilt portably instead of recovered:
+   - `GoldenOutputTests`: SHA-256 per (sample, format) of `WriteTo` output at 1 and 8 threads, re-bless with
+     `AXOPARSE_REBLESS=1`, dumps mismatching output for diffing.
+   - `perf/AxoParse.CliHash` (replaces `clihash.sh`): checks a built CLI against the same hashes. `bench-all.sh` runs
+     it before timing.
+   - `CorruptionFuzzTests`: seeded mutations, only `EvtxParseException` allowed (`AXOPARSE_FUZZ_ROUNDS` for long runs).
+   - Not rebuilt: the in-process A/B harness, which existed because the Windows laptop was too noisy for
+     BenchmarkDotNet. The M4 is quiet enough for BenchmarkDotNet. Rebuild it as a portable `dotnet run` tool only if
+     noise blocks a decision. The ETW scripts are Windows-only. Profiling guidance: `dotnet-trace` + speedscope on any
+     platform, Instruments on macOS, `perf` on Linux, WPR/xperf on Windows.
 1. **Template program + compiler** (format-neutral) built alongside the existing compilers; a debug-only check that
    lowering it to XML/JSON reproduces today's compiled parts exactly for every template in the corpus.
 2. **XML writer + renderer on the program** (compiled path); switch XML over; delete `BinXmlTemplateCompiler`,
@@ -145,7 +157,17 @@ regression beyond noise.
 3. **JSON writer** incl. escape depth; switch JSON over; delete `BinXmlJsonTemplateCompiler`, `CompiledJsonTemplate`,
    JSON `WriteCompiledJson`.
 4. **Fallback path** via decoder → writer; delete both hand-written fallback walkers.
-5. **WEVT compiler onto the program** (and note: `WevtCache` is currently never read — see Out of scope).
+5. **WEVT compiler onto the program, and `WevtCache` as a fallback.** Today `WevtCache` has no effect: its templates go
+   into a dictionary the chunk workers never read. It must **not** be fixed by seeding the worker caches, because the
+   cache is checked *before* a chunk's own template is compiled (so WEVT templates would override in-file ones), and
+   today's `WevtTemplateCompiler` handles optional attributes differently (empty `attr=""` would appear). Match the
+   Rust `evtx` crate instead (`src/binxml/ir.rs`, `get_or_parse_template_direct`): use a WEVT template **only when the
+   chunk's embedded template is missing or fails to parse**, looked up by the GUID from the template instance header.
+   That needs the lookup restructured so the early-return cases (`DataSize == 0`, body out of bounds) reach the
+   fallback. With the format-neutral program, XML and JSON both get it. Add `wevtCache` to `WriteTo`. Port upstream's
+   `test_wevt_cache_fallback.rs`: corrupt an embedded template, assert the record fails without the cache and renders
+   with it, in both formats. Golden hashes stay unchanged: no sample has a missing template, and the golden test passes
+   no cache.
 6. **Instance execution**: merged descriptor read + one offset-keyed lookup.
 7. **Tuning, each measured on its own**: per-gap type cache; GUID/SID/hex memo; integer formatting without the
    `NumberFormatInfo` lookup (`Utf8Formatter`); short-string escape-scan fast path; `SkipLocalsInit` (needs
@@ -156,20 +178,29 @@ Expected: BinXml rendering code roughly halves (≈2,700 → ≈1,300 lines); re
 
 ## Measurement notes (learned the hard way)
 
-- This machine is noisy: a corporate agent bursts ~46% CPU; hybrid P/E cores. Pin to a P-core (logical 12, mask 4096),
-  use the in-process A/B harness for code decisions, hyperfine for the end-to-end number.
-- A freshly written executable can be slower or noisier for a while (security scanning); compare a fresh copy of the
-  baseline binary too before calling a CLI regression.
-- `pwsh` `> $null` decodes native output as text — always redirect to `NUL`/`-N` in hyperfine.
-- Anything that touches the current culture loads ICU (~10 ms/run): keep the CLI and library culture-free.
+- **M4 (current machine):** 4 P + 6 E cores. Run-to-run variance at 8+ threads comes from P/E scheduling (the same
+  build measured 6.5–10 ms in-process at 8 threads). Alternate base/candidate/base in one hyperfine call, use ≥ 40
+  runs, and distrust a single ordering. A result inside ±2 ms at 8 threads needs a second ordered run.
+- **On battery** the M4 doesn't throttle at these loads, but plug in for release numbers.
+- **Windows laptop:** noisy (a corporate agent bursts ~46% CPU; hybrid P/E). Pin to a P-core (logical 12, mask 4096).
+  A freshly written executable can be slower for a while (security scanning), so compare against a fresh copy of the
+  baseline too. In `pwsh`, `> $null` decodes native output as text: always use `-N` in hyperfine.
+- Anything that touches the current culture loads ICU (~10 ms/run on Windows): keep the library culture-free. The
+  bench CLI now sets `InvariantGlobalization`.
+- hyperfine 2.x needs `--shell=bash` (or `-N`) for commands with redirects, and its JSON export nests stats under
+  `summary.time_wall_clock`.
 
 ## Out of scope here (separate decisions)
 
-- **Lazy rendering + typed accessors** (EventID/Provider/Level/TimeCreated without rendering) — biggest win for
-  filtering workloads; builds naturally on the decoder from this plan.
-- **Shared cross-thread template cache** — also fixes `WevtCache` having no effect; changes recovered-chunk output, so
-  needs an explicit decision.
-- **8-thread path**: not yet profiled; system time exceeds user time — trace with `profile-cli.ps1 -Threads 8` first.
-- **Unchecked sizes from file data**: `JsonEscapeString` (compile-time) is now bounded, but substitution counts > 64
-  allocate heap arrays before validation, and a chunk header with Last < First record ID gives a negative list
-  capacity — small fixes, do separately.
+- **Lazy rendering + typed accessors** (EventID/Provider/Level/TimeCreated without rendering): the biggest win for
+  filtering workloads, and it builds naturally on the decoder from this plan. Backlog issue, no milestone.
+- **Shared cross-thread template cache**: measured as not worth it for speed (cold − warm is ~16 µs per chunk, ~0.1 ms
+  wall at 8 threads). It no longer has anything to do with `WevtCache` (phase 5 makes that a fallback). Sharing across
+  the recovery phase would change recovered-chunk output. Backlog issue, no milestone.
+- **Streaming input** (`WriteTo(path or SafeFileHandle, …)`): the biggest remaining 8-thread lever. Workers would read
+  their own 64 KB chunk (as `ParseStandalone` already does), overlapping the read with rendering and keeping memory
+  flat. Rust peaks at 3–10 MB vs our 39–49 MB, because we hold the whole file. My estimate is ~10–11 ms at 8 threads.
+  It's an API addition, so it ships in a minor release, and it's independent of this refactor.
+- ~~8-thread path~~: done in #13 (pipelined `WriteTo` plus bench CLI changes, −17%).
+- ~~Unchecked sizes from file data~~: done in #12 (record ID range, substitution count) and #14 (record size, template
+  pointer/size overflows found by the corruption test).
