@@ -57,7 +57,7 @@ Templates are the biggest performance lever. A typical EVTX file has a handful o
 - First record with a given template: full BinXml tree walk + compilation
 - All subsequent records: interleave static string fragments with formatted values (no parsing)
 
-`WevtCache` pushes this further by pre-compiling templates before any records are parsed.
+Each worker thread keeps its own compiled-template cache, so a template is compiled at most once per thread.
 
 ## Benchmarks
 

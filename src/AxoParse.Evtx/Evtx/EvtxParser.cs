@@ -73,7 +73,8 @@ public class EvtxParser
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
-    /// <param name="wevtCache">Optional offline template cache built from provider PE binaries. Pre-populates the compiled template cache before chunk parsing.</param>
+    /// <param name="wevtCache">Optional template cache built from provider PE binaries. Currently has no effect on output: its templates are
+    /// not consulted during parsing (a fallback for missing or corrupt embedded templates is planned).</param>
     /// <param name="cancellationToken">Token to cancel the parse operation.</param>
     /// <returns>A fully parsed <see cref="EvtxParser"/> containing the file header, chunks, and aggregate record count.</returns>
     public static EvtxParser Parse(byte[] fileData, int maxThreads = 0, OutputFormat format = OutputFormat.Xml,
@@ -317,7 +318,8 @@ public class EvtxParser
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
-    /// <param name="wevtCache">Optional offline template cache built from provider PE binaries.</param>
+    /// <param name="wevtCache">Optional template cache built from provider PE binaries. Currently has no effect on output (see
+    /// <see cref="Parse"/>).</param>
     /// <param name="cancellationToken">Token to cancel the parse operation.</param>
     /// <returns>Events streamed in file order as chunks finish parsing.</returns>
     public static async IAsyncEnumerable<EvtxEvent> ParseAsync(
