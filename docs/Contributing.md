@@ -56,6 +56,26 @@ demos/
   AxoParse.React/           # React demo app (Vite + TypeScript)
 tests/
   AxoParse.Evtx.Tests/      # xUnit v3
+perf/
+  AxoParse.Bench/           # AOT CLI used by tools/bench for cross-parser comparisons
+  AxoParse.Benchmarks/      # BenchmarkDotNet suite for internals (file / chunk / formatter)
+  profiling/                # Profiling harness
+tools/
+  bench/                    # hyperfine comparison vs Rust/C/JS parsers, BenchmarkDotNet run/compare scripts
+```
+
+## Performance changes
+
+Measure before and after any change that touches a hot path:
+
+```bash
+# Internals: baseline -> change -> candidate -> compare (see perf/AxoParse.Benchmarks/README.md)
+pwsh tools/bench/bdn-run.ps1 baseline -Filter '*ChunkBenchmarks*' -Job Medium
+pwsh tools/bench/bdn-run.ps1 candidate -Filter '*ChunkBenchmarks*' -Job Medium
+pwsh tools/bench/bdn-compare.ps1 perf/results/baseline perf/results/candidate
+
+# End to end vs other parsers (see tools/bench/scripts/README.md)
+tools/bench/bench-all.sh
 ```
 
 ## Pull requests

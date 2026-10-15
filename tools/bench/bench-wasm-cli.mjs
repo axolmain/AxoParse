@@ -22,8 +22,14 @@ try {
 	const exports = await runtime.getAssemblyExports(config.mainAssemblyName)
 
 	const buf = fs.readFileSync(path.resolve(file))
-	// Result intentionally unused — we're benchmarking parse time, not consuming output
-	exports.EvtxParserWasm.Browser.EvtxInterop.ParseEvtxToJson(new Uint8Array(buf))
+	// Paged API (what the web app uses): ParseEvtxToJson builds one string per file, which Node's UTF-16
+	// decoder rejects past 256 MB. Pages are rendered and marshalled but intentionally unused.
+	const interop = exports.AxoParse.Browser.EvtxInterop
+	const {totalRecords} = JSON.parse(interop.ParseEvtxFile(new Uint8Array(buf)))
+	const pageSize = 1000
+	for (let offset = 0; offset < totalRecords; offset += pageSize) {
+		interop.GetRecordPage(offset, pageSize)
+	}
 } catch (err) {
 	console.error(`WASM benchmark failed: ${err.message}`)
 	process.exit(1)

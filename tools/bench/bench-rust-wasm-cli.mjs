@@ -15,6 +15,12 @@ if (!file) {
 const {EvtxWasmParser} = await import(path.join(wasmPkg, 'evtx_wasm.js'))
 const buf = fs.readFileSync(path.resolve(file))
 const parser = new EvtxWasmParser(new Uint8Array(buf))
-const result = parser.parse_all()
-process.stdout.write(JSON.stringify(result))
+// Upstream evtx-wasm no longer exposes JSON output; it renders each chunk to an Arrow IPC batch
+let rows = 0
+for (let i = 0; i < parser.total_chunks; i++) {
+	const chunk = parser.chunk_arrow_ipc(i)
+	rows += chunk.rows
+	chunk.free()
+}
 parser.free()
+process.stdout.write(`${rows}\n`)

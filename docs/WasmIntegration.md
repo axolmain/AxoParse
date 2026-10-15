@@ -30,6 +30,10 @@ Configure these on your web server / CDN.
 | `getRecordPage(offset, limit)` | Fetch a page of records. Must call `parseEvtxFile` first. |
 | `parseEvtxToJson(data)` | Parse and return all records at once (simpler but uses more memory). |
 
+Prefer `parseEvtxFile` + `getRecordPage` for anything but small files. `parseEvtxToJson` builds the whole result as
+one string: a 30 MB log produces well over 128M characters, which can exceed what the JS engine will decode in one go
+(Node 26 rejects UTF-16 decodes of 256 MB or more).
+
 ## Record fields
 
 Each record object contains:

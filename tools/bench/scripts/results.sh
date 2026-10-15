@@ -51,12 +51,12 @@ build_table_header() {
     add_column "C# (1 thread)"
     add_column "C# (8 threads)"
   fi
-  $HAS_CS_WASM   && add_column "C# WASM"
+  $HAS_CS_WASM   && add_column "C# WASM (paged JSON)"
   add_column "evtx (Rust - 1 thread)"
   add_column "evtx (Rust - 8 threads)"
-  $HAS_RUST_WASM && add_column "Rust WASM"
+  $HAS_RUST_WASM && add_column "Rust WASM (Arrow IPC)"
   $HAS_JS        && add_column "JS Node"
-  $HAS_LIBEVTX   && add_column "libevtx (C)"
+  if $HAS_LIBEVTX; then add_column "libevtx (C)"; fi
 }
 
 # ── Markdown output ──────────────────────────────────────────────────

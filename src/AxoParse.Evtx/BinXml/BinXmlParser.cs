@@ -1,6 +1,8 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.BinXml;
@@ -14,7 +16,8 @@ internal sealed partial class BinXmlParser
 
     /// <summary>
     /// Initialises a parser scoped to a single 64 KB EVTX chunk.
-    /// Pre-populates the name cache from the 64-entry common string offset table at chunk offset 128.
+    /// Names are resolved lazily (compiled templates never look them up), but the 64-entry common string
+    /// offset table at chunk offset 128 is still checked so a corrupt entry fails the chunk exactly as before.
     /// </summary>
     /// <param name="fileData">Complete EVTX file bytes.</param>
     /// <param name="chunkFileOffset">Absolute byte offset of the chunk within <paramref name="fileData"/>.</param>
@@ -33,17 +36,18 @@ internal sealed partial class BinXmlParser
         _templates = templates;
         _compiledCache = compiledCache;
         _compiledJsonCache = compiledJsonCache;
-        _nameCache = new Dictionary<uint, string>(64);
 
-        // Pre-populate name cache from chunk common string offset table (64 uint32 entries at chunk offset 128)
+        // Common string offset table: 64 uint32 entries at chunk offset 128. Entries are no longer decoded up front,
+        // but offsets 0xFFFFFFF8..0xFFFFFFFF wrap past the bounds check and made the eager read throw; keep that
+        // failure so corrupt chunks are reported identically. Every other entry decodes without throwing.
         ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, EvtxChunk.ChunkSize);
         ReadOnlySpan<uint> commonOffsets = MemoryMarshal.Cast<byte, uint>(chunkData.Slice(128, 256));
         for (int i = 0; i < commonOffsets.Length; i++)
         {
             uint offset = commonOffsets[i];
-            if ((offset != 0) && (offset + 8 < EvtxChunk.ChunkSize) && !_nameCache.ContainsKey(offset))
+            if ((offset != 0) && (offset + 8 < EvtxChunk.ChunkSize) && ((int)offset < 0))
             {
-                _nameCache[offset] = ReadNameFromChunk(offset);
+                ReadNameFromChunk(offset);
             }
         }
     }
@@ -53,21 +57,47 @@ internal sealed partial class BinXmlParser
     #region Public Methods
 
     /// <summary>
-    /// Parses a single record's BinXml event data into XML.
+    /// Renders a record's BinXml event data in <paramref name="format"/> and appends it to <paramref name="sink"/>
+    /// as UTF-8 without materialising a string or array for the record. Nothing is appended if rendering throws.
     /// </summary>
-    /// <param name="record">The EVTX record whose BinXml event data will be parsed.</param>
-    /// <returns>The rendered XML string for the record's event data.</returns>
-    public string ParseRecord(EvtxRecord record)
+    /// <param name="record">The EVTX record whose BinXml event data will be rendered.</param>
+    /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="sink">Buffer that receives the UTF-8 output.</param>
+    internal void AppendRecordUtf8(EvtxRecord record, OutputFormat format, ArrayBufferWriter<byte> sink)
+    {
+        // Render straight into the sink's free space; only a record larger than it is copied from a pooled buffer
+        Span<byte> free = sink.GetSpan(_recordBufferBytes);
+        ValueUtf8Builder vub = new(free);
+        RenderRecord(record, format, ref vub);
+        ReadOnlySpan<byte> utf8 = vub.AsSpan();
+        if (vub.IsInInitialBuffer)
+        {
+            sink.Advance(utf8.Length);
+        }
+        else
+        {
+            utf8.CopyTo(sink.GetSpan(utf8.Length));
+            sink.Advance(utf8.Length);
+        }
+
+        vub.Dispose();
+    }
+
+    /// <summary>
+    /// Renders a record's BinXml event data in <paramref name="format"/> into <paramref name="vub"/>.
+    /// </summary>
+    /// <param name="record">The EVTX record whose BinXml event data will be rendered.</param>
+    /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="vub">UTF-8 builder that receives the output.</param>
+    internal void RenderRecord(EvtxRecord record, OutputFormat format, ref ValueUtf8Builder vub)
     {
         ReadOnlySpan<byte> eventData = record.GetEventData(_fileData);
         int binxmlChunkBase = record.EventDataFileOffset - _chunkFileOffset;
-
-        ValueStringBuilder vsb = new(stackalloc char[1024]);
         int pos = 0;
-        ParseTopLevel(eventData, ref pos, binxmlChunkBase, ref vsb, handlePiTarget: true);
-        string result = vsb.ToString();
-        vsb.Dispose();
-        return result;
+        if (format == OutputFormat.Json)
+            ParseTopLevelJson(eventData, ref pos, binxmlChunkBase, ref vub);
+        else
+            ParseTopLevel(eventData, ref pos, binxmlChunkBase, ref vub, handlePiTarget: true);
     }
 
     #endregion
@@ -125,7 +155,7 @@ internal sealed partial class BinXmlParser
     /// <param name="resolveEntities">When true, produces plain text (no XML escaping/wrapping).</param>
     private void ParseContent(ReadOnlySpan<byte> data, ref int pos,
                               int[]? valueOffsets, int[]? valueSizes, byte[]? valueTypes,
-                              int binxmlChunkBase, ref ValueStringBuilder vsb, int depth = 0,
+                              int binxmlChunkBase, ref ValueUtf8Builder vsb, int depth = 0,
                               bool resolveEntities = false)
     {
         while (pos < data.Length)
@@ -150,11 +180,11 @@ internal sealed partial class BinXmlParser
                 {
                     pos++; // consume token
                     pos++; // value type
-                    string str = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
+                    ReadOnlySpan<char> text = BinXmlValueFormatter.ReadUnicodeTextString(data, ref pos);
                     if (resolveEntities)
-                        vsb.Append(str);
+                        vsb.AppendUtf16(text);
                     else
-                        BinXmlValueFormatter.AppendXmlEscaped(ref vsb, str.AsSpan());
+                        BinXmlValueFormatter.AppendXmlEscaped(ref vsb, text);
                     break;
                 }
                 case BinXmlToken.NormalSubstitution:
@@ -196,13 +226,14 @@ internal sealed partial class BinXmlParser
                     pos += 2;
                     if (resolveEntities)
                     {
-                        vsb.Append((char)charVal);
+                        char resolvedChar = (char)charVal;
+                        vsb.AppendUtf16(new ReadOnlySpan<char>(in resolvedChar));
                     }
                     else
                     {
-                        vsb.Append("&#");
+                        vsb.Append("&#"u8);
                         vsb.AppendFormatted(charVal);
-                        vsb.Append(';');
+                        vsb.Append((byte)';');
                     }
                     break;
                 }
@@ -223,29 +254,29 @@ internal sealed partial class BinXmlParser
                             "apos" => "'",
                             _ => $"&{entityName};"
                         };
-                        vsb.Append(resolved);
+                        vsb.AppendUtf16(resolved);
                     }
                     else
                     {
-                        vsb.Append('&');
-                        vsb.Append(entityName);
-                        vsb.Append(';');
+                        vsb.Append((byte)'&');
+                        vsb.AppendUtf16(entityName);
+                        vsb.Append((byte)';');
                     }
                     break;
                 }
                 case BinXmlToken.CDataSection:
                 {
                     pos++; // consume token
-                    string cdataStr = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
+                    ReadOnlySpan<char> cdataChars = BinXmlValueFormatter.ReadUnicodeTextString(data, ref pos);
                     if (resolveEntities)
                     {
-                        vsb.Append(cdataStr);
+                        vsb.AppendUtf16(cdataChars);
                     }
                     else
                     {
-                        vsb.Append("<![CDATA[");
-                        vsb.Append(cdataStr);
-                        vsb.Append("]]>");
+                        vsb.Append("<![CDATA["u8);
+                        vsb.AppendUtf16(cdataChars);
+                        vsb.Append("]]>"u8);
                     }
                     break;
                 }
@@ -273,7 +304,7 @@ internal sealed partial class BinXmlParser
     /// <param name="vsb">String builder that receives the rendered XML output.</param>
     /// <param name="handlePiTarget">True for record-level parsing (processing instructions are valid); false for embedded BinXml.</param>
     private void ParseTopLevel(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                               ref ValueStringBuilder vsb, bool handlePiTarget = false)
+                               ref ValueUtf8Builder vsb, bool handlePiTarget = false)
     {
         while (pos < data.Length)
         {
@@ -301,21 +332,21 @@ internal sealed partial class BinXmlParser
                     uint piNameOff = MemoryMarshal.Read<uint>(data[pos..]);
                     pos += 4;
                     string piName = ReadName(piNameOff);
-                    vsb.Append("<?");
-                    vsb.Append(piName);
+                    vsb.Append("<?"u8);
+                    vsb.AppendUtf16(piName);
 
                     if ((pos < data.Length) && (data[pos] == BinXmlToken.PiData))
                     {
                         pos++; // consume 0x0B
-                        string piText = BinXmlValueFormatter.ReadUnicodeTextStringAsString(data, ref pos);
+                        ReadOnlySpan<char> piText = BinXmlValueFormatter.ReadUnicodeTextString(data, ref pos);
                         if (piText.Length > 0)
                         {
-                            vsb.Append(' ');
-                            vsb.Append(piText);
+                            vsb.Append((byte)' ');
+                            vsb.AppendUtf16(piText);
                         }
                     }
 
-                    vsb.Append("?>");
+                    vsb.Append("?>"u8);
                     break;
 
                 default:
@@ -342,7 +373,7 @@ internal sealed partial class BinXmlParser
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
     private void ParseElement(ReadOnlySpan<byte> data, ref int pos,
                               int[]? valueOffsets, int[]? valueSizes, byte[]? valueTypes,
-                              int binxmlChunkBase, ref ValueStringBuilder vsb, int depth = 0)
+                              int binxmlChunkBase, ref ValueUtf8Builder vsb, int depth = 0)
     {
         if (depth >= _maxRecursionDepth) return;
 
@@ -359,8 +390,8 @@ internal sealed partial class BinXmlParser
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase)) return;
 
         string elemName = ReadName(nameOffset);
-        vsb.Append('<');
-        vsb.Append(elemName);
+        vsb.Append((byte)'<');
+        vsb.AppendUtf16(elemName);
 
         // Parse attribute list if present
         if (hasAttrs)
@@ -415,20 +446,20 @@ internal sealed partial class BinXmlParser
                 }
 
                 string attrName = ReadName(attrNameOff);
-                vsb.Append(' ');
-                vsb.Append(attrName);
-                vsb.Append("=\"");
+                vsb.Append((byte)' ');
+                vsb.AppendUtf16(attrName);
+                vsb.Append("=\""u8);
                 ParseContent(data, ref pos, valueOffsets, valueSizes, valueTypes, binxmlChunkBase, ref vsb, depth + 1);
-                vsb.Append('"');
+                vsb.Append((byte)'"');
             }
         }
 
         // Close token
         if (pos >= data.Length)
         {
-            vsb.Append("></");
-            vsb.Append(elemName);
-            vsb.Append('>');
+            vsb.Append("></"u8);
+            vsb.AppendUtf16(elemName);
+            vsb.Append((byte)'>');
             return;
         }
 
@@ -436,26 +467,26 @@ internal sealed partial class BinXmlParser
         if (closeTok == BinXmlToken.CloseEmptyElement)
         {
             pos++;
-            vsb.Append("></");
-            vsb.Append(elemName);
-            vsb.Append('>');
+            vsb.Append("></"u8);
+            vsb.AppendUtf16(elemName);
+            vsb.Append((byte)'>');
         }
         else if (closeTok == BinXmlToken.CloseStartElement)
         {
             pos++;
-            vsb.Append('>');
+            vsb.Append((byte)'>');
             ParseContent(data, ref pos, valueOffsets, valueSizes, valueTypes, binxmlChunkBase, ref vsb, depth + 1);
             if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
-            vsb.Append("</");
-            vsb.Append(elemName);
-            vsb.Append('>');
+            vsb.Append("</"u8);
+            vsb.AppendUtf16(elemName);
+            vsb.Append((byte)'>');
         }
         else
         {
-            vsb.Append("></");
-            vsb.Append(elemName);
-            vsb.Append('>');
+            vsb.Append("></"u8);
+            vsb.AppendUtf16(elemName);
+            vsb.Append((byte)'>');
         }
     }
 
@@ -468,7 +499,7 @@ internal sealed partial class BinXmlParser
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
     /// <param name="vsb">String builder that receives the rendered XML output.</param>
     private void ParseTemplateInstance(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                       ref ValueStringBuilder vsb)
+                                       ref ValueUtf8Builder vsb)
     {
         // Peek at numValues to size the stackalloc buffers.
         // Header layout: 6 skip + 4 defDataOffset [+ optional inline] + 4 numValues.
@@ -545,10 +576,11 @@ internal sealed partial class BinXmlParser
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private string ReadName(uint chunkRelOffset)
     {
-        if (_nameCache.TryGetValue(chunkRelOffset, out string? cached))
+        Dictionary<uint, string> cache = _nameCache ??= new Dictionary<uint, string>(64);
+        if (cache.TryGetValue(chunkRelOffset, out string? cached))
             return cached;
         string name = ReadNameFromChunk(chunkRelOffset);
-        _nameCache[chunkRelOffset] = name;
+        cache[chunkRelOffset] = name;
         return name;
     }
 
@@ -676,7 +708,7 @@ internal sealed partial class BinXmlParser
     /// <param name="binxmlChunkBase">Chunk-relative base offset for nested value rendering.</param>
     /// <param name="vsb">String builder that receives the comma-separated rendered elements.</param>
     private void WriteArray(ReadOnlySpan<byte> valueBytes, byte baseType, int fileOffset,
-                            int binxmlChunkBase, ref ValueStringBuilder vsb)
+                            int binxmlChunkBase, ref ValueUtf8Builder vsb)
     {
         // String arrays: null-terminated UTF-16LE strings concatenated
         if (baseType == BinXmlValueType.String)
@@ -690,7 +722,7 @@ internal sealed partial class BinXmlParser
                 {
                     if (i > start)
                     {
-                        if (!first) vsb.Append(", ");
+                        if (!first) vsb.Append(", "u8);
                         BinXmlValueFormatter.AppendXmlEscaped(ref vsb, chars.Slice(start, i - start));
                         first = false;
                     }
@@ -709,7 +741,7 @@ internal sealed partial class BinXmlParser
             bool first = true;
             for (int i = 0; i + elemSize <= valueBytes.Length; i += elemSize)
             {
-                if (!first) vsb.Append(", ");
+                if (!first) vsb.Append(", "u8);
                 WriteBinXmlValue(elemSize, baseType, fileOffset + i, binxmlChunkBase, ref vsb);
                 first = false;
             }
@@ -731,7 +763,7 @@ internal sealed partial class BinXmlParser
     /// <param name="fileOffset">Absolute byte offset of the value data within <see cref="_fileData"/>.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml (type 0x21) resolution.</param>
     /// <param name="vsb">String builder that receives the rendered text.</param>
-    private void WriteBinXmlValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueStringBuilder vsb)
+    private void WriteBinXmlValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueUtf8Builder vsb)
     {
         if (size == 0) return;
         ReadOnlySpan<byte> valueBytes = _fileData.AsSpan(fileOffset, size);
@@ -764,12 +796,13 @@ internal sealed partial class BinXmlParser
                 {
                     byte b = valueBytes[i];
                     if (b == 0) break;
-                    if (b == '&') vsb.Append("&amp;");
-                    else if (b == '<') vsb.Append("&lt;");
-                    else if (b == '>') vsb.Append("&gt;");
-                    else if (b == '"') vsb.Append("&quot;");
-                    else if (b == '\'') vsb.Append("&apos;");
-                    else vsb.Append((char)b);
+                    if (b == '&') vsb.Append("&amp;"u8);
+                    else if (b == '<') vsb.Append("&lt;"u8);
+                    else if (b == '>') vsb.Append("&gt;"u8);
+                    else if (b == '"') vsb.Append("&quot;"u8);
+                    else if (b == '\'') vsb.Append("&apos;"u8);
+                    else if (b < 0x80) vsb.Append(b);
+                    else BinXmlValueFormatter.AppendLatin1(ref vsb, (char)b);
                 }
 
                 break;
@@ -816,7 +849,7 @@ internal sealed partial class BinXmlParser
                 break;
 
             case BinXmlValueType.Bool:
-                vsb.Append(MemoryMarshal.Read<uint>(valueBytes) != 0 ? "true" : "false");
+                vsb.Append(MemoryMarshal.Read<uint>(valueBytes) != 0 ? "true"u8 : "false"u8);
                 break;
 
             case BinXmlValueType.Binary:
@@ -832,7 +865,7 @@ internal sealed partial class BinXmlParser
 
             case BinXmlValueType.SizeT:
             {
-                vsb.Append("0x");
+                vsb.Append("0x"u8);
                 if (size == 8)
                     BinXmlValueFormatter.AppendHexUInt64Min(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 else
@@ -862,12 +895,12 @@ internal sealed partial class BinXmlParser
             }
 
             case BinXmlValueType.HexInt32:
-                vsb.Append("0x");
+                vsb.Append("0x"u8);
                 BinXmlValueFormatter.AppendHexUInt32Min(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
                 break;
 
             case BinXmlValueType.HexInt64:
-                vsb.Append("0x");
+                vsb.Append("0x"u8);
                 BinXmlValueFormatter.AppendHexUInt64Min(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
                 break;
 
@@ -902,14 +935,15 @@ internal sealed partial class BinXmlParser
     private void WriteCompiled(CompiledTemplate compiled,
                                scoped ReadOnlySpan<int> valueOffsets, scoped ReadOnlySpan<int> valueSizes,
                                scoped ReadOnlySpan<byte> valueTypes,
-                               int binxmlChunkBase, ref ValueStringBuilder vsb)
+                               int binxmlChunkBase, ref ValueUtf8Builder vsb)
     {
         string[] parts = compiled.Parts;
+        byte[]?[] utf8Parts = compiled.Utf8Parts;
         SubSlot[] slots = compiled.Slots;
         int slotCount = slots.Length;
         int valCount = valueOffsets.Length;
 
-        vsb.Append(parts[0]);
+        CompiledTemplate.AppendPart(ref vsb, utf8Parts[0], parts[0]);
         for (int i = 0; i < slotCount; i++)
         {
             ref readonly SubSlot slot = ref slots[i];
@@ -921,14 +955,14 @@ internal sealed partial class BinXmlParser
                 if (!slot.IsOptional || ((valType != BinXmlValueType.Null) && (valSize > 0)))
                 {
                     if (slot.AttrPrefix != null)
-                        vsb.Append(slot.AttrPrefix);
+                        CompiledTemplate.AppendPart(ref vsb, slot.Utf8AttrPrefix, slot.AttrPrefix);
                     WriteBinXmlValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
                     if (slot.AttrSuffix != null)
-                        vsb.Append(slot.AttrSuffix);
+                        CompiledTemplate.AppendPart(ref vsb, slot.Utf8AttrSuffix, slot.AttrSuffix);
                 }
             }
 
-            vsb.Append(parts[i + 1]);
+            CompiledTemplate.AppendPart(ref vsb, utf8Parts[i + 1], parts[i + 1]);
         }
     }
 
@@ -948,6 +982,12 @@ internal sealed partial class BinXmlParser
     /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.
     /// </summary>
     private const int _maxRecursionDepth = 64;
+
+    /// <summary>
+    /// Free space (16 KB) requested from the output sink before rendering a record into it. Covers typical rendered
+    /// records (XML ~1.2-1.7 KB, JSON ~2.2-2.7 KB on the sample logs); larger records spill to ArrayPool and are copied.
+    /// </summary>
+    private const int _recordBufferBytes = 16384;
 
     /// <summary>
     /// Absolute byte offset of this chunk within <see cref="_fileData"/>.
@@ -973,9 +1013,9 @@ internal sealed partial class BinXmlParser
 
     /// <summary>
     /// Per-chunk cache of element/attribute names keyed by chunk-relative offset.
-    /// Pre-populated from the 64-entry common string table at chunk offset 128.
+    /// Created on first use: the compiled-template path never resolves names, so warm chunks allocate nothing here.
     /// </summary>
-    private readonly Dictionary<uint, string> _nameCache;
+    private Dictionary<uint, string>? _nameCache;
 
     /// <summary>
     /// Preloaded template definitions keyed by chunk-relative offset.

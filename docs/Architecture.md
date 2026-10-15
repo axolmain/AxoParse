@@ -15,12 +15,21 @@ EvtxParser.Parse()
     |-- 2. Chunk layer (parallel): each chunk parses its own header,
     |      preloads string cache + template table, walks event records
     |
-    |-- 3. Render layer: BinXmlParser converts BinXml token stream
-    |      directly to XML or UTF-8 JSON per record
+    |-- 3. Render layer: BinXmlParser converts each record's BinXml token
+    |      stream directly to UTF-8 XML or JSON, appended to one buffer
+    |      per chunk (no UTF-16 strings in between)
     |
     v
 EvtxParser { FileHeader, Chunks[], TotalRecords }
 ```
+
+There are three entry points over the same pipeline:
+
+| Entry point | Output |
+|-------------|--------|
+| `EvtxParser.Parse` | Holds every chunk. Each `EvtxChunk` keeps its records plus one UTF-8 buffer of rendered output, exposed per record as `ParsedUtf8` / `ParsedJson` slices or as lazily decoded `ParsedXml` strings. |
+| `EvtxParser.ParseAsync` | Same phases, but parsed chunks go through a channel and a reorder buffer, so `EvtxEvent`s are yielded in file order as soon as each chunk is ready. |
+| `EvtxParser.WriteTo` | Same chunk classification, but doesn't build `EvtxChunk`s. Workers render a window of chunks into reusable scratch buffers, the window is written to the output `Stream` in file order, and the buffers are reused. Output bytes match `Parse`. |
 
 ## Threading model
 
@@ -37,7 +46,9 @@ The `maxThreads` parameter maps directly to `ParallelOptions.MaxDegreeOfParallel
 
 BinXml templates appear once per chunk but are referenced by many records. On first encounter, the parser compiles a template into:
 
-- **Static string fragments** — the fixed XML parts between substitution slots
+- **Static fragments** — the fixed XML/JSON parts between substitution slots, pre-encoded as UTF-8 (JSON
+  templates also keep an escaped copy for BinXml embedded inside string values), so rendering a warm record is mostly
+  copying bytes
 - **Substitution metadata** — slot IDs, optional flags
 
 Compiled templates are cached by GUID in a `ConcurrentDictionary` shared across chunks. Subsequent records skip all template parsing and just interleave static parts with formatted substitution values.
@@ -55,9 +66,11 @@ Compiled templates are cached by GUID in a `ConcurrentDictionary` shared across 
 | Type | Role |
 |------|------|
 | `EvtxParser` | Entry point. Orchestrates parsing, holds results. |
-| `EvtxChunk` | Self-contained 64KB chunk with header, records, and rendered output. |
-| `BinXmlParser` | Converts BinXml token streams to XML or JSON. One instance per chunk. |
-| `CompiledTemplate` | Pre-compiled template: static parts + substitution slots. |
+| `EvtxChunk` | Self-contained 64KB chunk with header, records, and one UTF-8 buffer of rendered output. |
+| `BinXmlParser` | Converts BinXml token streams to UTF-8 XML or JSON. One instance per chunk. |
+| `CompiledTemplate` / `CompiledJsonTemplate` | Pre-compiled template: UTF-8 static parts + substitution slots. |
+| `ValueUtf8Builder` | Stack-first, `ArrayPool`-backed UTF-8 builder all rendering goes through. Transcodes UTF-16 text from the file as it's appended, and gives the same bytes as encoding the whole record once (unpaired surrogates become U+FFFD). |
+| `BinXmlValueFormatter` | Formats substitution values (FILETIME, GUID, SID, hex, numbers) straight to UTF-8 with the invariant culture. |
 | `WevtCache` | Offline template cache from Windows PE binaries. |
 
 ## References
