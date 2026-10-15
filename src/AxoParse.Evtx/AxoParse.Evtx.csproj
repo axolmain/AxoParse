@@ -25,7 +25,9 @@
     </ItemGroup>
 
     <ItemGroup>
-        <PackageReference Include="PeNet" Version="6.0.0"/>
+        <PackageReference Include="PeNet" Version="6.1.2"/>
+        <!-- PeNet 6.1.2 pulls Pkcs 10.0.7; pin the patched version (CVE-2026-84008, CVE-2026-70162) -->
+        <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13"/>
     </ItemGroup>
 
 </Project>
