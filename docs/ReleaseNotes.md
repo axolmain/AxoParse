@@ -14,6 +14,8 @@ XML went from 58.1 ms to 16.4 ms and JSON from 86.7 ms to 18.6 ms.
   `Stream`, using reusable per-worker buffers. Memory stays flat regardless of file size. Output is byte-identical
   to concatenating `Parse` output.
 - `EvtxChunk.ParsedUtf8` — each record's rendered UTF-8 bytes (XML or JSON) as slices of the chunk's output buffer.
+- `EvtxParser.ParseAsync(...)` — returns `IAsyncEnumerable<EvtxEvent>`. Chunks are parsed in parallel and events are
+  yielded in file order as each chunk finishes, so consumers can start before the whole file is parsed.
 
 **Breaking changes:**
 
@@ -45,7 +47,6 @@ High-performance .NET library for parsing Windows Event Log (.evtx) files.
 - Parallel chunk processing — configurable thread count for multi-core throughput
 - CRC32 validation — optional checksum verification on file headers, chunk headers, and chunk data
 - Resilient parsing — gracefully handles corrupted records, bad checksums, and malformed chunks
-- Async enumeration — `EvtxParser.ParseAsync` yields events in file order as chunks finish parsing
 
 **Target Framework:** .NET 10.0
 
