@@ -525,9 +525,11 @@ public class EvtxParser
 
     /// <summary>
     /// Renders the given chunks and writes their UTF-8 output to <paramref name="output"/> in offset-array order.
-    /// With several workers, chunks are rendered in parallel one window at a time and each window is written in order.
-    /// Each call starts with empty template caches, as each phase of <see cref="Parse"/> does, so recovered regions
-    /// never see templates compiled for valid chunks.
+    /// With several workers, chunks are rendered as a pipeline: workers claim chunks in order and render into a ring of
+    /// reusable buffers while the calling thread writes each chunk as soon as it is next in order, so rendering and
+    /// writing overlap and no worker waits on a batch barrier. At most <c>workers × chunks in flight per worker</c>
+    /// rendered chunks are held at once. Each call starts with empty template caches, as each phase of
+    /// <see cref="Parse"/> does, so recovered regions never see templates compiled for valid chunks.
     /// </summary>
     /// <param name="fileData">Complete EVTX file bytes.</param>
     /// <param name="offsets">Absolute file offsets of the chunks to render.</param>
@@ -562,33 +564,82 @@ public class EvtxParser
             return total;
         }
 
-        // Template caches persist per thread across windows, like the thread-local caches of Parse
-        using ThreadLocal<Dictionary<Guid, CompiledTemplate?>?> xmlCaches =
-            new(() => xml ? new Dictionary<Guid, CompiledTemplate?>() : null);
-        using ThreadLocal<Dictionary<Guid, CompiledJsonTemplate?>?> jsonCaches =
-            new(() => xml ? null : new Dictionary<Guid, CompiledJsonTemplate?>());
-        int window = workers * _chunksPerWorkerPerWindow;
-        ArrayBufferWriter<byte>?[] sinks = new ArrayBufferWriter<byte>?[window];
-        int[] kept = new int[window];
-        ParallelOptions options = new() { MaxDegreeOfParallelism = workers, CancellationToken = cancellationToken };
-        for (int start = 0; start < count; start += window)
-        {
-            int windowStart = start;
-            int length = Math.Min(window, count - start);
-            Parallel.For(0, length, options, k =>
-            {
-                ArrayBufferWriter<byte> sink = sinks[k] ??= new ArrayBufferWriter<byte>(_initialSinkBytes);
-                sink.ResetWrittenCount();
-                kept[k] = EvtxChunk.RenderTo(fileData, offsets[windowStart + k], headerless,
-                    xmlCaches.Value, jsonCaches.Value, format, sink);
-            });
+        int depth = workers * _chunksInFlightPerWorker;
+        ArrayBufferWriter<byte>?[] sinks = new ArrayBufferWriter<byte>?[depth];
+        int[] kept = new int[depth];
+        // ready[slot]: released by the worker that rendered the chunk in that slot, awaited by the writer.
+        // free: one permit per ring slot not yet claimed; the writer returns a permit after writing a slot.
+        // Claiming a permit before claiming the next index keeps every claimed index within `depth` of the next one
+        // to write, so slot index % depth is always free when claimed.
+        SemaphoreSlim[] ready = new SemaphoreSlim[depth];
+        for (int k = 0; k < depth; k++)
+            ready[k] = new SemaphoreSlim(0);
+        using SemaphoreSlim free = new(depth);
+        using CancellationTokenSource stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Exception? workerFailure = null;
+        int next = -1;
 
-            for (int k = 0; k < length; k++)
+        void Render()
+        {
+            // Template caches live for the worker's whole run, like the thread-local caches of Parse
+            Dictionary<Guid, CompiledTemplate?>? xmlCache = xml ? new Dictionary<Guid, CompiledTemplate?>() : null;
+            Dictionary<Guid, CompiledJsonTemplate?>? jsonCache = xml ? null : new Dictionary<Guid, CompiledJsonTemplate?>();
+            try
             {
-                output.Write(sinks[k]!.WrittenSpan);
-                total += kept[k];
+                while (true)
+                {
+                    free.Wait(stop.Token);
+                    int i = Interlocked.Increment(ref next);
+                    if (i >= count)
+                        return;
+
+                    int slot = i % depth;
+                    ArrayBufferWriter<byte> sink = sinks[slot] ??= new ArrayBufferWriter<byte>(_initialSinkBytes);
+                    sink.ResetWrittenCount();
+                    kept[slot] = EvtxChunk.RenderTo(fileData, offsets[i], headerless, xmlCache, jsonCache, format, sink);
+                    ready[slot].Release();
+                }
+            }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested)
+            {
+                // Stopped by the writer (cancellation, a write failure, or another worker's failure)
+            }
+            catch (Exception ex)
+            {
+                Interlocked.CompareExchange(ref workerFailure, ex, null);
+                stop.Cancel();
             }
         }
+
+        Task[] renderers = new Task[workers];
+        for (int w = 0; w < workers; w++)
+            renderers[w] = Task.Run(Render, CancellationToken.None);
+
+        try
+        {
+            for (int i = 0; i < count; i++)
+            {
+                int slot = i % depth;
+                ready[slot].Wait(stop.Token);
+                output.Write(sinks[slot]!.WrittenSpan);
+                total += kept[slot];
+                free.Release();
+            }
+        }
+        catch (OperationCanceledException) when (workerFailure != null)
+        {
+            // A worker failed and cancelled the pipeline; rethrown below like Parallel.For would
+        }
+        finally
+        {
+            stop.Cancel();
+            Task.WaitAll(renderers);
+            foreach (SemaphoreSlim slotReady in ready)
+                slotReady.Dispose();
+        }
+
+        if (workerFailure != null)
+            throw new AggregateException(workerFailure);
 
         return total;
     }
@@ -604,10 +655,10 @@ public class EvtxParser
     private const int _initialSinkBytes = 128 * 1024;
 
     /// <summary>
-    /// Chunks rendered per worker before <see cref="WriteTo"/> writes a window out in order. Larger windows smooth
-    /// out uneven chunk costs; smaller ones bound memory to window × chunk output size.
+    /// Rendered-but-unwritten chunks allowed per worker in the <see cref="WriteTo"/> pipeline. More lets fast workers
+    /// run further ahead of a slow chunk; fewer bounds memory to workers × this × chunk output size (~100-200 KB).
     /// </summary>
-    private const int _chunksPerWorkerPerWindow = 2;
+    private const int _chunksInFlightPerWorker = 4;
 
     #endregion
 }
