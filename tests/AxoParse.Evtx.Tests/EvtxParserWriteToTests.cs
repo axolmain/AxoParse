@@ -10,28 +10,36 @@ public class EvtxParserWriteToTests
     /// <summary>
     /// Verifies that streaming output is byte-identical to concatenating the UTF-8 output of <see cref="EvtxParser.Parse"/>
     /// (valid chunks in file order, then recovered chunks) and reports the same record count, for every sample file,
-    /// both formats, and single- and multi-threaded rendering.
+    /// both formats, single- and multi-threaded rendering, and with checksum validation off and on.
     /// </summary>
     /// <param name="format">Output format under test.</param>
     /// <param name="threads">Thread count passed to both parse paths.</param>
+    /// <param name="validateChecksums">Checksum validation flag passed to both parse paths.</param>
     [Theory]
-    [InlineData(OutputFormat.Xml, 1)]
-    [InlineData(OutputFormat.Xml, 8)]
-    [InlineData(OutputFormat.Json, 1)]
-    [InlineData(OutputFormat.Json, 8)]
-    public void WriteToMatchesParseOutputForAllTestFiles(OutputFormat format, int threads)
+    [InlineData(OutputFormat.Xml, 1, false)]
+    [InlineData(OutputFormat.Xml, 8, false)]
+    [InlineData(OutputFormat.Json, 1, false)]
+    [InlineData(OutputFormat.Json, 8, false)]
+    [InlineData(OutputFormat.Xml, 1, true)]
+    [InlineData(OutputFormat.Xml, 8, true)]
+    [InlineData(OutputFormat.Json, 1, true)]
+    [InlineData(OutputFormat.Json, 8, true)]
+    public void WriteToMatchesParseOutputForAllTestFiles(OutputFormat format, int threads, bool validateChecksums)
     {
         foreach (string file in Directory.GetFiles(_testDataDir, "*.evtx"))
         {
             byte[] data = File.ReadAllBytes(file);
-            EvtxParser parser = EvtxParser.Parse(data, threads, format, cancellationToken: TestContext.Current.CancellationToken);
+            EvtxParser parser = EvtxParser.Parse(data, threads, format, validateChecksums,
+                cancellationToken: TestContext.Current.CancellationToken);
 
             using MemoryStream stream = new();
-            int written = EvtxParser.WriteTo(data, stream, format, threads, cancellationToken: TestContext.Current.CancellationToken);
+            int written = EvtxParser.WriteTo(data, stream, format, threads, validateChecksums,
+                TestContext.Current.CancellationToken);
 
             Assert.Equal(parser.TotalRecords, written);
             Assert.True(ExpectedBytes(parser, format).AsSpan().SequenceEqual(stream.ToArray()),
-                $"{Path.GetFileName(file)}: WriteTo output differs from Parse output ({format}, {threads} threads)");
+                $"{Path.GetFileName(file)}: WriteTo output differs from Parse output " +
+                $"({format}, {threads} threads, validateChecksums={validateChecksums})");
         }
     }
 

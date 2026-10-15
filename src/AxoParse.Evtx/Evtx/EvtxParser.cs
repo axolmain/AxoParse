@@ -350,15 +350,13 @@ public class EvtxParser
                 continue;
             }
 
+            // Same policy as Parse: a checksum failure skips the chunk outright rather than sending it to recovery
             if (validateChecksums)
             {
                 ReadOnlySpan<byte> chunkData = span.Slice(offset, EvtxChunk.ChunkSize);
                 EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
                 if (!header.ValidateHeaderChecksum(chunkData) || !header.ValidateDataChecksum(chunkData))
-                {
-                    invalidOffsets[invalidCount++] = offset;
                     continue;
-                }
             }
 
             validOffsets[validCount++] = offset;
