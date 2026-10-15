@@ -45,8 +45,12 @@ public class CorruptionFuzzTests
                 int seed = StableSeed(name, round);
                 (byte[] data, string mutation) = Mutate(original, new Random(seed));
                 int threads = round % 10 == 9 ? 4 : 1;
-                Task<string?> run = Task.Run(() => Exercise(data, threads, token), token);
-                if (!run.Wait(_perMutationTimeout, token))
+                string? error;
+                try
+                {
+                    error = await Task.Run(() => Exercise(data, threads, token), token).WaitAsync(_perMutationTimeout, token);
+                }
+                catch (TimeoutException)
                 {
                     // The hung parse keeps its thread; stop here rather than pile up more
                     failures.Add($"{name} round {round} seed {seed} [{mutation}] threads={threads}: " +
@@ -54,8 +58,8 @@ public class CorruptionFuzzTests
                     break;
                 }
 
-                if (run.Result != null)
-                    failures.Add($"{name} round {round} seed {seed} [{mutation}] threads={threads}: {run.Result}");
+                if (error != null)
+                    failures.Add($"{name} round {round} seed {seed} [{mutation}] threads={threads}: {error}");
             }
         }
 
