@@ -126,7 +126,7 @@ public class EvtxChunk
             BinXmlTemplateDefinition.PreloadFromChunk(chunkData,
                 MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128)), chunkFileOffset);
 
-        int expectedRecords = (int)(header.LastEventRecordId - header.FirstEventRecordId + 1);
+        int expectedRecords = ExpectedRecordCount(header);
         List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, header.FreeSpaceOffset, expectedRecords);
 
         return new EvtxChunk(header, templates, records, null, Array.Empty<byte>(), Array.Empty<int>());
@@ -188,6 +188,21 @@ public class EvtxChunk
     #region Non-Public Methods
 
     /// <summary>
+    /// Record-list capacity hint from the header's event record ID range. The IDs come from the file, so a corrupt
+    /// header (last below first, or a span no 64 KB chunk could hold) must not size the list; records are found by
+    /// walking the chunk either way, so 0 just means "unknown".
+    /// </summary>
+    /// <param name="header">Parsed chunk header.</param>
+    /// <returns><c>Last - First + 1</c> when that is plausible, otherwise 0.</returns>
+    private static int ExpectedRecordCount(EvtxChunkHeader header)
+    {
+        if (header.LastEventRecordId < header.FirstEventRecordId)
+            return 0;
+        ulong span = header.LastEventRecordId - header.FirstEventRecordId;
+        return span < _maxRecordsPerChunk ? (int)span + 1 : 0;
+    }
+
+    /// <summary>
     /// Parses a 64KB chunk: header, preloads templates, walks event records, and parses BinXml.
     /// </summary>
     /// <param name="chunkData">Exactly 64KB span covering the chunk.</param>
@@ -210,7 +225,7 @@ public class EvtxChunk
             BinXmlTemplateDefinition.PreloadFromChunk(chunkData,
                 MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128)), chunkFileOffset);
 
-        int expectedRecords = (int)(header.LastEventRecordId - header.FirstEventRecordId + 1);
+        int expectedRecords = ExpectedRecordCount(header);
         List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, header.FreeSpaceOffset, expectedRecords);
 
         BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache);
@@ -382,7 +397,8 @@ public class EvtxChunk
             if (parsed == null)
             {
                 uint declaredSize = MemoryMarshal.Read<uint>(chunkData.Slice(offset + 4, 4));
-                offset += declaredSize >= 28 ? (int)declaredSize : 4;
+                // 64-bit sum, clamped to the scan end: a declared size >= 2^31 must not wrap the offset negative
+                offset = declaredSize >= 28 ? (int)Math.Min(offset + (long)declaredSize, scanEnd) : offset + 4;
                 continue;
             }
 
@@ -474,6 +490,12 @@ public class EvtxChunk
     /// Size of the chunk header in bytes. Event record data begins immediately after.
     /// </summary>
     private const int _chunkHeaderSize = 512;
+
+    /// <summary>
+    /// Most records a chunk can hold: the 65,024 bytes after the header divided by the smallest possible record,
+    /// 28 bytes (4 signature + 4 size + 8 record ID + 8 timestamp + 4 trailing size copy, with empty BinXml) = 2,322.
+    /// </summary>
+    private const int _maxRecordsPerChunk = (ChunkSize - _chunkHeaderSize) / 28;
 
     #endregion
 

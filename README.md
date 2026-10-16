@@ -58,7 +58,8 @@ I'd ever bother to, which keeps the history really clean to track. Commits with 
 - **Async enumeration** — `ParseAsync` yields events in file order as chunks finish parsing
 - **Multi-threaded** — parallel chunk processing with configurable thread count
 - **Template pre-compilation** — compiles BinXml templates once for zero repeated overhead
-- **WEVT template cache** — extracts templates from Windows PE binaries (DLL/EXE) for offline parsing
+- **WEVT template extraction** — `WevtCache` reads templates from Windows provider PE binaries (DLL/EXE). It doesn't
+  affect parsing yet; a fallback for logs with damaged templates is planned for 0.3.0
 - **CRC32 validation** — optional checksum verification on chunks
 - **Resilient** — gracefully handles corrupted records, bad checksums, and malformed chunks
 - **Minimal allocations** — span-based zero-copy parsing, stack allocations, and value types throughout
@@ -101,17 +102,6 @@ await foreach (EvtxEvent evt in EvtxParser.ParseAsync(fileData))
     Console.WriteLine(evt.Xml);
 ```
 
-### With WEVT template cache
-
-```csharp
-using AxoParse.Evtx.Wevt;
-
-WevtCache cache = new WevtCache();
-cache.AddFromDirectory(@"C:\Windows\System32", "*.dll");
-
-EvtxParser parser = EvtxParser.Parse(fileData, wevtCache: cache);
-```
-
 ### Options
 
 | Parameter           | Default | Description                                               |
@@ -119,7 +109,7 @@ EvtxParser parser = EvtxParser.Parse(fileData, wevtCache: cache);
 | `maxThreads`        | `0`     | Thread count. `0`/`-1` = all cores, `1` = single-threaded |
 | `format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.Json`                 |
 | `validateChecksums` | `false` | Skip chunks that fail CRC32 validation                    |
-| `wevtCache`         | `null`  | Pre-built template cache from provider PE binaries        |
+| `wevtCache`         | `null`  | Currently has no effect (fallback for damaged templates planned for 0.3.0) |
 
 ## Benchmark Results
 

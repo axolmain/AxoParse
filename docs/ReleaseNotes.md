@@ -2,6 +2,56 @@
 
 ## Release Notes
 
+### v0.2.1 — Checksum and robustness fixes, faster multi-threaded `WriteTo`
+
+**Fixes:**
+
+- **`validateChecksums: true` returned no records.** The chunk header check combined two separate CRC32s with XOR
+  instead of computing one CRC32 over bytes 0–120 followed by 128–512, so every chunk failed and was skipped. Chunks
+  flagged `NoCrc32` are now also treated as valid. Checksum-validated record counts now match the Rust `evtx` crate's
+  `--validate-checksums` exactly on all 26 test samples.
+- **`ParseAsync` with `validateChecksums: true`** sent checksum-failed chunks to record recovery, so it could return
+  records `Parse` didn't. It now skips them, as `Parse` does and documents.
+- **A corrupt chunk header could fail the whole file.** A header whose last record ID was below its first made `Parse`,
+  `WriteTo` and `ParseAsync` throw (`ArgumentOutOfRangeException` inside an `AggregateException`). The ID range is now
+  ignored when implausible; records are still found by walking the chunk.
+- **A record claiming a huge number of substitutions** allocated memory sized from that count before rejecting it
+  (about 430 MB for one bad record). The count is now checked against the record's remaining bytes first; only that
+  record fails, with a diagnostic.
+- **Two more ways a corrupt file could throw**, found by the new seeded corruption test. A record whose declared size
+  was 2 GB or more wrapped the record-scan offset negative. A template pointer or size near `uint.MaxValue` slipped past
+  the bounds check. Both now just end or skip the bad region.
+
+**Performance:**
+
+- **Multi-threaded `WriteTo` is pipelined.** It used to render a batch of chunks, then write the batch while every
+  worker sat idle. Now workers render ahead into a bounded ring of buffers while the calling thread writes chunks in
+  order. Output is unchanged.
+- The benchmark CLI reads its input in parallel and is built with invariant globalization and speed-optimised AOT
+  codegen.
+- Together, on the 30 MB benchmark file (Apple M4, 8 threads), XML went from 15.5 ms to 12.9 ms and JSON from 17.0 ms
+  to 14.1 ms (−17%). Single-threaded JSON went from 39.1 ms to 37.4 ms.
+
+**Testing:**
+
+- Golden output hashes for every sample, at 1 and 8 threads, now lock the exact output. The published AOT CLI is
+  checked against them before benchmarking.
+- `WriteTo` and `ParseAsync` are checked against `Parse` for every sample, format and thread count, with checksum
+  validation off and on.
+- A seeded corruption test (100 mutations per sample in CI) asserts that malformed input only ever throws
+  `EvtxParseException`.
+
+**Documentation:**
+
+- `WevtCache` has never affected output: its templates are extracted but never consulted during parsing. The docs
+  previously said it pre-compiled templates. They now say what it does today. A fallback for damaged templates (as in
+  the Rust `evtx` crate) is planned for 0.3.0.
+- The file header's checksum is read but not validated. The 0.1.0 notes below said otherwise.
+
+No changes to output with default options. Golden output hashes for every sample are unchanged.
+
+---
+
 ### v0.2.0 — Faster UTF-8 rendering
 
 Rendering now goes straight from BinXml to UTF-8, with no UTF-16 strings in between. On the 30 MB benchmark file
@@ -43,9 +93,10 @@ High-performance .NET library for parsing Windows Event Log (.evtx) files.
 - Full EVTX parsing — file headers, 64KB chunks, and individual event records
 - BinXml decompilation — converts binary XML token streams to standard XML or UTF-8 JSON
 - Template pre-compilation — compiles BinXml templates once for zero overhead on repeated renders
-- WEVT template cache — extracts and caches templates from Windows PE binaries (DLLs/EXEs) for offline parsing
+- WEVT template extraction — extracts and caches templates from Windows PE binaries (DLLs/EXEs). *(Not consulted
+  during parsing; see v0.2.1.)*
 - Parallel chunk processing — configurable thread count for multi-core throughput
-- CRC32 validation — optional checksum verification on file headers, chunk headers, and chunk data
+- CRC32 validation — optional checksum verification on chunk headers and chunk data *(broken until v0.2.1)*
 - Resilient parsing — gracefully handles corrupted records, bad checksums, and malformed chunks
 
 **Target Framework:** .NET 10.0
@@ -65,7 +116,7 @@ dotnet add package AxoParse.Evtx
 Or add directly to your `.csproj`:
 
 ```xml
-<PackageReference Include="AxoParse.Evtx" Version="0.2.0" />
+<PackageReference Include="AxoParse.Evtx" Version="0.2.1" />
 ```
 
 ---
@@ -134,7 +185,9 @@ foreach (string diag in parser.Diagnostics)
 
 ### WEVT template cache
 
-Pre-load templates from Windows provider PE binaries for richer event data:
+> **Note:** `WevtCache` currently has no effect on output. `EvtxParser` never consults its templates; the
+> templates embedded in the EVTX file are always used. Making it a fallback for chunks whose embedded templates are
+> missing or corrupt (as the Rust `evtx` crate does) is planned for 0.3.0.
 
 ```csharp
 using AxoParse.Evtx.Wevt;
@@ -191,7 +244,7 @@ public static EvtxParser Parse(
 | `maxThreads`        | `0`       | Thread count. `0` or `-1` = all cores, `1` = single-threaded, `N` = N threads |
 | `format`            | `Xml`     | Output format. Chosen at parse time — compiled templates are format-specific  |
 | `validateChecksums` | `false`   | When `true`, chunks failing CRC32 validation are skipped                      |
-| `wevtCache`         | `null`    | Pre-built template cache from provider PE binaries                            |
+| `wevtCache`         | `null`    | Currently has no effect (fallback for damaged templates planned for 0.3.0)    |
 | `cancellationToken` | `default` | Cancellation token (throws `OperationCanceledException` if cancelled)         |
 
 **Returns:** Fully parsed `EvtxParser` instance.
@@ -212,7 +265,8 @@ public static int WriteTo(
 
 Parses the file and writes every record's rendered UTF-8 output to `output`. The order and bytes match concatenating
 `Parse` output: valid chunks in file order, then records recovered from regions whose chunk header is damaged.
-Workers render a window of chunks into reusable buffers and write it in order, so no per-record output is retained.
+Workers render chunks into a bounded ring of reusable buffers while the calling thread writes them in order, so no
+per-record output is retained and rendering overlaps with writing.
 The stream is written to but not flushed or closed.
 
 Per-record render diagnostics aren't reported. A record that fails to render writes nothing. `WriteTo` doesn't take a
@@ -554,8 +608,11 @@ catch (EvtxParseException ex) when (ex.ErrorCode == EvtxParseError.InvalidFileSi
 
 **Namespace:** `AxoParse.Evtx.Wevt`
 
-Offline template cache built from WEVT_TEMPLATE resources in Windows provider PE binaries. Pre-compiles templates for
-injection into the parser's cache before chunk processing — zero hot-path overhead.
+Templates extracted and compiled from WEVT_TEMPLATE resources in Windows provider PE binaries.
+
+> **Note:** `WevtCache` currently has no effect on output. `EvtxParser` never consults its templates; the
+> templates embedded in the EVTX file are always used. Making it a fallback for chunks whose embedded templates are
+> missing or corrupt (as the Rust `evtx` crate does) is planned for 0.3.0.
 
 #### Properties
 

@@ -58,6 +58,21 @@ run_preflight() {
     fi
   fi
 
+  # ── Verify C# CLI output against the golden hashes before timing it ──
+  if $HAS_CSHARP && ! ${SKIP_VERIFY:-false}; then
+    log_info "Verifying C# CLI output against golden hashes..."
+    local clihash_dll
+    clihash_dll="$(dirname "$CLIHASH_PROJECT")/bin/Release/net10.0/AxoParse.CliHash.dll"
+    if dotnet build "$CLIHASH_PROJECT" -c Release --nologo -v quiet > /dev/null 2>&1 \
+        && dotnet "$clihash_dll" "$CSHARP_BIN" 2>&1 | sed 's/^/  /' && [[ ${PIPESTATUS[0]} -eq 0 ]]; then
+      log_success "C# CLI output matches golden hashes"
+    else
+      log_error "C# CLI output differs from the golden hashes — refusing to benchmark a broken build."
+      log_error "Details: dotnet run --project perf/AxoParse.CliHash -c Release -- $CSHARP_BIN (or pass --skip-verify)"
+      exit 1
+    fi
+  fi
+
   # ── WASM / external parser flags ────────────────────────────────────
   HAS_CS_WASM=false
   HAS_RUST_WASM=false

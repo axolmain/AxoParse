@@ -29,14 +29,14 @@ There are three entry points over the same pipeline:
 |-------------|--------|
 | `EvtxParser.Parse` | Holds every chunk. Each `EvtxChunk` keeps its records plus one UTF-8 buffer of rendered output, exposed per record as `ParsedUtf8` / `ParsedJson` slices or as lazily decoded `ParsedXml` strings. |
 | `EvtxParser.ParseAsync` | Same phases, but parsed chunks go through a channel and a reorder buffer, so `EvtxEvent`s are yielded in file order as soon as each chunk is ready. |
-| `EvtxParser.WriteTo` | Same chunk classification, but doesn't build `EvtxChunk`s. Workers render a window of chunks into reusable scratch buffers, the window is written to the output `Stream` in file order, and the buffers are reused. Output bytes match `Parse`. |
+| `EvtxParser.WriteTo` | Same chunk classification, but doesn't build `EvtxChunk`s. Workers claim chunks in order and render each into a buffer from a bounded ring. The calling thread writes each chunk to the output `Stream` as soon as it's next in file order and returns the buffer, so rendering and writing overlap with no batch barrier. Output bytes match `Parse`. |
 
 ## Threading model
 
 `EvtxParser.Parse()` runs in four phases:
 
 1. **Sequential scan** — walk chunk boundaries, verify `ElfChnk\0` magic, optionally validate CRC32 checksums. Collects valid chunk offsets.
-2. **Parallel parse** — `Parallel.For` dispatches each valid chunk to a thread. Chunks are self-contained (own header, own string/template caches), so threads share nothing except a read-only file buffer and a `ConcurrentDictionary<Guid, CompiledTemplate?>`.
+2. **Parallel parse** — `Parallel.For` dispatches each valid chunk to a thread. Chunks are self-contained (own header, own string/template caches), so threads share nothing except the read-only file buffer. Each worker has its own compiled-template cache.
 3. **Sequential collect** — gather parsed chunks and sum record counts.
 4. **Parallel recovery** — chunks with destroyed headers are scanned for `0x2A2A` record magic to recover individual records.
 
@@ -51,9 +51,9 @@ BinXml templates appear once per chunk but are referenced by many records. On fi
   copying bytes
 - **Substitution metadata** — slot IDs, optional flags
 
-Compiled templates are cached by GUID in a `ConcurrentDictionary` shared across chunks. Subsequent records skip all template parsing and just interleave static parts with formatted substitution values.
+Compiled templates are cached by GUID in a per-thread dictionary, so each worker compiles a template the first time it meets it and reuses it for every later chunk on that thread. Subsequent records skip all template parsing and just interleave static parts with formatted substitution values. (The per-thread caches are merged into a shared dictionary afterwards, but nothing reads it.)
 
-`WevtCache` takes this further — it pre-extracts templates from Windows PE binaries (via WEVT_TEMPLATE resources) before any records are parsed.
+`WevtCache` extracts templates from Windows PE binaries (WEVT_TEMPLATE resources), but parsing doesn't use them yet: it fills the shared dictionary that nothing reads. A fallback for missing or corrupt embedded templates is planned for 0.3.0.
 
 ## Corruption resilience
 
@@ -71,7 +71,7 @@ Compiled templates are cached by GUID in a `ConcurrentDictionary` shared across 
 | `CompiledTemplate` / `CompiledJsonTemplate` | Pre-compiled template: UTF-8 static parts + substitution slots. |
 | `ValueUtf8Builder` | Stack-first, `ArrayPool`-backed UTF-8 builder all rendering goes through. Transcodes UTF-16 text from the file as it's appended, and gives the same bytes as encoding the whole record once (unpaired surrogates become U+FFFD). |
 | `BinXmlValueFormatter` | Formats substitution values (FILETIME, GUID, SID, hex, numbers) straight to UTF-8 with the invariant culture. |
-| `WevtCache` | Offline template cache from Windows PE binaries. |
+| `WevtCache` | Templates extracted from Windows PE binaries (not yet used during parsing). |
 
 ## References
 

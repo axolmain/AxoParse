@@ -28,6 +28,21 @@ Use `--native-only` to skip everything except C# and Rust native benchmarks.
 
 External parsers are cloned and built under `$EXTERNAL_DIR` (default `$TMPDIR/evtx-bench`).
 
+Before timing anything, the C# CLI's output is checked against the golden hashes from `GoldenOutputTests`
+(`perf/AxoParse.CliHash`: every sample × XML/JSON × 1/8 threads). If any output differs, the run stops instead of
+benchmarking a broken build. Use `--skip-verify` to bypass this, for example while timing a deliberate output change
+before re-blessing.
+
+### Windows
+
+These scripts are bash. Run them from WSL (recommended, since hyperfine, cargo and the autotools build of libevtx all
+work there as on Linux) or Git Bash. Native Windows equivalents for the pieces that matter most:
+
+- Output check: `dotnet run --project perf/AxoParse.CliHash -c Release -- perf\AxoParse.Bench\bin\publish\AxoParse.Bench.exe`
+- Timing: `hyperfine -N "perf\AxoParse.Bench\bin\publish\AxoParse.Bench.exe tests\data\security_big_sample.evtx -t 1 -o xml"`.
+  `-N` runs without a shell, so stdout goes to hyperfine's null sink. In PowerShell, don't redirect with `> $null`:
+  it decodes native output as text and distorts the timing.
+
 ## Notes on the columns
 
 - A cell shows `FAILED (exit N)` when any run of that command exited non-zero. `--ignore-failure` keeps hyperfine

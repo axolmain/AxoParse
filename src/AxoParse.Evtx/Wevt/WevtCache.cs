@@ -4,9 +4,13 @@ using AxoParse.Evtx.BinXml;
 namespace AxoParse.Evtx.Wevt;
 
 /// <summary>
-/// Offline template cache built from WEVT_TEMPLATE resources in Windows provider PE binaries.
-/// Pre-compiles templates into <see cref="CompiledTemplate"/> objects so they can be injected
-/// into the parser's compiled cache before chunk processing begins — zero hot-path overhead.
+/// Template cache built from WEVT_TEMPLATE resources in Windows provider PE binaries, compiled into
+/// <see cref="CompiledTemplate"/> objects.
+/// <para>
+/// Not yet used during parsing: <see cref="Evtx.EvtxParser"/> copies these templates into a dictionary its chunk workers
+/// never read (they use per-thread caches), so passing a cache has no effect on output. The intended use, matching the
+/// Rust evtx crate, is a fallback for chunks whose embedded templates are missing or corrupt.
+/// </para>
 /// </summary>
 public sealed class WevtCache
 {
@@ -107,10 +111,11 @@ public sealed class WevtCache
     #region Non-Public Methods
 
     /// <summary>
-    /// Pre-populates a parser's compiled template cache with WEVT templates.
-    /// Uses <see cref="ConcurrentDictionary{TKey,TValue}.TryAdd"/> so EVTX-embedded templates
-    /// that are added later via <c>GetOrAdd</c> during chunk parsing will find the WEVT entry
-    /// already present and skip the factory. Both should produce identical output for the same GUID.
+    /// Copies the WEVT templates into <paramref name="targetCache"/> with
+    /// <see cref="ConcurrentDictionary{TKey,TValue}.TryAdd"/>. The parser's chunk workers don't read that dictionary, so
+    /// this currently has no effect on output. Seeding the worker caches instead would be wrong: the cache is checked
+    /// before a chunk's own template is compiled, so WEVT templates would override in-file ones, and
+    /// <see cref="WevtTemplateCompiler"/> handles optional attributes differently from the EVTX template compiler.
     /// </summary>
     /// <param name="targetCache">The parser's compiled template cache to pre-populate.</param>
     internal void PopulateCache(ConcurrentDictionary<Guid, CompiledTemplate?> targetCache)

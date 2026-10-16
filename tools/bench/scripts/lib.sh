@@ -70,6 +70,7 @@ Options:
   --warmup N          Number of hyperfine warmup runs (default: $HYPERFINE_WARMUP or 5)
   --no-build          Skip all build steps; use existing binaries
   --native-only       Run only native parsers (C# + Rust), skip WASM/JS/external
+  --skip-verify       Don't check C# CLI output against the golden hashes before timing
   --parsers a,b,c     Run only the listed parsers (comma-separated)
   --list-parsers      Show available parsers and their status, then exit
 
