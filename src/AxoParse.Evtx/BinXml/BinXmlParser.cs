@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -103,6 +104,31 @@ internal sealed partial class BinXmlParser
     #endregion
 
     #region Non-Public Methods
+
+    /// <summary>
+    /// Reads a template instance's substitution count (u32 at <paramref name="countPos"/>) and rejects counts the
+    /// remaining data can't hold: each substitution has a 4-byte descriptor (u16 size, u8 type, u8 pad) after the
+    /// count. Checked before the count sizes any buffer, since it comes straight from file bytes. Throwing fails only
+    /// the current record, which the chunk render loop reports as a diagnostic.
+    /// </summary>
+    /// <param name="data">BinXml bytes containing the template instance.</param>
+    /// <param name="countPos">Position of the u32 substitution count in <paramref name="data"/>.</param>
+    /// <returns>The substitution count, at most <c>(data.Length - countPos - 4) / 4</c>.</returns>
+    private static int ReadSubstitutionCount(ReadOnlySpan<byte> data, int countPos)
+    {
+        uint count = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(countPos, 4));
+        if (count > (uint)(data.Length - countPos - 4) / 4)
+            ThrowSubstitutionCountTooLarge(count);
+        return (int)count;
+    }
+
+    /// <summary>
+    /// Throws for a substitution count larger than the record data can hold (kept out of line so the check stays small).
+    /// </summary>
+    /// <param name="count">Substitution count read from the file.</param>
+    [DoesNotReturn]
+    private static void ThrowSubstitutionCountTooLarge(uint count) =>
+        throw new InvalidDataException($"Template instance claims {count} substitutions, more than the record data can hold");
 
     /// <summary>
     /// Skips an inline name structure if one is present at the current position.
@@ -514,7 +540,7 @@ internal sealed partial class BinXmlParser
             uint inlineDataSize = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos + 20, 4));
             peekPos += 24 + (int)inlineDataSize;
         }
-        int numVals = (int)BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos, 4));
+        int numVals = ReadSubstitutionCount(data, peekPos);
 
         // stackalloc for the common case (≤ 64 substitutions); heap fallback for rare large templates
         const int StackThreshold = 64;

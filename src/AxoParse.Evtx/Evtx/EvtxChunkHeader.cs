@@ -62,11 +62,13 @@ public readonly record struct EvtxChunkHeader(
 
     /// <summary>
     /// Validates the event records data checksum: CRC32(bytes[512..FreeSpaceOffset]).
+    /// Chunks flagged <see cref="ChunkFlags.NoCrc32"/> carry no checksums and always pass.
     /// </summary>
     /// <param name="chunkData">Full 64KB chunk data.</param>
-    /// <returns>True if the computed checksum matches the stored value.</returns>
+    /// <returns>True if the computed checksum matches the stored value, or the chunk has no checksums.</returns>
     public bool ValidateDataChecksum(ReadOnlySpan<byte> chunkData)
     {
+        if ((Flags & ChunkFlags.NoCrc32) != 0) return true;
         uint clampedEnd = Math.Min(FreeSpaceOffset, (uint)chunkData.Length);
         if (clampedEnd <= 512) return EventRecordsChecksum == 0;
         uint crc = Crc32.Compute(chunkData[512..(int)clampedEnd]);
@@ -74,14 +76,16 @@ public readonly record struct EvtxChunkHeader(
     }
 
     /// <summary>
-    /// Validates the chunk header checksum: CRC32(bytes[0..120]) XOR CRC32(bytes[128..512]).
+    /// Validates the chunk header checksum: one CRC32 over bytes 0-120 followed by bytes 128-512, skipping the flags
+    /// (offset 120) and the checksum field itself (offset 124). Chunks flagged <see cref="ChunkFlags.NoCrc32"/> carry
+    /// no checksums and always pass.
     /// </summary>
     /// <param name="chunkData">Full 64KB chunk data.</param>
-    /// <returns>True if the computed checksum matches the stored value.</returns>
+    /// <returns>True if the computed checksum matches the stored value, or the chunk has no checksums.</returns>
     public bool ValidateHeaderChecksum(ReadOnlySpan<byte> chunkData)
     {
-        uint crc = Crc32.Compute(chunkData[..120]) ^ Crc32.Compute(chunkData[128..512]);
-        return crc == Checksum;
+        if ((Flags & ChunkFlags.NoCrc32) != 0) return true;
+        return Crc32.Compute(chunkData[..120], chunkData[128..512]) == Checksum;
     }
 
     #endregion
