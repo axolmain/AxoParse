@@ -17,13 +17,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Library build + tests. Kept under this name because the "Protect master" ruleset requires the
+  # `build-and-test` check. Needs no WASM workload or Node, so it runs in parallel with `site`.
   build-and-test:
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
+
+      # Test samples are ~110 MB of LFS objects; restoring them from the Actions cache avoids
+      # re-downloading them (and spending LFS bandwidth quota) on every run
+      - name: List LFS objects
+        run: git lfs ls-files --long | cut -d ' ' -f1 | sort > .lfs-assets-id
+
+      - name: Restore LFS cache
+        uses: actions/cache@v4
         with:
-          lfs: true
+          path: .git/lfs
+          key: lfs-${{ hashFiles('.lfs-assets-id') }}
+
+      - name: Pull LFS objects
+        run: git lfs pull
 
       - name: Setup .NET 10 preview
         uses: actions/setup-dotnet@v4
@@ -31,16 +45,52 @@ jobs:
           dotnet-version: 10.0.x
           dotnet-quality: preview
 
+      - name: Restore NuGet cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      # Release: the corruption and golden tests run ~2.5x faster with JIT optimisations on.
+      # The perf projects are built (not run) so they can't silently break; AxoParse.Browser is built by `site`.
+      - name: Build
+        run: |
+          dotnet build tests/AxoParse.Evtx.Tests -c Release
+          for project in perf/*/*.csproj; do dotnet build "$project" -c Release; done
+
+      - name: Test
+        run: dotnet run --project tests/AxoParse.Evtx.Tests -c Release --no-build
+
+  # WASM module + React demo site, deployed to GitHub Pages from master. Needs no test data.
+  site:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 10 preview
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          dotnet-quality: preview
+
+      - name: Restore NuGet cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', 'Directory.Build.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: demos/AxoParse.React/package-lock.json
 
       - name: Install .NET workloads
-        run: dotnet workload restore
-
-      - name: Build
-        run: dotnet build
+        run: dotnet workload restore src/AxoParse.Browser/AxoParse.Browser.csproj
 
       - name: Publish WASM module
         run: dotnet publish src/AxoParse.Browser -c Release
@@ -71,12 +121,9 @@ jobs:
           path: demos/AxoParse.React/dist
           retention-days: 1
 
-      - name: Test
-        run: dotnet run --project tests/AxoParse.Evtx.Tests --no-build
-
   deploy:
     if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-    needs: build-and-test
+    needs: [build-and-test, site]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
