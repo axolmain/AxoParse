@@ -2,7 +2,7 @@
 
 ## Release Notes
 
-### v0.2.1 — Checksum and robustness fixes
+### v0.2.1 — Checksum and robustness fixes, faster multi-threaded `WriteTo`
 
 **Fixes:**
 
@@ -21,6 +21,25 @@
 - **Two more ways a corrupt file could throw**, found by the new seeded corruption test. A record whose declared size
   was 2 GB or more wrapped the record-scan offset negative. A template pointer or size near `uint.MaxValue` slipped past
   the bounds check. Both now just end or skip the bad region.
+
+**Performance:**
+
+- **Multi-threaded `WriteTo` is pipelined.** It used to render a batch of chunks, then write the batch while every
+  worker sat idle. Now workers render ahead into a bounded ring of buffers while the calling thread writes chunks in
+  order. Output is unchanged.
+- The benchmark CLI reads its input in parallel and is built with invariant globalization and speed-optimised AOT
+  codegen.
+- Together, on the 30 MB benchmark file (Apple M4, 8 threads), XML went from 15.5 ms to 12.9 ms and JSON from 17.0 ms
+  to 14.1 ms (−17%). Single-threaded JSON went from 39.1 ms to 37.4 ms.
+
+**Testing:**
+
+- Golden output hashes for every sample, at 1 and 8 threads, now lock the exact output. The published AOT CLI is
+  checked against them before benchmarking.
+- `WriteTo` and `ParseAsync` are checked against `Parse` for every sample, format and thread count, with checksum
+  validation off and on.
+- A seeded corruption test (100 mutations per sample in CI) asserts that malformed input only ever throws
+  `EvtxParseException`.
 
 **Documentation:**
 
@@ -246,7 +265,8 @@ public static int WriteTo(
 
 Parses the file and writes every record's rendered UTF-8 output to `output`. The order and bytes match concatenating
 `Parse` output: valid chunks in file order, then records recovered from regions whose chunk header is damaged.
-Workers render a window of chunks into reusable buffers and write it in order, so no per-record output is retained.
+Workers render chunks into a bounded ring of reusable buffers while the calling thread writes them in order, so no
+per-record output is retained and rendering overlaps with writing.
 The stream is written to but not flushed or closed.
 
 Per-record render diagnostics aren't reported. A record that fails to render writes nothing. `WriteTo` doesn't take a

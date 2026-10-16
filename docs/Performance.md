@@ -19,9 +19,10 @@ output (the tests check this for every sample file, format, and thread count).
 | `1` | Single-threaded — useful for debugging or constrained environments |
 | `N` | Use exactly N threads |
 
-Each 64KB chunk is independent, so chunks are rendered in parallel with no shared mutable state beyond the compiled
-template cache. Speed-up is sub-linear: the file scan and in-order output are sequential, and on the 30 MB benchmark
-file 8 threads are roughly 2.2× faster than 1. For small files (1-2 chunks), single-threaded may be faster due to
+Each 64KB chunk is independent, so chunks are rendered in parallel with no shared mutable state (each worker has its
+own compiled-template cache). Speed-up is sub-linear: the file scan, reading the input and the in-order output are
+sequential, and process start-up is a fixed cost. On the 30 MB benchmark file, the CLI with 8 threads is about 2.6×
+faster than with 1. For small files (1-2 chunks), single-threaded may be faster due to
 thread pool overhead.
 
 ## Memory
@@ -32,9 +33,10 @@ All entry points take the whole file as a `byte[]`.
 buffer, so there's no per-record array. `ParsedXml` decodes a record to `string` only on first access, so if you
 don't read it, it costs nothing.
 
-`WriteTo` renders a window of chunks in parallel into per-worker scratch buffers, writes the window to the stream in
-file order, then reuses the buffers for the next window. Peak memory is roughly the input file plus the scratch
-buffers: the benchmark CLI peaks at about 39 MiB on the 30 MB sample single-threaded, 44 MiB with 8 threads.
+`WriteTo` runs as a pipeline: workers claim chunks in file order and render each into a buffer from a small ring
+(4 per worker), while the calling thread writes each chunk as soon as it's next in order and hands its buffer back.
+Rendering and writing overlap, and no worker waits for a whole batch to finish. Peak memory is roughly the input file
+plus the ring: the benchmark CLI peaks at about 39 MiB on the 30 MB sample single-threaded, 49 MiB with 8 threads.
 
 ## XML vs JSON
 
