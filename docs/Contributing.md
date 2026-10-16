@@ -39,6 +39,17 @@ On Windows PowerShell: `$env:AXOPARSE_REBLESS=1; dotnet test ...; Remove-Item En
 Equality tests also check that `WriteTo` and `ParseAsync` produce exactly what `Parse` produces, for every sample,
 format and thread count, with checksum validation off and on.
 
+### Corruption test
+
+`CorruptionFuzzTests` mutates every sample 100 times with a fixed seed: bit flips, random overwrites, zeroed ranges,
+truncation, and targeted hits on file, chunk and record header fields. It asserts that `Parse` and `WriteTo` never throw
+anything except `EvtxParseException`. A failure lists the sample, round, seed and mutation, so you can reproduce it by
+running that round again. Before a release, run it longer:
+
+```bash
+AXOPARSE_FUZZ_ROUNDS=5000 dotnet test --project tests/AxoParse.Evtx.Tests --filter-class "AxoParse.Evtx.Tests.CorruptionFuzzTests"
+```
+
 ## Code style
 
 - **Explicit types** — avoid `var` unless required (anonymous types)

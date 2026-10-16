@@ -8,6 +8,7 @@ namespace AxoParse.Evtx.Tests;
 /// before being validated. Corruption must be recovered from (per the error-handling policy), not thrown or turned
 /// into huge allocations.
 /// </summary>
+[Collection(AllocationSensitiveCollection.Name)]
 public class MalformedInputTests
 {
     #region Public Methods
@@ -103,6 +104,23 @@ public class MalformedInputTests
     /// The first chunk follows the 4 KB file header.
     /// </summary>
     private const int _firstChunkOffset = 4096;
+
+    #endregion
+}
+
+/// <summary>
+/// Runs its tests on their own, after the parallel ones: they measure process-wide allocations
+/// (<see cref="GC.GetTotalAllocatedBytes"/>), which concurrently running tests would inflate.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class AllocationSensitiveCollection
+{
+    #region Non-Public Fields
+
+    /// <summary>
+    /// Collection name used by <see cref="CollectionAttribute"/>.
+    /// </summary>
+    public const string Name = "Allocation-sensitive";
 
     #endregion
 }

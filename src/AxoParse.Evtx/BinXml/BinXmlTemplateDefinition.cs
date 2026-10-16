@@ -51,11 +51,12 @@ public readonly record struct BinXmlTemplateDefinition(
     /// </summary>
     public static BinXmlTemplateDefinition? ParseAt(ReadOnlySpan<byte> chunkData, uint offset, int chunkFileOffset)
     {
-        if (offset + 24 > (uint)chunkData.Length) return null;
+        // offset and DataSize come from the file; compare without adding them so values near uint.MaxValue can't wrap
+        if ((chunkData.Length < 24) || (offset > (uint)chunkData.Length - 24)) return null;
         TemplateHeaderLayout header = MemoryMarshal.Read<TemplateHeaderLayout>(chunkData[(int)offset..]);
 
         // Validate template body fits within chunk
-        if (offset + 24 + header.DataSize > (uint)chunkData.Length) return null;
+        if (header.DataSize > (uint)chunkData.Length - 24 - offset) return null;
 
         return new BinXmlTemplateDefinition(
             DefDataOffset: offset,
