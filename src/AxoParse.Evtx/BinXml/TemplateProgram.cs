@@ -326,20 +326,12 @@ internal sealed record TemplateProgram(TemplateOp[] Ops)
 internal interface ITemplateNameReader
 {
     /// <summary>
-    /// Reads an element or attribute name at <paramref name="pos"/>, advancing past its bytes.
+    /// Reads an element, attribute or entity name at <paramref name="pos"/>, advancing past its bytes.
     /// </summary>
     /// <param name="data">Template body.</param>
     /// <param name="pos">Position of the name field.</param>
     /// <returns>The name, or null if it can't be read (the template is treated as uncompilable).</returns>
     string? ReadName(ReadOnlySpan<byte> data, ref int pos);
-
-    /// <summary>
-    /// Reads an EntityRef token's name at <paramref name="pos"/>, advancing past its bytes.
-    /// </summary>
-    /// <param name="data">Template body.</param>
-    /// <param name="pos">Position of the name field (after the token byte).</param>
-    /// <returns>The name, or null if it can't be read.</returns>
-    string? ReadEntityName(ReadOnlySpan<byte> data, ref int pos);
 }
 
 /// <summary>
@@ -352,9 +344,6 @@ internal readonly struct WevtInlineNameReader : ITemplateNameReader
 
     /// <inheritdoc/>
     public string? ReadName(ReadOnlySpan<byte> data, ref int pos) => ReadInline(data, ref pos);
-
-    /// <inheritdoc/>
-    public string? ReadEntityName(ReadOnlySpan<byte> data, ref int pos) => ReadInline(data, ref pos);
 
     #endregion
 
@@ -412,14 +401,14 @@ internal static class TemplateProgramCompiler
         if ((body.Length >= 4) && (body[0] == BinXmlToken.FragmentHeader))
             pos += 4;
 
-        CompileContent(body, ref pos, names, ops, ref bail, 0);
+        CompileContent(body, ref pos, names, ops, ref bail, 0, inAttr: false);
         return bail ? null : new TemplateProgram(ops.ToArray());
     }
 
     /// <summary>
     /// Walks BinXml content tokens and records them as program ops. Stops at the end of data or a token that ends the
     /// enclosing construct (EOF, close/end element, next attribute). Sets <paramref name="bail"/> for nested template
-    /// instances and unsupported tokens.
+    /// instances, elements inside an attribute value, and unsupported tokens; the decoder then rejects the same input.
     /// </summary>
     /// <typeparam name="TNames">How names are stored in this body.</typeparam>
     /// <param name="data">BinXml byte stream (template body).</param>
@@ -428,8 +417,9 @@ internal static class TemplateProgramCompiler
     /// <param name="ops">Program being recorded.</param>
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
+    /// <param name="inAttr">True when walking an attribute value.</param>
     private static void CompileContent<TNames>(ReadOnlySpan<byte> data, ref int pos, TNames names,
-                                               List<TemplateOp> ops, ref bool bail, int depth)
+                                               List<TemplateOp> ops, ref bool bail, int depth, bool inAttr)
         where TNames : struct, ITemplateNameReader
     {
         while (pos < data.Length)
@@ -448,6 +438,11 @@ internal static class TemplateProgramCompiler
             switch (baseTok)
             {
                 case BinXmlToken.OpenStartElement:
+                    if (inAttr)
+                    {
+                        bail = true;
+                        return;
+                    }
                     CompileElement(data, ref pos, names, ops, ref bail, depth + 1);
                     break;
 
@@ -477,7 +472,7 @@ internal static class TemplateProgramCompiler
                 case BinXmlToken.EntityRef:
                 {
                     pos++;
-                    string? entityName = names.ReadEntityName(data, ref pos);
+                    string? entityName = names.ReadName(data, ref pos);
                     if (entityName == null)
                     {
                         bail = true;
@@ -559,7 +554,7 @@ internal static class TemplateProgramCompiler
                 }
 
                 ops.Add(new TemplateOp(TemplateOpKind.Attribute, attrName));
-                CompileContent(data, ref pos, names, ops, ref bail, depth + 1);
+                CompileContent(data, ref pos, names, ops, ref bail, depth + 1, inAttr: true);
                 if (bail) return;
                 ops.Add(new TemplateOp(TemplateOpKind.EndAttribute));
             }
@@ -571,7 +566,7 @@ internal static class TemplateProgramCompiler
         {
             pos++;
             ops.Add(new TemplateOp(TemplateOpKind.CloseStartElement));
-            CompileContent(data, ref pos, names, ops, ref bail, depth + 1);
+            CompileContent(data, ref pos, names, ops, ref bail, depth + 1, inAttr: false);
             if (bail) return;
             if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
@@ -638,14 +633,6 @@ internal sealed partial class BinXmlParser
             uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
             pos += 4;
             return TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase) ? parser.ReadName(nameOffset) : null;
-        }
-
-        /// <inheritdoc/>
-        public string? ReadEntityName(ReadOnlySpan<byte> data, ref int pos)
-        {
-            uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
-            pos += 4;
-            return parser.ReadName(nameOffset);
         }
     }
 
