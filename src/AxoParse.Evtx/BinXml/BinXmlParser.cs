@@ -24,8 +24,8 @@ internal sealed partial class BinXmlParser
     /// <param name="fileData">Complete EVTX file bytes.</param>
     /// <param name="chunkFileOffset">Absolute byte offset of the chunk within <paramref name="fileData"/>.</param>
     /// <param name="templates">Preloaded template definitions for this chunk, keyed by chunk-relative offset.</param>
-    /// <param name="compiledCache">Shared cross-chunk cache of compiled XML templates keyed by GUID. Null when using JSON output.</param>
-    /// <param name="compiledJsonCache">Shared cross-chunk cache of compiled JSON templates keyed by GUID. Null when using XML output.</param>
+    /// <param name="compiledCache">Cross-chunk cache of templates compiled for the output format this parser renders, keyed by
+    /// GUID, or null to decode every template body. Never share a cache between formats.</param>
     /// <param name="wevtCache">Provider templates used when a record's embedded template is missing or corrupt, or null.</param>
     /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt instead of failing it.</param>
     public BinXmlParser(
@@ -33,7 +33,6 @@ internal sealed partial class BinXmlParser
         int chunkFileOffset,
         Dictionary<uint, BinXmlTemplateDefinition> templates,
         Dictionary<Guid, CompiledTemplate?>? compiledCache,
-        Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache = null,
         WevtCache? wevtCache = null,
         bool salvage = false)
     {
@@ -44,7 +43,6 @@ internal sealed partial class BinXmlParser
         _chunkEnd = Math.Min(chunkFileOffset + EvtxChunk.ChunkSize, fileData.Length);
         _templates = templates;
         _compiledCache = compiledCache;
-        _compiledJsonCache = compiledJsonCache;
 
         // Common string offset table: 64 uint32 entries at chunk offset 128. Entries are no longer decoded up front,
         // but offsets 0xFFFFFFF8..0xFFFFFFFF wrap past the bounds check and made the eager read throw; keep that
@@ -205,16 +203,20 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Parses a TemplateInstance token (0x0C) into XML output.
-    /// Uses the compiled template cache for fast writing; a template that can't be compiled is decoded directly by
-    /// <see cref="DecodeContent{TWriter}"/>.
+    /// Renders a TemplateInstance token (0x0C): reads its header and substitution values, then writes the template
+    /// through its compiled form, compiling it on first use. A template that is missing, runs past its chunk or is
+    /// corrupt falls back to the provider template with the same GUID, as in the Rust evtx crate (a usable embedded
+    /// template is never replaced); a usable template that isn't compiled is decoded directly.
     /// </summary>
+    /// <typeparam name="TWriter">Output format.</typeparam>
     /// <param name="data">BinXml byte stream.</param>
     /// <param name="pos">Current read position; advanced past the entire template instance on return.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
-    /// <param name="vsb">String builder that receives the rendered XML output.</param>
-    private void ParseTemplateInstance(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                       ref ValueUtf8Builder vsb)
+    /// <param name="vsb">Output builder.</param>
+    /// <param name="escaped">JSON only: emit the instance JSON-string-escaped (embedded BinXml 0x21 context).</param>
+    private void WriteTemplateInstance<TWriter>(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+                                                ref ValueUtf8Builder vsb, bool escaped)
+        where TWriter : struct, IBinXmlWriter
     {
         // Peek at numValues to size the stackalloc buffers.
         // Header layout: 6 skip + 4 defDataOffset [+ optional inline] + 4 numValues.
@@ -240,47 +242,52 @@ internal sealed partial class BinXmlParser
         TemplateInstanceHeader hdr = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase,
             valueOffsets, valueSizes, valueTypes);
 
-        // Slice spans to actual value count
         ReadOnlySpan<int> offsets = valueOffsets.Slice(0, hdr.NumValues);
         ReadOnlySpan<int> sizes = valueSizes.Slice(0, hdr.NumValues);
         ReadOnlySpan<byte> types = valueTypes.Slice(0, hdr.NumValues);
 
         int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
-        bool embedded = (hdr.DataSize != 0) && (tplBodyFileOffset + (int)hdr.DataSize <= _chunkEnd);
+        bool embedded = (hdr.DataSize != 0) && ((uint)(tplBodyFileOffset + hdr.DataSize) <= (uint)_chunkEnd);
 
-        // Check compiled cache
         CompiledTemplate? compiled = null;
         bool compileFailed = false;
         if (embedded && (_compiledCache != null))
         {
             if (!_compiledCache.TryGetValue(hdr.TemplateGuid, out compiled))
             {
-                compiled = CompileProgram((int)hdr.DefDataOffset, (int)hdr.DataSize)?.LowerToXml();
+                compiled = CompileProgram((int)hdr.DefDataOffset, (int)hdr.DataSize) is { } program
+                    ? Lower<TWriter>(program)
+                    : null;
                 _compiledCache[hdr.TemplateGuid] = compiled;
             }
             compileFailed = compiled == null;
         }
 
-        // An embedded template that is missing, runs past its chunk, or won't compile falls back to the provider
-        // template with the same GUID, as in the Rust evtx crate; a usable embedded template is never replaced
-        if ((!embedded || compileFailed) && (_wevtCache?.GetXml(hdr.TemplateGuid) is { } provider))
+        if ((!embedded || compileFailed) && (_wevtCache?.Get(hdr.TemplateGuid, TWriter.Format) is { } provider))
+            compiled = provider;
+
+        if ((compiled != null) && (compiled != CompiledTemplate.DecodeDirectly))
         {
-            WriteCompiled(provider, offsets, sizes, types, binxmlChunkBase, ref vsb);
+            WriteCompiled<TWriter>(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb, escaped);
             return;
         }
 
         if (!embedded) return;
 
-        if (compiled != null)
+        // Not compiled: decode the template body directly with this instance's substitution values
+        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize);
+        SubstitutionValues values = new(offsets, sizes, types);
+        int tplChunkBase = (int)hdr.DefDataOffset + 24;
+        if (!escaped)
         {
-            WriteCompiled(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb);
+            DecodeTemplateBody<TWriter>(tplBody, values, tplChunkBase, ref vsb);
+            return;
         }
-        else
-        {
-            // Not compilable: decode the template body directly with this instance's substitution values
-            DecodeTemplateBody<XmlWriter>(_fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize),
-                new SubstitutionValues(offsets, sizes, types), (int)hdr.DefDataOffset + 24, ref vsb);
-        }
+
+        ValueUtf8Builder escapeVsb = new(stackalloc byte[512]);
+        DecodeTemplateBody<TWriter>(tplBody, values, tplChunkBase, ref escapeVsb);
+        BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, escapeVsb.AsSpan());
+        escapeVsb.Dispose();
     }
 
     /// <summary>
@@ -413,251 +420,30 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Writes an array-typed value (type code has bit 0x80 set) as comma-separated XML text.
-    /// String arrays (base type 0x01) are null-terminated UTF-16LE concatenated;
-    /// fixed-size types are rendered by splitting on element size.
+    /// Writes a compiled template: its static parts interleaved with this instance's formatted substitution values.
+    /// A slot whose value is missing (index past the instance's values) or optional and empty writes nothing,
+    /// including its conditional markup.
     /// </summary>
-    /// <param name="valueBytes">Raw value bytes containing the array data.</param>
-    /// <param name="baseType">Base BinXml value type (with array flag 0x80 masked off).</param>
-    /// <param name="fileOffset">Absolute byte offset of the value data within <see cref="_fileData"/>.</param>
-    /// <param name="binxmlChunkBase">Chunk-relative base offset for nested value rendering.</param>
-    /// <param name="vsb">String builder that receives the comma-separated rendered elements.</param>
-    private void WriteArray(ReadOnlySpan<byte> valueBytes, byte baseType, int fileOffset,
-                            int binxmlChunkBase, ref ValueUtf8Builder vsb)
-    {
-        // String arrays: null-terminated UTF-16LE strings concatenated
-        if (baseType == BinXmlValueType.String)
-        {
-            ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(valueBytes);
-            bool first = true;
-            int start = 0;
-            for (int i = 0; i <= chars.Length; i++)
-            {
-                if ((i == chars.Length) || (chars[i] == '\0'))
-                {
-                    if (i > start)
-                    {
-                        if (!first) vsb.Append(", "u8);
-                        BinXmlValueFormatter.AppendXmlEscaped(ref vsb, chars.Slice(start, i - start));
-                        first = false;
-                    }
-
-                    start = i + 1;
-                }
-            }
-
-            return;
-        }
-
-        // Fixed-size array types
-        int elemSize = BinXmlValueFormatter.GetElementSize(baseType);
-        if ((elemSize > 0) && (valueBytes.Length >= elemSize))
-        {
-            bool first = true;
-            for (int i = 0; i + elemSize <= valueBytes.Length; i += elemSize)
-            {
-                if (!first) vsb.Append(", "u8);
-                WriteBinXmlValue(elemSize, baseType, fileOffset + i, binxmlChunkBase, ref vsb);
-                first = false;
-            }
-
-            return;
-        }
-
-        // Fallback: hex
-        BinXmlValueFormatter.AppendHex(ref vsb, valueBytes);
-    }
-
-    /// <summary>
-    /// Writes a single BinXml substitution value as XML text.
-    /// Dispatches on value type to produce the appropriate string representation
-    /// (numeric, GUID, SID, FILETIME, hex, embedded BinXml, etc.).
-    /// </summary>
-    /// <param name="size">Byte size of the value data.</param>
-    /// <param name="valueType">BinXml value type code (see <see cref="BinXmlValueType"/>). Bit 0x80 indicates an array.</param>
-    /// <param name="fileOffset">Absolute byte offset of the value data within <see cref="_fileData"/>.</param>
-    /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml (type 0x21) resolution.</param>
-    /// <param name="vsb">String builder that receives the rendered text.</param>
-    private void WriteBinXmlValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueUtf8Builder vsb)
-    {
-        if (size == 0) return;
-        ReadOnlySpan<byte> valueBytes = ChunkBytes(fileOffset, size);
-
-        // Array flag
-        if ((valueType & BinXmlValueType.ArrayFlag) != 0)
-        {
-            WriteArray(valueBytes, (byte)(valueType & 0x7F), fileOffset, binxmlChunkBase, ref vsb);
-            return;
-        }
-
-        switch (valueType)
-        {
-            case BinXmlValueType.Null:
-                break;
-
-            case BinXmlValueType.String:
-            {
-                ReadOnlySpan<char> chars = MemoryMarshal.Cast<byte, char>(valueBytes);
-                // Trim trailing null
-                if ((chars.Length > 0) && (chars[^1] == '\0'))
-                    chars = chars[..^1];
-                BinXmlValueFormatter.AppendXmlEscaped(ref vsb, chars);
-                break;
-            }
-
-            case BinXmlValueType.AnsiString:
-            {
-                for (int i = 0; i < valueBytes.Length; i++)
-                {
-                    byte b = valueBytes[i];
-                    if (b == 0) break;
-                    if (b == '&') vsb.Append("&amp;"u8);
-                    else if (b == '<') vsb.Append("&lt;"u8);
-                    else if (b == '>') vsb.Append("&gt;"u8);
-                    else if (b == '"') vsb.Append("&quot;"u8);
-                    else if (b == '\'') vsb.Append("&apos;"u8);
-                    else if (b < 0x80) vsb.Append(b);
-                    else BinXmlValueFormatter.AppendLatin1(ref vsb, (char)b);
-                }
-
-                break;
-            }
-
-            case BinXmlValueType.Int8:
-                vsb.AppendFormatted((sbyte)valueBytes[0]);
-                break;
-
-            case BinXmlValueType.UInt8:
-                vsb.AppendFormatted(valueBytes[0]);
-                break;
-
-            case BinXmlValueType.Int16:
-                vsb.AppendFormatted(MemoryMarshal.Read<short>(valueBytes));
-                break;
-
-            case BinXmlValueType.UInt16:
-                vsb.AppendFormatted(MemoryMarshal.Read<ushort>(valueBytes));
-                break;
-
-            case BinXmlValueType.Int32:
-                vsb.AppendFormatted(MemoryMarshal.Read<int>(valueBytes));
-                break;
-
-            case BinXmlValueType.UInt32:
-                vsb.AppendFormatted(MemoryMarshal.Read<uint>(valueBytes));
-                break;
-
-            case BinXmlValueType.Int64:
-                vsb.AppendFormatted(MemoryMarshal.Read<long>(valueBytes));
-                break;
-
-            case BinXmlValueType.UInt64:
-                vsb.AppendFormatted(MemoryMarshal.Read<ulong>(valueBytes));
-                break;
-
-            case BinXmlValueType.Float:
-                vsb.AppendFormatted(MemoryMarshal.Read<float>(valueBytes));
-                break;
-
-            case BinXmlValueType.Double:
-                vsb.AppendFormatted(MemoryMarshal.Read<double>(valueBytes));
-                break;
-
-            case BinXmlValueType.Bool:
-                vsb.Append(MemoryMarshal.Read<uint>(valueBytes) != 0 ? "true"u8 : "false"u8);
-                break;
-
-            case BinXmlValueType.Binary:
-                BinXmlValueFormatter.AppendHex(ref vsb, valueBytes);
-                break;
-
-            case BinXmlValueType.Guid:
-            {
-                if (size < 16) break;
-                BinXmlValueFormatter.FormatGuid(valueBytes, ref vsb);
-                break;
-            }
-
-            case BinXmlValueType.SizeT:
-            {
-                vsb.Append("0x"u8);
-                if (size == 8)
-                    BinXmlValueFormatter.AppendHexUInt64Min(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
-                else
-                    BinXmlValueFormatter.AppendHexUInt32Min(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
-                break;
-            }
-
-            case BinXmlValueType.FileTime:
-            {
-                if (size < 8) break;
-                BinXmlValueFormatter.AppendFileTime(valueBytes, ref vsb);
-                break;
-            }
-
-            case BinXmlValueType.SystemTime:
-            {
-                if (size < 16) break;
-                BinXmlValueFormatter.AppendSystemTime(valueBytes, ref vsb);
-                break;
-            }
-
-            case BinXmlValueType.Sid:
-            {
-                if (size < 8) break;
-                BinXmlValueFormatter.AppendSid(valueBytes, size, ref vsb);
-                break;
-            }
-
-            case BinXmlValueType.HexInt32:
-                vsb.Append("0x"u8);
-                BinXmlValueFormatter.AppendHexUInt32Min(ref vsb, MemoryMarshal.Read<uint>(valueBytes));
-                break;
-
-            case BinXmlValueType.HexInt64:
-                vsb.Append("0x"u8);
-                BinXmlValueFormatter.AppendHexUInt64Min(ref vsb, MemoryMarshal.Read<ulong>(valueBytes));
-                break;
-
-            case BinXmlValueType.BinXml:
-            {
-                int embeddedChunkBase = fileOffset - _chunkFileOffset;
-                int embeddedPos = 0;
-                DecodeTopLevel<XmlWriter>(valueBytes, ref embeddedPos, embeddedChunkBase, ref vsb, recordLevel: false,
-                    escaped: false);
-                break;
-            }
-
-            case BinXmlValueType.EvtHandle:
-            case BinXmlValueType.EvtXml:
-            default:
-                BinXmlValueFormatter.AppendHex(ref vsb, valueBytes);
-                break;
-        }
-    }
-
-    /// <summary>
-    /// Writes a compiled template by filling in its static XML parts with formatted substitution values.
-    /// </summary>
-    /// <param name="compiled">Pre-compiled template containing static parts and substitution metadata.</param>
+    /// <typeparam name="TWriter">Output format the template was compiled for.</typeparam>
+    /// <param name="compiled">Compiled template.</param>
     /// <param name="valueOffsets">File offsets of each substitution value.</param>
     /// <param name="valueSizes">Byte sizes of each substitution value.</param>
     /// <param name="valueTypes">BinXml value type codes for each substitution.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
-    /// <param name="vsb">String builder that receives the rendered XML output.</param>
-    private void WriteCompiled(CompiledTemplate compiled,
-                               scoped ReadOnlySpan<int> valueOffsets, scoped ReadOnlySpan<int> valueSizes,
-                               scoped ReadOnlySpan<byte> valueTypes,
-                               int binxmlChunkBase, ref ValueUtf8Builder vsb)
+    /// <param name="vsb">Output builder.</param>
+    /// <param name="escaped">JSON only: write the escaped parts and escape values twice (embedded BinXml context).</param>
+    private void WriteCompiled<TWriter>(CompiledTemplate compiled,
+                                        scoped ReadOnlySpan<int> valueOffsets, scoped ReadOnlySpan<int> valueSizes,
+                                        scoped ReadOnlySpan<byte> valueTypes,
+                                        int binxmlChunkBase, ref ValueUtf8Builder vsb, bool escaped)
+        where TWriter : struct, IBinXmlWriter
     {
-        string[] parts = compiled.Parts;
-        byte[]?[] utf8Parts = compiled.Utf8Parts;
+        byte[][] parts = escaped ? compiled.EscapedParts : compiled.Parts;
         SubSlot[] slots = compiled.Slots;
-        int slotCount = slots.Length;
         int valCount = valueOffsets.Length;
 
-        CompiledTemplate.AppendPart(ref vsb, utf8Parts[0], parts[0]);
-        for (int i = 0; i < slotCount; i++)
+        vsb.Append(parts[0]);
+        for (int i = 0; i < slots.Length; i++)
         {
             ref readonly SubSlot slot = ref slots[i];
             int subId = slot.SubId;
@@ -667,15 +453,15 @@ internal sealed partial class BinXmlParser
                 int valSize = valueSizes[subId];
                 if (!slot.IsOptional || ((valType != BinXmlValueType.Null) && (valSize > 0)))
                 {
-                    if (slot.AttrPrefix != null)
-                        CompiledTemplate.AppendPart(ref vsb, slot.Utf8AttrPrefix, slot.AttrPrefix);
-                    WriteBinXmlValue(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb);
-                    if (slot.AttrSuffix != null)
-                        CompiledTemplate.AppendPart(ref vsb, slot.Utf8AttrSuffix, slot.AttrSuffix);
+                    if (slot.Prefix != null)
+                        vsb.Append(slot.Prefix);
+                    WriteValue<TWriter>(valSize, valType, valueOffsets[subId], binxmlChunkBase, ref vsb, escaped);
+                    if (slot.Suffix != null)
+                        vsb.Append(slot.Suffix);
                 }
             }
 
-            CompiledTemplate.AppendPart(ref vsb, utf8Parts[i + 1], parts[i + 1]);
+            vsb.Append(parts[i + 1]);
         }
     }
 
@@ -710,16 +496,11 @@ internal sealed partial class BinXmlParser
     private readonly int _chunkFileOffset;
 
     /// <summary>
-    /// Process-wide cache of compiled XML templates keyed by template GUID.
-    /// Shared across chunks to avoid recompiling identical templates. Null when using JSON output.
+    /// Cache of templates compiled for this parser's output format, keyed by template GUID and shared across the chunks
+    /// a worker renders, or null to decode every template body. A null entry marks a corrupt template;
+    /// <see cref="CompiledTemplate.DecodeDirectly"/> a usable one that is decoded rather than compiled.
     /// </summary>
     private readonly Dictionary<Guid, CompiledTemplate?>? _compiledCache;
-
-    /// <summary>
-    /// Process-wide cache of compiled JSON templates keyed by template GUID.
-    /// Shared across chunks to avoid recompiling identical templates. Null when using XML output.
-    /// </summary>
-    private readonly Dictionary<Guid, CompiledJsonTemplate?>? _compiledJsonCache;
 
     /// <summary>
     /// Raw EVTX file bytes shared across all chunks and records.

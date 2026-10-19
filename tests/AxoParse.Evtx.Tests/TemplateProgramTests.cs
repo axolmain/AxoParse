@@ -1,12 +1,15 @@
+using System.Buffers.Binary;
+using System.Text;
 using AxoParse.Evtx.BinXml;
 
 namespace AxoParse.Evtx.Tests;
 
 /// <summary>
-/// Exact-output tests for <see cref="TemplateProgram"/> lowering on hand-built programs covering constructs the sample
-/// templates rarely or never contain (character and entity references, CDATA, optional attributes, an empty attribute
-/// list, an element inside an attribute value). The expected strings are what the former per-format compilers
-/// produced; the golden output test covers the common shapes on real data.
+/// Exact-output tests for compiling a <see cref="TemplateProgram"/> (<see cref="BinXmlParser.CompileXml"/>,
+/// <see cref="BinXmlParser.CompileJson"/>) on hand-built programs covering constructs the sample templates rarely or
+/// never contain (character and entity references, CDATA, optional attributes, an empty attribute list). The expected
+/// strings are what the former per-format lowerings produced; the golden output test covers the common shapes on real
+/// data, and <see cref="CompiledDecoderParityTests"/> checks compiled output against the decoder.
 /// </summary>
 public class TemplateProgramTests
 {
@@ -18,7 +21,7 @@ public class TemplateProgramTests
     /// verbatim in XML and escaped as a string item in JSON.
     /// </summary>
     [Fact]
-    public void LowersTextCharRefEntityRefAndCData()
+    public void CompilesTextCharRefEntityRefAndCData()
     {
         TemplateProgram program = new([
             new(TemplateOpKind.StartElement, "Data"), new(TemplateOpKind.CloseStartElement),
@@ -26,20 +29,22 @@ public class TemplateProgramTests
             new(TemplateOpKind.EntityRef, "amp"), new(TemplateOpKind.EntityRef, "custom"),
             new(TemplateOpKind.CData, "x]y\"z"), new(TemplateOpKind.EndElement, "Data")]);
 
-        Assert.Equal(["<Data>a&lt;b&amp;&quot;c&quot;&#9;&amp;&custom;<![CDATA[x]y\"z]]></Data>"], program.LowerToXml().Parts);
+        Assert.Equal(["<Data>a&lt;b&amp;&quot;c&quot;&#9;&amp;&custom;<![CDATA[x]y\"z]]></Data>"],
+            Parts(BinXmlParser.CompileXml(program)));
         Assert.Equal(["{\"#name\":\"Data\",\"#content\":[\"a<b&\\\"c\\\"\",\"\\t\",\"&\",\"&custom;\",\"x]y\\\"z\"]}"],
-            program.LowerToJson().Parts);
+            Parts(BinXmlParser.CompileJson(program)));
     }
 
     /// <summary>
-    /// Verifies attribute lowering: an optional substitution that is an attribute's whole value moves the
-    /// <c> Name="</c> / <c>"</c> markup into its XML slot (so an empty value drops the attribute), a normal one stays
-    /// in the parts, and a present-but-empty attribute list still emits <c>"#attrs":{}</c> in JSON.
+    /// Verifies attributes: an optional substitution that is an attribute's whole value moves the <c> Name="</c> /
+    /// <c>"</c> markup into its XML slot (so an empty value drops the attribute), a normal one stays in the parts, and a
+    /// present-but-empty attribute list still emits <c>"#attrs":{}</c> in JSON.
     /// </summary>
     [Fact]
-    public void LowersAttributesOptionalSlotsAndEmptyAttributeList()
+    public void CompilesAttributesOptionalSlotsAndEmptyAttributeList()
     {
         TemplateProgram program = new([
+            new(TemplateOpKind.StartElement, "Event"), new(TemplateOpKind.CloseStartElement),
             new(TemplateOpKind.StartElement, "Provider"), new(TemplateOpKind.BeginAttributes),
             new(TemplateOpKind.Attribute, "Name"), new(TemplateOpKind.Substitution, SubId: 0, IsOptional: true),
             new(TemplateOpKind.EndAttribute),
@@ -47,26 +52,27 @@ public class TemplateProgramTests
             new(TemplateOpKind.EndAttribute),
             new(TemplateOpKind.EndAttributes), new(TemplateOpKind.CloseEmptyElement, "Provider"),
             new(TemplateOpKind.StartElement, "Empty"), new(TemplateOpKind.BeginAttributes), new(TemplateOpKind.EndAttributes),
-            new(TemplateOpKind.CloseEmptyElement, "Empty")]);
+            new(TemplateOpKind.CloseEmptyElement, "Empty"), new(TemplateOpKind.EndElement, "Event")]);
 
-        CompiledTemplate xml = program.LowerToXml();
-        Assert.Equal(["<Provider", " Guid=\"{", "\"></Provider><Empty></Empty>"], xml.Parts);
-        Assert.Equal((0, true, " Name=\"", "\""), (xml.Slots[0].SubId, xml.Slots[0].IsOptional, xml.Slots[0].AttrPrefix, xml.Slots[0].AttrSuffix));
-        Assert.Equal((1, false, null, null), (xml.Slots[1].SubId, xml.Slots[1].IsOptional, xml.Slots[1].AttrPrefix, xml.Slots[1].AttrSuffix));
+        CompiledTemplate xml = BinXmlParser.CompileXml(program);
+        Assert.Equal(["<Event><Provider", " Guid=\"{", "\"></Provider><Empty></Empty></Event>"], Parts(xml));
+        Assert.Equal((0, true, " Name=\"", "\""), Slot(xml.Slots[0]));
+        Assert.Equal((1, false, null, null), Slot(xml.Slots[1]));
 
-        CompiledJsonTemplate json = program.LowerToJson();
-        Assert.Equal(["{\"#name\":\"Provider\",\"#attrs\":{\"Name\":\"", "\",\"Guid\":\"{", "\"}},{\"#name\":\"Empty\",\"#attrs\":{}}"],
-            json.Parts);
-        Assert.Equal([true, true], json.InAttrValue);
-        Assert.Equal([true, false], json.IsOptional);
+        CompiledTemplate json = BinXmlParser.CompileJson(program);
+        Assert.Equal(["{\"#name\":\"Event\",\"#content\":[{\"#name\":\"Provider\",\"#attrs\":{\"Name\":\"", "\",\"Guid\":\"{",
+                      "\"}},{\"#name\":\"Empty\",\"#attrs\":{}}]}"],
+            Parts(json));
+        Assert.Equal((0, true, null, null), Slot(json.Slots[0]));
+        Assert.Equal((1, false, null, null), Slot(json.Slots[1]));
     }
 
     /// <summary>
-    /// Verifies content lowering: JSON content items are comma-separated, substitutions in content are quoted string
-    /// items, and a nested element starts its own comma state.
+    /// Verifies content: JSON content items are comma-separated, substitutions in content are quoted string items, and
+    /// a nested element starts its own comma state.
     /// </summary>
     [Fact]
-    public void LowersContentItemsAndNestedElements()
+    public void CompilesContentItemsAndNestedElements()
     {
         TemplateProgram program = new([
             new(TemplateOpKind.StartElement, "Event"), new(TemplateOpKind.CloseStartElement),
@@ -75,35 +81,88 @@ public class TemplateProgramTests
             new(TemplateOpKind.Substitution, SubId: 3, IsOptional: true), new(TemplateOpKind.EndElement, "Child"),
             new(TemplateOpKind.EndElement, "Event")]);
 
-        CompiledTemplate xml = program.LowerToXml();
-        Assert.Equal(["<Event>", "t<Child>", "</Child></Event>"], xml.Parts);
+        CompiledTemplate xml = BinXmlParser.CompileXml(program);
+        Assert.Equal(["<Event>", "t<Child>", "</Child></Event>"], Parts(xml));
         Assert.Equal([2, 3], xml.Slots.Select(s => s.SubId));
 
-        CompiledJsonTemplate json = program.LowerToJson();
+        CompiledTemplate json = BinXmlParser.CompileJson(program);
         Assert.Equal(["{\"#name\":\"Event\",\"#content\":[\"", "\",\"t\",{\"#name\":\"Child\",\"#content\":[\"", "\"]}]}"],
-            json.Parts);
-        Assert.Equal([false, false], json.InAttrValue);
-        Assert.Equal([false, true], json.IsOptional);
+            Parts(json));
+        Assert.Equal([false, true], json.Slots.Select(s => s.IsOptional));
     }
 
     /// <summary>
-    /// Verifies that an element inside an attribute value renders its markup inline (no JSON comma) and that its own
-    /// content is element content again, not attribute-value context.
+    /// Verifies that a program whose text contains a surrogate code unit isn't split into parts (a surrogate at a part's
+    /// edge could pair with a neighbouring value): it compiles to <see cref="CompiledTemplate.DecodeDirectly"/> in both
+    /// formats.
     /// </summary>
     [Fact]
-    public void LowersElementInsideAttributeValue()
+    public void ProgramWithSurrogatesIsDecodedDirectly()
     {
         TemplateProgram program = new([
-            new(TemplateOpKind.StartElement, "A"), new(TemplateOpKind.BeginAttributes),
-            new(TemplateOpKind.Attribute, "x"), new(TemplateOpKind.StartElement, "B"), new(TemplateOpKind.CloseStartElement),
-            new(TemplateOpKind.Substitution, SubId: 0), new(TemplateOpKind.EndElement, "B"), new(TemplateOpKind.Substitution, SubId: 1),
-            new(TemplateOpKind.EndAttribute), new(TemplateOpKind.EndAttributes), new(TemplateOpKind.CloseEmptyElement, "A")]);
+            new(TemplateOpKind.StartElement, "Data"), new(TemplateOpKind.CloseStartElement),
+            new(TemplateOpKind.Text, "x\uD83D"), new(TemplateOpKind.Substitution, SubId: 0),
+            new(TemplateOpKind.EndElement, "Data")]);
 
-        Assert.Equal(["<A x=\"<B>", "</B>", "\"></A>"], program.LowerToXml().Parts);
+        Assert.Same(CompiledTemplate.DecodeDirectly, BinXmlParser.CompileXml(program));
+        Assert.Same(CompiledTemplate.DecodeDirectly, BinXmlParser.CompileJson(program));
+    }
 
-        CompiledJsonTemplate json = program.LowerToJson();
-        Assert.Equal(["{\"#name\":\"A\",\"#attrs\":{\"x\":\"{\"#name\":\"B\",\"#content\":[\"", "\"]}", "\"}}"], json.Parts);
-        Assert.Equal([false, true], json.InAttrValue);
+    /// <summary>
+    /// Verifies that the compiler rejects an element inside an attribute value, as the decoder does, so a template
+    /// holding one falls back to the decoder and fails there rather than rendering differently per path. Body (WEVT
+    /// inline names): fragment header; OpenStartElement 0x41 (with attributes) + dependency ID + data size + name "A" +
+    /// attribute list size; Attribute 0x06 + name "x"; then OpenStartElement 0x01 for "B" inside the value.
+    /// </summary>
+    [Fact]
+    public void CompilerRejectsElementInsideAttributeValue()
+    {
+        List<byte> body = [0x0F, 0x01, 0x01, 0x00];
+        body.AddRange([0x41, 0xFF, 0xFF, 0, 0, 0, 0]);
+        body.AddRange(WevtInlineName("A"));
+        body.AddRange([0x40, 0, 0, 0]);
+        body.Add(0x06);
+        body.AddRange(WevtInlineName("x"));
+        body.AddRange([0x01, 0xFF, 0xFF, 0, 0, 0, 0]);
+        body.AddRange(WevtInlineName("B"));
+        body.AddRange([0x03, 0x02, 0x04, 0x00]);
+
+        Assert.Null(TemplateProgramCompiler.Compile(body.ToArray(), default(WevtInlineNameReader)));
+    }
+
+    #endregion
+
+    #region Non-Public Methods
+
+    /// <summary>
+    /// A compiled template's static parts as strings.
+    /// </summary>
+    /// <param name="compiled">Compiled template.</param>
+    /// <returns>The parts decoded from UTF-8.</returns>
+    private static string[] Parts(CompiledTemplate compiled) =>
+        compiled.Parts.Select(p => Encoding.UTF8.GetString(p)).ToArray();
+
+    /// <summary>
+    /// A slot as a comparable tuple, with its conditional markup decoded from UTF-8.
+    /// </summary>
+    /// <param name="slot">Substitution slot.</param>
+    /// <returns>Substitution index, optional flag, prefix and suffix.</returns>
+    private static (int, bool, string?, string?) Slot(SubSlot slot) =>
+        (slot.SubId, slot.IsOptional,
+         slot.Prefix == null ? null : Encoding.UTF8.GetString(slot.Prefix),
+         slot.Suffix == null ? null : Encoding.UTF8.GetString(slot.Suffix));
+
+    /// <summary>
+    /// Encodes a WEVT inline name: hash (2, unused by the parser) + character count (2) + UTF-16LE + NUL (2).
+    /// </summary>
+    /// <param name="name">Name to encode.</param>
+    /// <returns>The encoded bytes.</returns>
+    private static byte[] WevtInlineName(string name)
+    {
+        byte[] bytes = new byte[4 + (name.Length * 2) + 2];
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(2), (ushort)name.Length);
+        Encoding.Unicode.GetBytes(name, bytes.AsSpan(4));
+        return bytes;
     }
 
     #endregion

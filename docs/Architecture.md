@@ -53,9 +53,14 @@ BinXml templates appear once per chunk but are referenced by many records. On fi
 
 Compiled templates are cached by GUID in a per-thread dictionary, so each worker compiles a template the first time it meets it and reuses it for every later chunk on that thread. Subsequent records skip all template parsing and just interleave static parts with formatted substitution values.
 
-Every template, whether embedded in a chunk or a provider template from `WevtCache`, goes through one compiler (`TemplateProgramCompiler`). It produces a format-neutral `TemplateProgram`, a flat list of element, attribute, text and substitution ops, which the XML and JSON writers lower into their compiled forms. The two template sources differ only in how names are stored: name-table offsets versus WEVT inline names.
+Every template, whether embedded in a chunk or a provider template from `WevtCache`, goes through one compiler (`TemplateProgramCompiler`). It produces a format-neutral `TemplateProgram`, a flat list of element, attribute, text and substitution ops. The two template sources differ only in how names are stored: name-table offsets versus WEVT inline names.
 
-Anything that isn't a compiled template goes through one decoder (`BinXmlDecoder.cs`): a record's own token stream, embedded BinXml values (type 0x21) and templates that don't compile. It walks the tokens once and calls a format writer (`XmlWriter`, `JsonWriter`; value types, so each format gets its own specialised copy), which follows the same output rules as the compiled templates. The decoder is strict: corrupt structure fails the record (see below).
+Output is produced by one format writer per format (`XmlWriter`, `JsonWriter` in `BinXmlDecoder.cs`; value types, so each format gets its own specialised copy of the code that drives them). Two things drive the writers:
+
+- **The decoder** walks BinXml tokens directly: a record's own token stream, embedded BinXml values (type 0x21), and template bodies that aren't compiled. It is strict: corrupt structure fails the record (see below).
+- **Template compilation** replays a `TemplateProgram` through the same writer with every value left out; the writer's output between values becomes the template's static UTF-8 parts. So compiled and decoded output follow one set of rules by construction, and `CompiledDecoderParityTests` checks it on every sample and seeded mutations. A template whose names or text contain surrogate code units isn't split into parts (a surrogate at a part's edge could pair with a neighbouring value) and is decoded instead.
+
+Substitution values are formatted by one type switch (`BinXmlValueWriter.cs`); the writer supplies only string escaping, hex-integer padding, and how embedded BinXml is rendered.
 
 `WevtCache` holds templates extracted from Windows PE binaries (WEVT_TEMPLATE resources), keyed by GUID. It's a fallback: the writers use a provider template only when a record's embedded template is missing (size 0), runs past its chunk, or doesn't compile. A usable embedded template is never replaced.
 
@@ -72,10 +77,10 @@ Anything that isn't a compiled template goes through one decoder (`BinXmlDecoder
 | `EvtxParser` | Entry point. Orchestrates parsing, holds results. |
 | `EvtxChunk` | Self-contained 64KB chunk with header, records, and one UTF-8 buffer of rendered output. |
 | `BinXmlParser` | Converts BinXml token streams to UTF-8 XML or JSON. One instance per chunk. |
-| `CompiledTemplate` / `CompiledJsonTemplate` | Pre-compiled template: UTF-8 static parts + substitution slots. |
+| `CompiledTemplate` | A template compiled for one format: UTF-8 static parts + substitution slots (one type and one executor for XML and JSON). |
 | `ValueUtf8Builder` | Stack-first, `ArrayPool`-backed UTF-8 builder all rendering goes through. Transcodes UTF-16 text from the file as it's appended, and gives the same bytes as encoding the whole record once (unpaired surrogates become U+FFFD). |
 | `BinXmlValueFormatter` | Formats substitution values (FILETIME, GUID, SID, hex, numbers) straight to UTF-8 with the invariant culture. |
-| `TemplateProgram` | Format-neutral compiled template (ops), lowered once per format into `CompiledTemplate` / `CompiledJsonTemplate`. |
+| `TemplateProgram` | Format-neutral compiled template (ops), turned into a `CompiledTemplate` per format by replaying it through that format's writer. |
 | `WevtCache` | Provider templates from Windows PE binaries, used as a fallback for missing or corrupt embedded templates. |
 
 ## References

@@ -2,164 +2,118 @@ namespace AxoParse.Evtx.BinXml;
 
 /// <summary>
 /// Per-substitution slot metadata packed into a single struct for cache-friendly access.
-/// One array access per slot instead of four parallel array accesses.
 /// </summary>
-internal readonly struct SubSlot
+/// <param name="subId">Substitution index into the template instance's values.</param>
+/// <param name="isOptional">Whether this is an optional substitution (0x0E), skipped when its value is null or empty.</param>
+/// <param name="prefix">Markup written before the value only when the value is written, or null.</param>
+/// <param name="suffix">Markup written after the value only when the value is written, or null.</param>
+internal readonly struct SubSlot(int subId, bool isOptional, byte[]? prefix, byte[]? suffix)
 {
     /// <summary>
-    /// Substitution slot index into the value arrays.
+    /// Substitution index into the template instance's values.
     /// </summary>
-    public readonly int SubId;
+    public readonly int SubId = subId;
 
     /// <summary>
     /// Whether this substitution is optional (0x0E OptionalSubstitution).
     /// Optional substitutions are skipped when the value is null or zero-length.
     /// </summary>
-    public readonly bool IsOptional;
+    public readonly bool IsOptional = isOptional;
 
     /// <summary>
-    /// Attribute prefix (e.g., <c>" Name=\""</c>) emitted only when the optional substitution
-    /// produces a non-empty value. Null means no conditional prefix.
+    /// UTF-8 markup written before the value only when the value is written: in XML, the <c> Name="</c> of an
+    /// attribute whose whole value is this optional substitution, so the attribute is omitted when the value is empty.
+    /// Null when the slot has no conditional markup.
     /// </summary>
-    public readonly string? AttrPrefix;
+    public readonly byte[]? Prefix = prefix;
 
     /// <summary>
-    /// Attribute suffix (e.g., <c>"\""</c>) emitted only when the optional substitution
-    /// produces a non-empty value. Null means no conditional suffix.
+    /// UTF-8 markup written after the value only when the value is written (the attribute's closing quote), or null.
     /// </summary>
-    public readonly string? AttrSuffix;
-
-    /// <summary>
-    /// Creates a substitution slot descriptor.
-    /// </summary>
-    /// <param name="subId">Substitution index.</param>
-    /// <param name="isOptional">Whether the substitution is optional.</param>
-    /// <param name="attrPrefix">Conditional attribute prefix, or null.</param>
-    /// <param name="attrSuffix">Conditional attribute suffix, or null.</param>
-    public SubSlot(int subId, bool isOptional, string? attrPrefix = null, string? attrSuffix = null)
-    {
-        SubId = subId;
-        IsOptional = isOptional;
-        AttrPrefix = attrPrefix;
-        AttrSuffix = attrSuffix;
-        Utf8AttrPrefix = CompiledTemplate.EncodePart(attrPrefix);
-        Utf8AttrSuffix = CompiledTemplate.EncodePart(attrSuffix);
-    }
-
-    /// <summary>
-    /// <see cref="AttrPrefix"/> pre-encoded as UTF-8, or null when absent or not safely pre-encodable.
-    /// </summary>
-    public readonly byte[]? Utf8AttrPrefix;
-
-    /// <summary>
-    /// <see cref="AttrSuffix"/> pre-encoded as UTF-8, or null when absent or not safely pre-encodable.
-    /// </summary>
-    public readonly byte[]? Utf8AttrSuffix;
+    public readonly byte[]? Suffix = suffix;
 }
 
 /// <summary>
-/// Pre-compiled BinXml template: string parts interleaved with substitution slots.
-/// parts[0] + slots[0] + parts[1] + slots[1] + ... + parts[N]
-/// Fields are public readonly for zero-overhead access in hot loops.
+/// A template compiled for one output format: the static UTF-8 output between its substitutions, and one slot per
+/// substitution. It is the output the format's writer produces for the template's
+/// <see cref="TemplateProgram"/> with every value left out (see <see cref="BinXmlParser.CompileXml"/> and
+/// <see cref="BinXmlParser.CompileJson"/>), so rendering a record only interleaves these parts with its formatted values.
 /// </summary>
 internal sealed class CompiledTemplate
 {
-    /// <summary>
-    /// Static XML string fragments interleaved with substitution slots.
-    /// Parts[0] precedes the first substitution, Parts[N] follows the last.
-    /// </summary>
-    public readonly string[] Parts;
+    #region Fields
 
     /// <summary>
-    /// Packed per-substitution metadata (subId, isOptional, attrPrefix, attrSuffix).
+    /// Static UTF-8 output; part <c>i</c> precedes slot <c>i</c>, and the last part follows the last slot.
+    /// </summary>
+    public readonly byte[][] Parts;
+
+    /// <summary>
+    /// One slot per substitution, in output order.
     /// </summary>
     public readonly SubSlot[] Slots;
 
+    #endregion
+
+    #region Constructors And Destructors
+
     /// <summary>
-    /// Creates a compiled template from parts and packed substitution slots.
+    /// Creates a compiled template.
     /// </summary>
-    /// <param name="parts">Static XML string fragments.</param>
-    /// <param name="slots">Packed substitution slot descriptors.</param>
-    public CompiledTemplate(string[] parts, SubSlot[] slots)
+    /// <param name="parts">Static UTF-8 parts; one more than <paramref name="slots"/>.</param>
+    /// <param name="slots">Substitution slots; slot <c>i</c> sits between parts <c>i</c> and <c>i + 1</c>.</param>
+    public CompiledTemplate(byte[][] parts, SubSlot[] slots)
     {
         Parts = parts;
         Slots = slots;
-        Utf8Parts = new byte[]?[parts.Length];
-        for (int i = 0; i < parts.Length; i++)
-            Utf8Parts[i] = EncodePart(parts[i]);
     }
 
-    /// <summary>
-    /// <see cref="Parts"/> pre-encoded as UTF-8; an entry is null when its part contains a surrogate (see <see cref="EncodePart"/>).
-    /// </summary>
-    public readonly byte[]?[] Utf8Parts;
+    #endregion
+
+    #region Properties
 
     /// <summary>
-    /// Builds a compiled template from accumulated parts and per-substitution flags. For an optional substitution
-    /// inside an attribute value, the attribute markup around it (the <c> name="</c> prefix and the closing <c>"</c>)
-    /// moves out of the static parts into the slot, so it is emitted only when the value is non-empty and an
-    /// absent optional value drops the whole attribute.
+    /// Sentinel cached for a template that compiles to a program but isn't turned into static parts (its names or text
+    /// contain surrogate code units, which may pair with neighbouring values): the template is usable, and its body is
+    /// decoded directly for every record. Distinct from a null cache entry, which means the template is corrupt.
     /// </summary>
-    /// <param name="parts">Static parts; modified in place when markup moves into a slot.</param>
-    /// <param name="subIds">Substitution index of each slot.</param>
-    /// <param name="isOptional">Whether each substitution is optional (0x0E).</param>
-    /// <param name="inAttrValue">Whether each substitution is inside an attribute value.</param>
-    /// <returns>The compiled template.</returns>
-    internal static CompiledTemplate FromParts(string[] parts, IReadOnlyList<int> subIds, IReadOnlyList<bool> isOptional,
-                                               IReadOnlyList<bool> inAttrValue)
+    public static CompiledTemplate DecodeDirectly { get; } = new([[]], []);
+
+    /// <summary>
+    /// <see cref="Parts"/> JSON-string-escaped, for a JSON template rendered inside an embedded BinXml value (0x21),
+    /// whose whole output is itself a JSON string. Built on first use.
+    /// </summary>
+    public byte[][] EscapedParts
     {
-        SubSlot[] slots = new SubSlot[subIds.Count];
-        for (int i = 0; i < slots.Length; i++)
+        get
         {
-            string? prefix = null;
-            string? suffix = null;
-
-            if (isOptional[i] && inAttrValue[i])
+            // Unsynchronised publish: racing threads build identical arrays
+            if (_escapedParts == null)
             {
-                string before = parts[i];
-                string after = parts[i + 1];
-                int spacePos = before.LastIndexOf(' ');
-                if ((spacePos >= 0) && after.StartsWith('"'))
+                byte[][] escaped = new byte[Parts.Length][];
+                // Fixed-size seed shared by every part: parts can be several KB, so never stackalloc by input size
+                Span<byte> seed = stackalloc byte[512];
+                for (int i = 0; i < Parts.Length; i++)
                 {
-                    prefix = before[spacePos..];
-                    suffix = "\"";
-                    parts[i] = before[..spacePos];
-                    parts[i + 1] = after[1..];
+                    ValueUtf8Builder vub = new(seed);
+                    BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vub, Parts[i]);
+                    escaped[i] = vub.AsSpan().ToArray();
+                    vub.Dispose();
                 }
+                _escapedParts = escaped;
             }
-
-            slots[i] = new SubSlot(subIds[i], isOptional[i], prefix, suffix);
+            return _escapedParts;
         }
-
-        return new CompiledTemplate(parts, slots);
     }
 
-    /// <summary>
-    /// Appends a static part: its pre-encoded UTF-8 bytes when available, otherwise its text as raw UTF-16.
-    /// </summary>
-    /// <param name="vub">UTF-8 builder that receives the part.</param>
-    /// <param name="utf8">Pre-encoded bytes, or null.</param>
-    /// <param name="text">The part's text (used when <paramref name="utf8"/> is null; may be null when absent).</param>
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-    internal static void AppendPart(ref ValueUtf8Builder vub, byte[]? utf8, string? text)
-    {
-        if (utf8 != null)
-            vub.Append(utf8);
-        else if (text != null)
-            vub.AppendUtf16(text);
-    }
+    #endregion
+
+    #region Non-Public Fields
 
     /// <summary>
-    /// Pre-encodes a static part as UTF-8. Returns null for null text, and for text containing a surrogate: such a
-    /// part must be appended as raw UTF-16 so a surrogate at its edge can still pair with neighbouring text, exactly
-    /// as when the part was appended to a UTF-16 buffer.
+    /// Backing field of <see cref="EscapedParts"/>.
     /// </summary>
-    /// <param name="text">Part text, or null.</param>
-    /// <returns>UTF-8 bytes, or null.</returns>
-    internal static byte[]? EncodePart(string? text)
-    {
-        if ((text == null) || text.AsSpan().ContainsAnyInRange('\uD800', '\uDFFF'))
-            return null;
-        return System.Text.Encoding.UTF8.GetBytes(text);
-    }
+    private byte[][]? _escapedParts;
+
+    #endregion
 }

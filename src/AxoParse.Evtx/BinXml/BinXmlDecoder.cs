@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.BinXml;
 
@@ -58,7 +59,7 @@ internal sealed partial class BinXmlParser
                     break;
 
                 case BinXmlToken.TemplateInstance:
-                    TWriter.WriteTemplateInstance(this, data, ref pos, binxmlChunkBase, ref vub, escaped);
+                    WriteTemplateInstance<TWriter>(data, ref pos, binxmlChunkBase, ref vub, escaped);
                     if (recordLevel)
                         return;
                     break;
@@ -215,18 +216,18 @@ internal sealed partial class BinXmlParser
                     bool optional = baseTok == BinXmlToken.OptionalSubstitution;
                     ushort subId = MemoryMarshal.Read<ushort>(data[(pos + 1)..]);
                     pos += 4; // token + id + value type
-                    if (subId >= values.Offsets.Length)
+                    // Same rule as the compiled executor: an index past the instance's values writes nothing, as
+                    // does an empty optional value
+                    writer.BeginValue(ref vub);
+                    if (subId < values.Offsets.Length)
                     {
-                        writer.EmptyValue(ref vub);
-                        break;
+                        byte valueType = values.Types[subId];
+                        int valueSize = values.Sizes[subId];
+                        if (!optional || ((valueType != BinXmlValueType.Null) && (valueSize > 0)))
+                            WriteValue<TWriter>(valueSize, valueType, values.Offsets[subId], binxmlChunkBase, ref vub,
+                                escaped: false);
                     }
-
-                    byte valueType = values.Types[subId];
-                    int valueSize = values.Sizes[subId];
-                    if (optional && ((valueType == BinXmlValueType.Null) || (valueSize == 0)))
-                        writer.EmptyValue(ref vub);
-                    else
-                        writer.Value(this, valueSize, valueType, values.Offsets[subId], binxmlChunkBase, ref vub);
+                    writer.EndValue(ref vub);
                     break;
                 }
 
@@ -380,8 +381,8 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Checks whether an attribute's whole value is one optional substitution (0x0E) whose value is null or empty;
-    /// XML omits such an attribute entirely, matching the compiled path's attribute slots.
+    /// Checks whether an attribute's whole value is one optional substitution (0x0E) whose value is null, empty, or
+    /// past the instance's values; XML omits such an attribute entirely, matching the compiled path's attribute slots.
     /// </summary>
     /// <param name="data">BinXml bytes.</param>
     /// <param name="pos">Position of the attribute's first value token.</param>
@@ -400,8 +401,165 @@ internal sealed partial class BinXmlParser
                          (next == BinXmlToken.CloseEmptyElement) || (next == BinXmlToken.EndElement) ||
                          (next == BinXmlToken.Attribute);
         ushort subId = MemoryMarshal.Read<ushort>(data[(pos + 1)..]);
-        return onlyToken && (subId < values.Offsets.Length) &&
-               ((values.Types[subId] == BinXmlValueType.Null) || (values.Sizes[subId] == 0));
+        return onlyToken && ((subId >= values.Offsets.Length) ||
+                             (values.Types[subId] == BinXmlValueType.Null) || (values.Sizes[subId] == 0));
+    }
+
+    /// <summary>
+    /// Compiles a template program for XML output (see <see cref="Lower{TWriter}"/>).
+    /// </summary>
+    /// <param name="program">The template's program.</param>
+    /// <returns>The compiled template, or <see cref="CompiledTemplate.DecodeDirectly"/>.</returns>
+    internal static CompiledTemplate CompileXml(TemplateProgram program) => Lower<XmlWriter>(program);
+
+    /// <summary>
+    /// Compiles a template program for JSON output (see <see cref="Lower{TWriter}"/>).
+    /// </summary>
+    /// <param name="program">The template's program.</param>
+    /// <returns>The compiled template, or <see cref="CompiledTemplate.DecodeDirectly"/>.</returns>
+    internal static CompiledTemplate CompileJson(TemplateProgram program) => Lower<JsonWriter>(program);
+
+    /// <summary>
+    /// Turns a template program into a compiled template by replaying it through the format's writer: the writer
+    /// receives exactly the events the decoder sends for the template body, with every value left out, and the output
+    /// between values becomes the static parts. Compiled and decoded rendering therefore follow one set of rules. In
+    /// XML, an attribute whose whole value is one optional substitution has its markup moved into the slot, so it is
+    /// omitted when the value is empty, as the decoder does. A program whose names or text contain surrogate code units
+    /// isn't split into parts, since a surrogate at a part's edge may pair with a neighbouring value; it returns
+    /// <see cref="CompiledTemplate.DecodeDirectly"/>.
+    /// </summary>
+    /// <typeparam name="TWriter">Output format.</typeparam>
+    /// <param name="program">The template's program.</param>
+    /// <returns>The compiled template, or <see cref="CompiledTemplate.DecodeDirectly"/>.</returns>
+    private static CompiledTemplate Lower<TWriter>(TemplateProgram program)
+        where TWriter : struct, IBinXmlWriter
+    {
+        TemplateOp[] ops = program.Ops;
+        if (ContainsSurrogates(ops))
+            return CompiledTemplate.DecodeDirectly;
+
+        ValueUtf8Builder vub = new(stackalloc byte[1024]);
+        // Per slot: where the preceding part ends, where its conditional prefix ends, and where its suffix ends (the
+        // next part's start). A plain slot has neither, so all three are equal.
+        List<(int PartEnd, int PrefixEnd, int SuffixEnd, int SubId, bool IsOptional, bool Conditional)> slots = new();
+        TWriter writer = default;
+        int depth = 0;
+        for (int i = 0; i < ops.Length; i++)
+        {
+            TemplateOp op = ops[i];
+            switch (op.Kind)
+            {
+                case TemplateOpKind.StartElement:
+                    // The root is not a content item; every other element is (the compiler rejects elements in values)
+                    if (depth > 0)
+                        writer.BeginContentItem(ref vub);
+                    writer.StartElement(ref vub, op.Text!);
+                    depth++;
+                    break;
+
+                case TemplateOpKind.BeginAttributes:
+                    writer.BeginAttributes(ref vub);
+                    break;
+
+                case TemplateOpKind.Attribute:
+                    if (TWriter.OmitsEmptyOptionalAttributes && (i + 2 < ops.Length) &&
+                        (ops[i + 1].Kind == TemplateOpKind.Substitution) && ops[i + 1].IsOptional &&
+                        (ops[i + 2].Kind == TemplateOpKind.EndAttribute))
+                    {
+                        int partEnd = vub.AsSpan().Length;
+                        writer.Attribute(ref vub, op.Text!);
+                        writer.BeginValue(ref vub);
+                        int prefixEnd = vub.AsSpan().Length;
+                        writer.EndValue(ref vub);
+                        writer.EndAttribute(ref vub);
+                        slots.Add((partEnd, prefixEnd, vub.AsSpan().Length, ops[i + 1].SubId, true, true));
+                        i += 2;
+                        break;
+                    }
+                    writer.Attribute(ref vub, op.Text!);
+                    break;
+
+                case TemplateOpKind.EndAttribute:
+                    writer.EndAttribute(ref vub);
+                    break;
+
+                case TemplateOpKind.EndAttributes:
+                    writer.EndAttributes(ref vub);
+                    break;
+
+                case TemplateOpKind.CloseStartElement:
+                    writer.CloseStartElement(ref vub);
+                    break;
+
+                case TemplateOpKind.EndElement:
+                    depth--;
+                    writer.EndElement(ref vub, op.Text!);
+                    break;
+
+                case TemplateOpKind.CloseEmptyElement:
+                    depth--;
+                    writer.CloseEmptyElement(ref vub, op.Text!);
+                    break;
+
+                case TemplateOpKind.Text:
+                    writer.Text(ref vub, op.Text);
+                    break;
+
+                case TemplateOpKind.CharRef:
+                    writer.CharRef(ref vub, op.CharValue);
+                    break;
+
+                case TemplateOpKind.EntityRef:
+                    writer.EntityRef(ref vub, op.Text!);
+                    break;
+
+                case TemplateOpKind.CData:
+                    writer.CData(ref vub, op.Text);
+                    break;
+
+                case TemplateOpKind.Substitution:
+                {
+                    writer.BeginValue(ref vub);
+                    int at = vub.AsSpan().Length;
+                    slots.Add((at, at, at, op.SubId, op.IsOptional, false));
+                    writer.EndValue(ref vub);
+                    break;
+                }
+            }
+        }
+
+        ReadOnlySpan<byte> output = vub.AsSpan();
+        byte[][] parts = new byte[slots.Count + 1][];
+        SubSlot[] compiled = new SubSlot[slots.Count];
+        int partStart = 0;
+        for (int i = 0; i < slots.Count; i++)
+        {
+            (int partEnd, int prefixEnd, int suffixEnd, int subId, bool isOptional, bool conditional) = slots[i];
+            parts[i] = output[partStart..partEnd].ToArray();
+            compiled[i] = conditional
+                ? new SubSlot(subId, isOptional, output[partEnd..prefixEnd].ToArray(), output[prefixEnd..suffixEnd].ToArray())
+                : new SubSlot(subId, isOptional, null, null);
+            partStart = suffixEnd;
+        }
+        parts[^1] = output[partStart..].ToArray();
+        vub.Dispose();
+        return new CompiledTemplate(parts, compiled);
+    }
+
+    /// <summary>
+    /// Checks whether any name, text or character reference of a program is a UTF-16 surrogate code unit.
+    /// </summary>
+    /// <param name="ops">The program's ops.</param>
+    /// <returns>True if any surrogate is present.</returns>
+    private static bool ContainsSurrogates(TemplateOp[] ops)
+    {
+        foreach (TemplateOp op in ops)
+        {
+            if (char.IsSurrogate((char)op.CharValue) ||
+                ((op.Text != null) && op.Text.AsSpan().ContainsAnyInRange('\uD800', '\uDFFF')))
+                return true;
+        }
+        return false;
     }
 
     /// <summary>
@@ -486,10 +644,41 @@ internal sealed partial class BinXmlParser
         static abstract bool ConsumesProcessingInstructions { get; }
 
         /// <summary>
-        /// Renders a template instance (0x0C) at <paramref name="pos"/> through the format's compiled-template path.
+        /// The output format this writer produces (selects the format's provider templates).
         /// </summary>
-        static abstract void WriteTemplateInstance(BinXmlParser parser, ReadOnlySpan<byte> data, ref int pos,
-                                                   int binxmlChunkBase, ref ValueUtf8Builder vub, bool escaped);
+        static abstract OutputFormat Format { get; }
+
+        /// <summary>
+        /// True if HexInt32/HexInt64 values are zero-padded to 8/16 digits (JSON) rather than minimal (XML).
+        /// </summary>
+        static abstract bool PadsHexIntegers { get; }
+
+        /// <summary>
+        /// Appends a string value's text, escaped for the format.
+        /// </summary>
+        /// <param name="vub">Output builder.</param>
+        /// <param name="text">Unescaped UTF-16 text.</param>
+        /// <param name="escaped">JSON only: escape twice (see <see cref="WriteValue{TFormat}"/>).</param>
+        static abstract void AppendString(ref ValueUtf8Builder vub, scoped ReadOnlySpan<char> text, bool escaped);
+
+        /// <summary>
+        /// Appends a NUL-terminated ANSI string value's text, escaped for the format.
+        /// </summary>
+        /// <param name="vub">Output builder.</param>
+        /// <param name="bytes">ANSI bytes (U+0000..U+00FF).</param>
+        /// <param name="escaped">JSON only: escape twice.</param>
+        static abstract void AppendAnsiString(ref ValueUtf8Builder vub, ReadOnlySpan<byte> bytes, bool escaped);
+
+        /// <summary>
+        /// Renders an embedded BinXml value (type 0x21) as the value's text.
+        /// </summary>
+        /// <param name="parser">Parser for the chunk.</param>
+        /// <param name="bytes">The fragment's bytes.</param>
+        /// <param name="binxmlChunkBase">Chunk-relative offset of <paramref name="bytes"/>.</param>
+        /// <param name="vub">Output builder.</param>
+        /// <param name="escaped">JSON only: the value is already one JSON-string level deep.</param>
+        static abstract void WriteEmbeddedBinXml(BinXmlParser parser, ReadOnlySpan<byte> bytes, int binxmlChunkBase,
+                                                 ref ValueUtf8Builder vub, bool escaped);
 
         /// <summary>
         /// Renders a processing instruction (record level only in XML; JSON drops it).
@@ -540,11 +729,14 @@ internal sealed partial class BinXmlParser
         /// <summary>CDATA section text.</summary>
         void CData(ref ValueUtf8Builder vub, scoped ReadOnlySpan<char> text);
 
-        /// <summary>A substitution value.</summary>
-        void Value(BinXmlParser parser, int size, byte type, int fileOffset, int binxmlChunkBase, ref ValueUtf8Builder vub);
+        /// <summary>
+        /// A substitution begins; its value's text (possibly none) follows, then <see cref="EndValue"/>. In JSON content
+        /// this opens a string item; in a compiled template, the value's slot sits between the two.
+        /// </summary>
+        void BeginValue(ref ValueUtf8Builder vub);
 
-        /// <summary>An absent value: an empty optional substitution, or an index past the instance's values.</summary>
-        void EmptyValue(ref ValueUtf8Builder vub);
+        /// <summary>The current substitution's value ends.</summary>
+        void EndValue(ref ValueUtf8Builder vub);
     }
 
     /// <summary>
@@ -560,9 +752,26 @@ internal sealed partial class BinXmlParser
         public static bool ConsumesProcessingInstructions => false;
 
         /// <inheritdoc/>
-        public static void WriteTemplateInstance(BinXmlParser parser, ReadOnlySpan<byte> data, ref int pos,
-                                                 int binxmlChunkBase, ref ValueUtf8Builder vub, bool escaped) =>
-            parser.ParseTemplateInstance(data, ref pos, binxmlChunkBase, ref vub);
+        public static OutputFormat Format => OutputFormat.Xml;
+
+        /// <inheritdoc/>
+        public static bool PadsHexIntegers => false;
+
+        /// <inheritdoc/>
+        public static void AppendString(ref ValueUtf8Builder vub, scoped ReadOnlySpan<char> text, bool escaped) =>
+            BinXmlValueFormatter.AppendXmlEscaped(ref vub, text);
+
+        /// <inheritdoc/>
+        public static void AppendAnsiString(ref ValueUtf8Builder vub, ReadOnlySpan<byte> bytes, bool escaped) =>
+            BinXmlValueFormatter.AppendAnsiXmlEscaped(ref vub, bytes);
+
+        /// <inheritdoc/>
+        public static void WriteEmbeddedBinXml(BinXmlParser parser, ReadOnlySpan<byte> bytes, int binxmlChunkBase,
+                                               ref ValueUtf8Builder vub, bool escaped)
+        {
+            int pos = 0;
+            parser.DecodeTopLevel<XmlWriter>(bytes, ref pos, binxmlChunkBase, ref vub, recordLevel: false, escaped: false);
+        }
 
         /// <inheritdoc/>
         public static void WriteProcessingInstruction(BinXmlParser parser, uint nameOffset, scoped ReadOnlySpan<char> text,
@@ -584,7 +793,7 @@ internal sealed partial class BinXmlParser
         /// <inheritdoc/>
         public void TemplateInstanceItem(BinXmlParser parser, ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
                                          ref ValueUtf8Builder vub) =>
-            parser.ParseTemplateInstance(data, ref pos, binxmlChunkBase, ref vub);
+            parser.WriteTemplateInstance<XmlWriter>(data, ref pos, binxmlChunkBase, ref vub, escaped: false);
 
         /// <inheritdoc/>
         public void StartElement(ref ValueUtf8Builder vub, string name)
@@ -657,11 +866,10 @@ internal sealed partial class BinXmlParser
         }
 
         /// <inheritdoc/>
-        public void Value(BinXmlParser parser, int size, byte type, int fileOffset, int binxmlChunkBase, ref ValueUtf8Builder vub) =>
-            parser.WriteBinXmlValue(size, type, fileOffset, binxmlChunkBase, ref vub);
+        public void BeginValue(ref ValueUtf8Builder vub) { }
 
         /// <inheritdoc/>
-        public void EmptyValue(ref ValueUtf8Builder vub) { }
+        public void EndValue(ref ValueUtf8Builder vub) { }
     }
 
     /// <summary>
@@ -677,9 +885,47 @@ internal sealed partial class BinXmlParser
         public static bool ConsumesProcessingInstructions => true;
 
         /// <inheritdoc/>
-        public static void WriteTemplateInstance(BinXmlParser parser, ReadOnlySpan<byte> data, ref int pos,
-                                                 int binxmlChunkBase, ref ValueUtf8Builder vub, bool escaped) =>
-            parser.ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, ref vub, escaped);
+        public static OutputFormat Format => OutputFormat.Json;
+
+        /// <inheritdoc/>
+        public static bool PadsHexIntegers => true;
+
+        /// <inheritdoc/>
+        public static void AppendString(ref ValueUtf8Builder vub, scoped ReadOnlySpan<char> text, bool escaped)
+        {
+            if (escaped)
+                BinXmlValueFormatter.AppendJsonEscapedTwice(ref vub, text);
+            else
+                BinXmlValueFormatter.AppendJsonEscaped(ref vub, text);
+        }
+
+        /// <inheritdoc/>
+        public static void AppendAnsiString(ref ValueUtf8Builder vub, ReadOnlySpan<byte> bytes, bool escaped)
+        {
+            if (escaped)
+                BinXmlValueFormatter.AppendAnsiJsonEscapedTwice(ref vub, bytes);
+            else
+                BinXmlValueFormatter.AppendAnsiJsonEscaped(ref vub, bytes);
+        }
+
+        /// <inheritdoc/>
+        public static void WriteEmbeddedBinXml(BinXmlParser parser, ReadOnlySpan<byte> bytes, int binxmlChunkBase,
+                                               ref ValueUtf8Builder vub, bool escaped)
+        {
+            // The fragment's JSON is a JSON string: written pre-escaped (compiled templates use their escaped parts)
+            int pos = 0;
+            if (!escaped)
+            {
+                parser.DecodeTopLevel<JsonWriter>(bytes, ref pos, binxmlChunkBase, ref vub, recordLevel: false, escaped: true);
+                return;
+            }
+
+            // Already one escape level deep: render the first level into a temp buffer, then escape again
+            ValueUtf8Builder temp = new(stackalloc byte[512]);
+            parser.DecodeTopLevel<JsonWriter>(bytes, ref pos, binxmlChunkBase, ref temp, recordLevel: false, escaped: true);
+            BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vub, temp.AsSpan());
+            temp.Dispose();
+        }
 
         /// <inheritdoc/>
         public static void WriteProcessingInstruction(BinXmlParser parser, uint nameOffset, scoped ReadOnlySpan<char> text,
@@ -701,7 +947,7 @@ internal sealed partial class BinXmlParser
         {
             BeginContentItem(ref vub);
             int before = vub.AsSpan().Length;
-            parser.ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, ref vub);
+            parser.WriteTemplateInstance<JsonWriter>(data, ref pos, binxmlChunkBase, ref vub, escaped: false);
             // A template that renders nothing (unavailable, empty) still fills the item its comma opened
             if (vub.AsSpan().Length == before)
                 vub.Append("\"\""u8);
@@ -787,27 +1033,20 @@ internal sealed partial class BinXmlParser
         public void CData(ref ValueUtf8Builder vub, scoped ReadOnlySpan<char> text) => WriteString(ref vub, text);
 
         /// <inheritdoc/>
-        public void Value(BinXmlParser parser, int size, byte type, int fileOffset, int binxmlChunkBase, ref ValueUtf8Builder vub)
+        public void BeginValue(ref ValueUtf8Builder vub)
         {
+            // Inside an attribute the value is part of the attribute's string; in content it is a string item
             if (_inAttr)
-            {
-                parser.WriteJsonValue(size, type, fileOffset, binxmlChunkBase, ref vub);
                 return;
-            }
-
             BeginContentItem(ref vub);
-            vub.Append((byte)'"');
-            parser.WriteJsonValue(size, type, fileOffset, binxmlChunkBase, ref vub);
             vub.Append((byte)'"');
         }
 
         /// <inheritdoc/>
-        public void EmptyValue(ref ValueUtf8Builder vub)
+        public void EndValue(ref ValueUtf8Builder vub)
         {
-            if (_inAttr)
-                return;
-            BeginContentItem(ref vub);
-            vub.Append("\"\""u8);
+            if (!_inAttr)
+                vub.Append((byte)'"');
         }
 
         /// <summary>

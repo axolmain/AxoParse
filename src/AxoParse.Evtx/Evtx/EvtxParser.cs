@@ -125,46 +125,22 @@ public class EvtxParser
         EvtxChunk[] results = new EvtxChunk[validCount];
 
         int parallelism = maxThreads > 0 ? maxThreads : -1;
-        if (format == OutputFormat.Json)
-        {
-            Parallel.For(0, validCount,
-                new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                () => new Dictionary<Guid, CompiledJsonTemplate?>(), // thread local
-                (i, state, localJsonCache) =>
-                {
-                    results[i] = EvtxChunk.Parse(
-                        fileData,
-                        validOffsets[i],
-                        compiledCache: null,
-                        compiledJsonCache: localJsonCache,
-                        format,
-                        wevtCache,
-                        salvage);
+        Parallel.For(0, validCount,
+            new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+            () => new Dictionary<Guid, CompiledTemplate?>(), // thread local
+            (i, state, localCache) =>
+            {
+                results[i] = EvtxChunk.Parse(
+                    fileData,
+                    validOffsets[i],
+                    compiledCache: localCache,
+                    format,
+                    wevtCache,
+                    salvage);
 
-                    return localJsonCache;
-                },
-                _ => { });
-        }
-        else
-        {
-            Parallel.For(0, validCount,
-                new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                () => new Dictionary<Guid, CompiledTemplate?>(), // thread local
-                (i, state, localCache) =>
-                {
-                    results[i] = EvtxChunk.Parse(
-                        fileData,
-                        validOffsets[i],
-                        compiledCache: localCache,
-                        compiledJsonCache: null,
-                        format,
-                        wevtCache,
-                        salvage);
-
-                    return localCache;
-                },
-                _ => { });
-        }
+                return localCache;
+            },
+            _ => { });
 
         // Phase 3 (sequential): collect results from valid chunks
         cancellationToken.ThrowIfCancellationRequested();
@@ -192,32 +168,16 @@ public class EvtxParser
         if (invalidCount > 0)
         {
             EvtxChunk?[] recovered = new EvtxChunk?[invalidCount];
-            if (format == OutputFormat.Json)
-            {
-                Parallel.For(0, invalidCount,
-                    new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                    () => new Dictionary<Guid, CompiledJsonTemplate?>(),
-                    (i, state, localJsonCache) =>
-                    {
-                        recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                            compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache, salvage);
-                        return localJsonCache;
-                    },
-                    _ => { });
-            }
-            else
-            {
-                Parallel.For(0, invalidCount,
-                    new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                    () => new Dictionary<Guid, CompiledTemplate?>(),
-                    (i, state, localCache) =>
-                    {
-                        recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                            compiledCache: localCache, compiledJsonCache: null, format, wevtCache, salvage);
-                        return localCache;
-                    },
-                    _ => { });
-            }
+            Parallel.For(0, invalidCount,
+                new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                () => new Dictionary<Guid, CompiledTemplate?>(),
+                (i, state, localCache) =>
+                {
+                    recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
+                        compiledCache: localCache, format, wevtCache, salvage);
+                    return localCache;
+                },
+                _ => { });
 
             for (int i = 0; i < invalidCount; i++)
             {
@@ -389,68 +349,33 @@ public class EvtxParser
             try
             {
                 // Phase 2: parallel parse valid chunks
-                if (format == OutputFormat.Json)
-                {
-                    Parallel.For(0, validCountCopy,
-                        new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                        () => new Dictionary<Guid, CompiledJsonTemplate?>(),
-                        (i, state, localJsonCache) =>
-                        {
-                            EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
-                                compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache, salvage);
-                            channel.Writer.TryWrite((i, chunk));
-                            return localJsonCache;
-                        },
-                        _ => { });
-                }
-                else
-                {
-                    Parallel.For(0, validCountCopy,
-                        new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                        () => new Dictionary<Guid, CompiledTemplate?>(),
-                        (i, state, localCache) =>
-                        {
-                            EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
-                                compiledCache: localCache, compiledJsonCache: null, format, wevtCache, salvage);
-                            channel.Writer.TryWrite((i, chunk));
-                            return localCache;
-                        },
-                        _ => { });
-                }
+                Parallel.For(0, validCountCopy,
+                    new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                    () => new Dictionary<Guid, CompiledTemplate?>(),
+                    (i, state, localCache) =>
+                    {
+                        EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
+                            compiledCache: localCache, format, wevtCache, salvage);
+                        channel.Writer.TryWrite((i, chunk));
+                        return localCache;
+                    },
+                    _ => { });
 
                 // Phase 4: parallel recovery of headerless chunks (indices offset by validCount)
                 if (invalidCountCopy > 0)
                 {
-                    if (format == OutputFormat.Json)
-                    {
-                        Parallel.For(0, invalidCountCopy,
-                            new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                            () => new Dictionary<Guid, CompiledJsonTemplate?>(),
-                            (i, state, localJsonCache) =>
-                            {
-                                EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                                    compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache, salvage);
-                                if (recovered != null)
-                                    channel.Writer.TryWrite((validCountCopy + i, recovered));
-                                return localJsonCache;
-                            },
-                            _ => { });
-                    }
-                    else
-                    {
-                        Parallel.For(0, invalidCountCopy,
-                            new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
-                            () => new Dictionary<Guid, CompiledTemplate?>(),
-                            (i, state, localCache) =>
-                            {
-                                EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                                    compiledCache: localCache, compiledJsonCache: null, format, wevtCache, salvage);
-                                if (recovered != null)
-                                    channel.Writer.TryWrite((validCountCopy + i, recovered));
-                                return localCache;
-                            },
-                            _ => { });
-                    }
+                    Parallel.For(0, invalidCountCopy,
+                        new ParallelOptions { MaxDegreeOfParallelism = parallelism, CancellationToken = cancellationToken },
+                        () => new Dictionary<Guid, CompiledTemplate?>(),
+                        (i, state, localCache) =>
+                        {
+                            EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
+                                compiledCache: localCache, format, wevtCache, salvage);
+                            if (recovered != null)
+                                channel.Writer.TryWrite((validCountCopy + i, recovered));
+                            return localCache;
+                        },
+                        _ => { });
                 }
             }
             finally
@@ -583,12 +508,10 @@ public class EvtxParser
         if (count == 0)
             return 0;
 
-        bool xml = format == OutputFormat.Xml;
         int total = 0;
         if (workers == 1)
         {
-            Dictionary<Guid, CompiledTemplate?>? xmlCache = xml ? new Dictionary<Guid, CompiledTemplate?>() : null;
-            Dictionary<Guid, CompiledJsonTemplate?>? jsonCache = xml ? null : new Dictionary<Guid, CompiledJsonTemplate?>();
+            Dictionary<Guid, CompiledTemplate?> cache = new();
             ArrayBufferWriter<byte> sink = new(_initialSinkBytes);
             byte[]? chunkBuffer = source.NeedsBuffer ? new byte[EvtxChunk.ChunkSize] : null;
             for (int i = 0; i < count; i++)
@@ -596,7 +519,7 @@ public class EvtxParser
                 cancellationToken.ThrowIfCancellationRequested();
                 sink.ResetWrittenCount();
                 total += RenderChunk(source, offsets[i], i, pass, validateChecksums, needsRecovery, chunkBuffer,
-                    xmlCache, jsonCache, format, wevtCache, salvage, sink);
+                    cache, format, wevtCache, salvage, sink);
                 output.Write(sink.WrittenSpan);
             }
 
@@ -621,8 +544,7 @@ public class EvtxParser
         void Render()
         {
             // Template caches live for the worker's whole run, like the thread-local caches of Parse
-            Dictionary<Guid, CompiledTemplate?>? xmlCache = xml ? new Dictionary<Guid, CompiledTemplate?>() : null;
-            Dictionary<Guid, CompiledJsonTemplate?>? jsonCache = xml ? null : new Dictionary<Guid, CompiledJsonTemplate?>();
+            Dictionary<Guid, CompiledTemplate?> cache = new();
             byte[]? chunkBuffer = source.NeedsBuffer ? new byte[EvtxChunk.ChunkSize] : null;
             try
             {
@@ -637,7 +559,7 @@ public class EvtxParser
                     ArrayBufferWriter<byte> sink = sinks[slot] ??= new ArrayBufferWriter<byte>(_initialSinkBytes);
                     sink.ResetWrittenCount();
                     kept[slot] = RenderChunk(source, offsets[i], i, pass, validateChecksums, needsRecovery,
-                        chunkBuffer, xmlCache, jsonCache, format, wevtCache, salvage, sink);
+                        chunkBuffer, cache, format, wevtCache, salvage, sink);
                     ready[slot].Release();
                 }
             }
@@ -697,8 +619,7 @@ public class EvtxParser
     /// <param name="validateChecksums">Classify pass only: skip chunks failing CRC32 validation.</param>
     /// <param name="needsRecovery">Classify pass only: per-index recovery flags.</param>
     /// <param name="chunkBuffer">The worker's 64 KB read buffer when the source is a file; otherwise null.</param>
-    /// <param name="xmlCache">The worker's compiled XML template cache. Null when using JSON output.</param>
-    /// <param name="jsonCache">The worker's compiled JSON template cache. Null when using XML output.</param>
+    /// <param name="cache">The worker's cache of templates compiled for <paramref name="format"/>.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
     /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt instead of dropping it.</param>
@@ -706,14 +627,13 @@ public class EvtxParser
     /// <returns>Number of records rendered from the chunk.</returns>
     private static int RenderChunk(ChunkSource source, long offset, int index, ChunkPass pass, bool validateChecksums,
                                    bool[]? needsRecovery, byte[]? chunkBuffer,
-                                   Dictionary<Guid, CompiledTemplate?>? xmlCache,
-                                   Dictionary<Guid, CompiledJsonTemplate?>? jsonCache,
+                                   Dictionary<Guid, CompiledTemplate?> cache,
                                    OutputFormat format, WevtCache? wevtCache, bool salvage,
                                    ArrayBufferWriter<byte> sink)
     {
         int at = source.Load(offset, chunkBuffer, out byte[] data);
         if (pass == ChunkPass.Recover)
-            return EvtxChunk.RenderTo(data, at, headerless: true, xmlCache, jsonCache, format, sink, wevtCache, salvage);
+            return EvtxChunk.RenderTo(data, at, headerless: true, cache, format, sink, wevtCache, salvage);
 
         ReadOnlySpan<byte> chunkData = data.AsSpan(at, EvtxChunk.ChunkSize);
         if (!chunkData[..8].SequenceEqual("ElfChnk\0"u8))
@@ -729,7 +649,7 @@ public class EvtxParser
                 return 0;
         }
 
-        return EvtxChunk.RenderTo(data, at, headerless: false, xmlCache, jsonCache, format, sink, wevtCache, salvage);
+        return EvtxChunk.RenderTo(data, at, headerless: false, cache, format, sink, wevtCache, salvage);
     }
 
     #endregion

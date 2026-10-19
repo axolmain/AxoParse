@@ -129,7 +129,7 @@ public class CorruptionFuzzTests
     /// <param name="original">Unmodified sample bytes.</param>
     /// <param name="rng">Seeded random source.</param>
     /// <returns>The mutated bytes and a description of what was done (for reproducing a failure).</returns>
-    private static (byte[] Data, string Mutation) Mutate(byte[] original, Random rng)
+    internal static (byte[] Data, string Mutation) Mutate(byte[] original, Random rng)
     {
         byte[] data = (byte[])original.Clone();
         List<string> applied = new();
@@ -236,7 +236,7 @@ public class CorruptionFuzzTests
     /// <param name="name">Sample file name.</param>
     /// <param name="round">Round number.</param>
     /// <returns>FNV-1a hash of the name mixed with the round.</returns>
-    private static int StableSeed(string name, int round)
+    internal static int StableSeed(string name, int round)
     {
         uint hash = 2166136261;
         foreach (char c in name)

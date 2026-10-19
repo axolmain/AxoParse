@@ -50,11 +50,11 @@ public class ChunkBenchmarks
                 $"{File} has only {_chunkOffsets.Length} valid chunks; ChunksPerInvoke requires {ChunksPerInvoke}.");
 
         _warmXmlCache = new Dictionary<Guid, CompiledTemplate?>();
-        _warmJsonCache = new Dictionary<Guid, CompiledJsonTemplate?>();
+        _warmJsonCache = new Dictionary<Guid, CompiledTemplate?>();
         for (int i = 0; i < _chunkOffsets.Length; i++)
         {
-            EvtxChunk.Parse(_data, _chunkOffsets[i], _warmXmlCache, null, OutputFormat.Xml);
-            EvtxChunk.Parse(_data, _chunkOffsets[i], null, _warmJsonCache, OutputFormat.Json);
+            EvtxChunk.Parse(_data, _chunkOffsets[i], _warmXmlCache, OutputFormat.Xml);
+            EvtxChunk.Parse(_data, _chunkOffsets[i], _warmJsonCache, OutputFormat.Json);
         }
     }
 
@@ -81,7 +81,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data, _chunkOffsets[i], new Dictionary<Guid, CompiledTemplate?>(), null, OutputFormat.Xml).Records.Count;
+            total += EvtxChunk.Parse(_data, _chunkOffsets[i], new Dictionary<Guid, CompiledTemplate?>(), OutputFormat.Xml).Records.Count;
         return total;
     }
 
@@ -94,7 +94,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _warmXmlCache, null, OutputFormat.Xml).Records.Count;
+            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _warmXmlCache, OutputFormat.Xml).Records.Count;
         return total;
     }
 
@@ -107,7 +107,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data, _chunkOffsets[i], null, new Dictionary<Guid, CompiledJsonTemplate?>(), OutputFormat.Json).Records.Count;
+            total += EvtxChunk.Parse(_data, _chunkOffsets[i], new Dictionary<Guid, CompiledTemplate?>(), OutputFormat.Json).Records.Count;
         return total;
     }
 
@@ -120,7 +120,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data, _chunkOffsets[i], null, _warmJsonCache, OutputFormat.Json).Records.Count;
+            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _warmJsonCache, OutputFormat.Json).Records.Count;
         return total;
     }
 
@@ -156,7 +156,7 @@ public class ChunkBenchmarks
     /// <summary>
     /// JSON template cache pre-populated from every chunk during setup.
     /// </summary>
-    private Dictionary<Guid, CompiledJsonTemplate?> _warmJsonCache = new();
+    private Dictionary<Guid, CompiledTemplate?> _warmJsonCache = new();
 
     #endregion
 }
