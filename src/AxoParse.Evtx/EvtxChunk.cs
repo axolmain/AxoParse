@@ -49,9 +49,12 @@ public sealed class EvtxChunk
     /// <param name="recordEnds">End offset in <paramref name="output"/> of each record's output (record i spans
     /// <c>recordEnds[i - 1]..recordEnds[i]</c>, starting at 0), or empty when records were not rendered.</param>
     /// <param name="diagnostics">Diagnostics for records that didn't decode cleanly, keyed by record index, or null.</param>
+    /// <param name="fields">Typed fields (and pairs) per record, or null when they were not read.</param>
     private EvtxChunk(EvtxChunkHeader header, long fileOffset, bool recovered, int dataBase, List<EvtxRecord> records,
-                      byte[] output, int[] recordEnds, Dictionary<int, EvtxDiagnostic>? diagnostics)
+                      byte[] output, int[] recordEnds, Dictionary<int, EvtxDiagnostic>? diagnostics,
+                      ChunkFields? fields = null)
     {
+        _fields = fields;
         Header = header;
         FileOffset = fileOffset;
         Recovered = recovered;
@@ -98,6 +101,31 @@ public sealed class EvtxChunk
     /// The chunk's records, in record order.
     /// </summary>
     internal IReadOnlyList<EvtxRecord> Records => _records;
+
+    /// <summary>
+    /// Typed fields (and pairs) per record, or null when they were not read (<c>WriteTo</c>, unrendered parses).
+    /// </summary>
+    internal ChunkFields? Fields => _fields;
+
+    /// <summary>
+    /// System fields of record <paramref name="index"/>.
+    /// </summary>
+    /// <param name="index">Zero-based record index.</param>
+    /// <returns>The record's System fields.</returns>
+    /// <exception cref="InvalidOperationException">The chunk was parsed without typed fields.</exception>
+    internal ref readonly SystemFields SystemFieldsOf(int index)
+    {
+        if (_fields == null)
+            ThrowFieldsNotRead();
+        return ref _fields.System[index];
+    }
+
+    /// <summary>
+    /// Throws for a typed field read from a chunk parsed without fields (kept out of line so the check stays small).
+    /// </summary>
+    [System.Diagnostics.CodeAnalysis.DoesNotReturn]
+    private static void ThrowFieldsNotRead() =>
+        throw new InvalidOperationException("Typed fields were not read: parse with EvtxOptions.Fields = EvtxFields.System.");
 
     #endregion
 
@@ -211,8 +239,8 @@ public sealed class EvtxChunk
         int expectedRecords = ExpectedRecordCount(header);
         List<EvtxRecord> records = ReadRecords(chunkData, at, header.FreeSpaceOffset, expectedRecords);
 
-        BinXmlParser binXml = new(data, at, compiledCache, options.WevtCache, options.Salvage);
-        return RenderRecords(header, fileOffset, at, records, binXml, options.Format, headerless: false)!;
+        BinXmlParser binXml = new(data, at, compiledCache, options.WevtCache, options.Salvage, ReadsFields(options));
+        return RenderRecords(header, fileOffset, at, records, binXml, options, headerless: false)!;
     }
 
     /// <summary>
@@ -235,8 +263,8 @@ public sealed class EvtxChunk
         if (records.Count == 0)
             return null;
 
-        BinXmlParser binXml = new(data, at, compiledCache, options.WevtCache, options.Salvage);
-        return RenderRecords(default, fileOffset, at, records, binXml, options.Format, headerless: true);
+        BinXmlParser binXml = new(data, at, compiledCache, options.WevtCache, options.Salvage, ReadsFields(options));
+        return RenderRecords(default, fileOffset, at, records, binXml, options, headerless: true);
     }
 
     /// <summary>
@@ -363,25 +391,35 @@ public sealed class EvtxChunk
     }
 
     /// <summary>
-    /// Renders every record into one UTF-8 buffer for the chunk, capturing diagnostics for records that fail
-    /// (a failed record keeps empty output) or, in salvage mode, were cut short (a salvaged record keeps its prefix).
-    /// Records are rendered into a reusable per-thread scratch buffer and then copied once into an exact-size array,
-    /// so a chunk costs one allocation instead of one per record.
+    /// Renders every record into one UTF-8 buffer for the chunk and reads its typed fields, capturing diagnostics for
+    /// records that fail (a failed record keeps empty output) or, in salvage mode, were cut short (a salvaged record
+    /// keeps its prefix). Records are rendered into a reusable per-thread scratch buffer and then copied once into an
+    /// exact-size array, so a chunk costs one allocation instead of one per record; fields are collected the same way.
+    /// With <see cref="EvtxOptions.FieldsOnly"/>, records are not rendered and only their fields are read (a recovery
+    /// region still renders each record to a throwaway buffer, to keep exactly the records a rendering parse keeps).
     /// </summary>
     /// <param name="header">Chunk header (default for a headerless recovery region).</param>
     /// <param name="fileOffset">Absolute file offset of the chunk.</param>
     /// <param name="at">Offset of the chunk within the array its records' offsets refer to.</param>
     /// <param name="records">Records to render.</param>
     /// <param name="binXml">Configured BinXml parser for this chunk.</param>
-    /// <param name="format">Output format.</param>
+    /// <param name="options">Output format, fields and pairs to read.</param>
     /// <param name="headerless">True for a recovery region: only records that render non-empty output are kept,
     /// and null is returned if there are none.</param>
     /// <returns>The rendered chunk, or null for a headerless region with no renderable records.</returns>
     private static EvtxChunk? RenderRecords(EvtxChunkHeader header, long fileOffset, int at, List<EvtxRecord> records,
-                                            BinXmlParser binXml, OutputFormat format, bool headerless)
+                                            BinXmlParser binXml, EvtxOptions options, bool headerless)
     {
+        OutputFormat format = options.Format;
+        bool fieldsOnly = options.FieldsOnly;
         ArrayBufferWriter<byte> scratch = _threadRenderScratch ??= new ArrayBufferWriter<byte>(_initialScratchBytes);
         scratch.ResetWrittenCount();
+        FieldSink? fields = null;
+        if (ReadsFields(options))
+        {
+            fields = _threadFieldSink ??= new FieldSink();
+            fields.Reset((options.Fields & EvtxFields.EventData) != 0);
+        }
         List<EvtxRecord> kept = headerless ? new List<EvtxRecord>(records.Count) : records;
         int[] recordEnds = new int[records.Count];
         Dictionary<int, EvtxDiagnostic>? diagnostics = null;
@@ -389,31 +427,64 @@ public sealed class EvtxChunk
         for (int i = 0; i < records.Count; i++)
         {
             int before = scratch.WrittenCount;
+            bool produced = false;
             EvtxDiagnosticKind kind = default;
             string? message = null;
-            try
+            if (fields != null)
             {
-                binXml.AppendRecordUtf8(records[i], format, scratch);
-                if (binXml.SalvageDiagnostic is { } salvaged)
+                fields.BeginRecord();
+                try
                 {
-                    kind = EvtxDiagnosticKind.RecordSalvaged;
-                    message = $"BinXml salvaged (output ends at the corruption): {salvaged}";
+                    binXml.ReadRecordFields(records[i], format, fields);
+                }
+                catch (Exception ex)
+                {
+                    // Corrupt values: the fields read so far stand. Rendering reports the record, unless it is skipped.
+                    if (fieldsOnly)
+                    {
+                        kind = EvtxDiagnosticKind.RecordRenderFailed;
+                        message = $"BinXml fields failed: {ex.Message}";
+                    }
                 }
             }
-            catch (Exception ex)
+
+            if (fieldsOnly)
             {
-                kind = EvtxDiagnosticKind.RecordRenderFailed;
-                message = $"BinXml render failed: {ex.Message}";
+                if (headerless)
+                    produced = RendersOutput(binXml, records[i], format);
+            }
+            else
+            {
+                try
+                {
+                    binXml.AppendRecordUtf8(records[i], format, scratch);
+                    if (binXml.SalvageDiagnostic is { } salvaged)
+                    {
+                        kind = EvtxDiagnosticKind.RecordSalvaged;
+                        message = $"BinXml salvaged (output ends at the corruption): {salvaged}";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    kind = EvtxDiagnosticKind.RecordRenderFailed;
+                    message = $"BinXml render failed: {ex.Message}";
+                }
+
+                produced = scratch.WrittenCount > before;
             }
 
             if (headerless)
             {
                 // Recovery keeps only records that produced output; a failed render produced none
-                if (scratch.WrittenCount == before)
+                if (!produced)
+                {
+                    fields?.DiscardRecord();
                     continue;
+                }
                 kept.Add(records[i]);
             }
 
+            fields?.CommitRecord();
             if (message != null)
             {
                 EvtxRecord record = records[i];
@@ -431,7 +502,37 @@ public sealed class EvtxChunk
 
         byte[] output = GC.AllocateUninitializedArray<byte>(scratch.WrittenCount);
         scratch.WrittenSpan.CopyTo(output);
-        return new EvtxChunk(header, fileOffset, headerless, at, kept, output, recordEnds, diagnostics);
+        return new EvtxChunk(header, fileOffset, headerless, at, kept, output, recordEnds, diagnostics, fields?.Build());
+    }
+
+    /// <summary>
+    /// True if a parse with <paramref name="options"/> reads typed fields.
+    /// </summary>
+    /// <param name="options">Parse options.</param>
+    /// <returns>True when <see cref="EvtxOptions.Fields"/> asks for any or <see cref="EvtxOptions.FieldsOnly"/> is set.</returns>
+    private static bool ReadsFields(EvtxOptions options) => (options.Fields != EvtxFields.None) || options.FieldsOnly;
+
+    /// <summary>
+    /// Renders a record to a throwaway buffer to learn whether it produces output (fields-only recovery).
+    /// </summary>
+    /// <param name="binXml">Parser for the chunk.</param>
+    /// <param name="record">The record.</param>
+    /// <param name="format">Output format.</param>
+    /// <returns>True if the record renders non-empty output.</returns>
+    private static bool RendersOutput(BinXmlParser binXml, EvtxRecord record, OutputFormat format)
+    {
+        ArrayBufferWriter<byte> probe = _threadProbeScratch ??= new ArrayBufferWriter<byte>(_initialProbeBytes);
+        probe.ResetWrittenCount();
+        try
+        {
+            binXml.AppendRecordUtf8(record, format, probe);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+
+        return probe.WrittenCount > 0;
     }
 
     #endregion
@@ -449,6 +550,28 @@ public sealed class EvtxChunk
     /// </summary>
     [ThreadStatic]
     private static ArrayBufferWriter<byte>? _threadRenderScratch;
+
+    /// <summary>
+    /// Per-thread field collector, reset for each chunk.
+    /// </summary>
+    [ThreadStatic]
+    private static FieldSink? _threadFieldSink;
+
+    /// <summary>
+    /// Per-thread throwaway buffer for <see cref="RendersOutput"/>.
+    /// </summary>
+    [ThreadStatic]
+    private static ArrayBufferWriter<byte>? _threadProbeScratch;
+
+    /// <summary>
+    /// Initial size of <see cref="_threadProbeScratch"/>: one record's output (typically 1-3 KB).
+    /// </summary>
+    private const int _initialProbeBytes = 16 * 1024;
+
+    /// <summary>
+    /// Typed fields (and pairs) per record, or null when they were not read.
+    /// </summary>
+    private readonly ChunkFields? _fields;
 
     /// <summary>
     /// Size of the chunk header in bytes. Event record data begins immediately after.

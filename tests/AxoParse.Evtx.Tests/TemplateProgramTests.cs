@@ -93,7 +93,7 @@ public class TemplateProgramTests
 
     /// <summary>
     /// Verifies that a program whose text contains a surrogate code unit isn't split into parts (a surrogate at a part's
-    /// edge could pair with a neighbouring value): it compiles to <see cref="CompiledTemplate.DecodeDirectly"/> in both
+    /// edge could pair with a neighbouring value): it compiles to a template that <see cref="CompiledTemplate.DecodesBody"/> in both
     /// formats.
     /// </summary>
     [Fact]
@@ -104,8 +104,8 @@ public class TemplateProgramTests
             new(TemplateOpKind.Text, "x\uD83D"), new(TemplateOpKind.Substitution, SubId: 0),
             new(TemplateOpKind.EndElement, "Data")]);
 
-        Assert.Same(CompiledTemplate.DecodeDirectly, BinXmlParser.CompileXml(program));
-        Assert.Same(CompiledTemplate.DecodeDirectly, BinXmlParser.CompileJson(program));
+        Assert.True(BinXmlParser.CompileXml(program).DecodesBody);
+        Assert.True(BinXmlParser.CompileJson(program).DecodesBody);
     }
 
     /// <summary>

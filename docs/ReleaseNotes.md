@@ -37,6 +37,12 @@ Every other rendering change affects corrupt input only. `WriteTo` now writes a 
 
 **New:**
 
+- **Typed fields** (opt-in with `EvtxOptions.Fields`): `EvtxEvent.EventId`, `Version`, `Level`, `Task`, `Opcode`,
+  `Keywords`, `TimeCreated`, `Provider`, `ProviderGuid`, `Channel`, `Computer`, `ProcessId`, `ThreadId`, `UserId`,
+  `ActivityId`, and `EventData` (EventData/UserData name/value pairs, `TryGetValue`). Read from each template's
+  substitution values as records are parsed, not from rendered text; every field and pair of every sample record
+  matches the record's own XML. `FieldsOnly = true` skips rendering (about 2.5x faster than rendering XML). Parses
+  that don't ask for fields are unchanged in speed.
 - **Streaming input.** `WriteTo`, `ReadEvents` and `Parse` given a path (or a stream) read each 64 KB chunk as a
   worker renders it (positional reads for files), so reading overlaps rendering and the file is never loaded whole.
   Output is identical to the in-memory overloads. The benchmark CLI uses it (see the peak memory column below).
@@ -305,6 +311,8 @@ public sealed record EvtxOptions
 | `ValidateChecksums` | `bool`         | `false` | Skip chunks failing CRC32 validation (reported as `ChunkChecksumMismatch`) |
 | `Salvage`           | `bool`         | `false` | Keep the well-formed prefix of a record whose BinXml is corrupt |
 | `WevtCache`         | `WevtCache?`   | `null`  | Provider templates for records whose embedded template is missing or corrupt |
+| `Fields`            | `EvtxFields`   | `None`  | Typed fields to read: `System`, `EventData` (implies `System`) or `All` |
+| `FieldsOnly`        | `bool`         | `false` | Read typed fields without rendering; `Utf8` stays empty (not for `WriteTo`) |
 | `XmlEventsRoot`     | `bool`         | `false` | `WriteTo` with XML only: wrap the records in `<Events>` … `</Events>` lines |
 
 `EvtxOptions.Default` holds the defaults. Derive variants with `with`.
@@ -361,6 +369,15 @@ A 16-byte view of one record of an `EvtxChunk`; reading it allocates nothing exc
 | `Diagnostic`     | `EvtxDiagnostic?`        | Why the record didn't decode cleanly, or null |
 | `IsSuccess`      | `bool`                   | No diagnostic |
 | `IsSalvaged`     | `bool`                   | `Utf8` holds only the part decoded before corruption |
+| `EventId`, `Version`, `Level`, `Task`, `Opcode`, `Keywords` | integers | Typed `System` fields (`Fields` must include `System`) |
+| `TimeCreated`    | `DateTime`               | `System/TimeCreated@SystemTime`, UTC (written time if absent) |
+| `Provider`, `ProviderGuid`, `Channel`, `Computer`, `UserId`, `ActivityId`, `ProcessId`, `ThreadId` | | Other `System` fields; null or 0 when absent |
+| `EventData`      | `EvtxEventData`          | EventData/UserData pairs (`Fields` must include `EventData`) |
+
+Reading a typed field that wasn't requested throws `InvalidOperationException`.
+
+`EvtxEventData` is an `IReadOnlyList<KeyValuePair<string, string>>` with `TryGetValue(name, out value)` and
+`GetUtf8Value(index)`.
 
 ---
 

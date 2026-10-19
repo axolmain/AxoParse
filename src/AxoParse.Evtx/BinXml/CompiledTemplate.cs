@@ -53,6 +53,7 @@ internal sealed class CompiledTemplate
     /// </summary>
     public readonly SubSlot[] Slots;
 
+
     #endregion
 
     #region Constructors And Destructors
@@ -62,10 +63,15 @@ internal sealed class CompiledTemplate
     /// </summary>
     /// <param name="parts">Static UTF-8 parts; one more than <paramref name="slots"/>.</param>
     /// <param name="slots">Substitution slots; slot <c>i</c> sits between parts <c>i</c> and <c>i + 1</c>.</param>
-    public CompiledTemplate(byte[][] parts, SubSlot[] slots)
+    /// <param name="program">The program the template was compiled from (its fields are built from it on first use), or
+    /// null when fields are never read from this template.</param>
+    /// <param name="decodesBody">True for a template that is decoded directly instead of written from parts.</param>
+    public CompiledTemplate(byte[][] parts, SubSlot[] slots, TemplateProgram? program, bool decodesBody = false)
     {
         Parts = parts;
         Slots = slots;
+        _program = program;
+        DecodesBody = decodesBody;
     }
 
     #endregion
@@ -73,11 +79,21 @@ internal sealed class CompiledTemplate
     #region Properties
 
     /// <summary>
-    /// Sentinel cached for a template that compiles to a program but isn't turned into static parts (its names or text
-    /// contain surrogate code units, which may pair with neighbouring values): the template is usable, and its body is
-    /// decoded directly for every record. Distinct from a null cache entry, which means the template is corrupt.
+    /// True for a template that compiles to a program but isn't turned into static parts (its names or text contain
+    /// surrogate code units, which may pair with neighbouring values): the template is usable, its body is decoded
+    /// directly for every record, and only <see cref="Fields"/> is used. Distinct from a null cache entry, which
+    /// means the template is corrupt.
     /// </summary>
-    public static CompiledTemplate DecodeDirectly { get; } = new([[]], []);
+    public bool DecodesBody { get; }
+
+    /// <summary>
+    /// The template's typed fields and EventData/UserData pairs (format-neutral, built from the same program on first
+    /// use, so parses that don't read fields never pay for them). Unsynchronised publish: racing threads build
+    /// identical results.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The template was compiled without its program.</exception>
+    public TemplateFields Fields => _fields ??= TemplateFields.Compile(
+        _program ?? throw new InvalidOperationException("Template compiled without its program; parse with fields."));
 
     /// <summary>
     /// <see cref="Parts"/> JSON-string-escaped, for a JSON template rendered inside an embedded BinXml value (0x21),
@@ -109,6 +125,16 @@ internal sealed class CompiledTemplate
     #endregion
 
     #region Non-Public Fields
+
+    /// <summary>
+    /// Backing field of <see cref="Fields"/>.
+    /// </summary>
+    private TemplateFields? _fields;
+
+    /// <summary>
+    /// The program the template was compiled from, or null when fields are never read from this template.
+    /// </summary>
+    private readonly TemplateProgram? _program;
 
     /// <summary>
     /// Backing field of <see cref="EscapedParts"/>.

@@ -60,9 +60,49 @@ EvtxLog strict = EvtxParser.Parse("security.evtx", options with { ValidateChecks
 | `ValidateChecksums` | `false` | Skip chunks that fail CRC32 validation; each one is reported in `EvtxLog.Diagnostics` |
 | `Salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it  |
 | `WevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt       |
+| `Fields`            | `None`  | Typed fields to read: `EvtxFields.System`, `EventData` or `All` (see below)           |
+| `FieldsOnly`        | `false` | Read typed fields without rendering (`Utf8` stays empty); not for `WriteTo`           |
 | `XmlEventsRoot`     | `false` | `WriteTo` with XML: wrap the records in `<Events>` so the output is one XML document  |
 
 Output and event order never depend on `MaxThreads`.
+
+## Typed fields
+
+Ask for typed fields with `EvtxOptions.Fields` and read them off each event, in any output format:
+
+```csharp
+EvtxOptions options = new() { Fields = EvtxFields.All };
+foreach (EvtxEvent evt in EvtxParser.ReadEvents("security.evtx", options))
+{
+    Console.WriteLine($"{evt.TimeCreated:O} {evt.Provider} {evt.EventId} level {evt.Level} on {evt.Computer}");
+    foreach (KeyValuePair<string, string> pair in evt.EventData)
+        Console.WriteLine($"  {pair.Key} = {pair.Value}");
+}
+```
+
+| Member                                    | `System` field                                   |
+|-------------------------------------------|--------------------------------------------------|
+| `EventId` (`ushort`)                      | `EventID`                                        |
+| `Version`, `Level`, `Opcode` (`byte`)     | `Version`, `Level`, `Opcode`                     |
+| `Task` (`ushort`), `Keywords` (`ulong`)   | `Task`, `Keywords`                               |
+| `TimeCreated` (`DateTime`, UTC)           | `TimeCreated@SystemTime` (the written time if absent) |
+| `Provider`, `ProviderGuid`                | `Provider@Name`, `Provider@Guid`                 |
+| `Channel`, `Computer`                     | `Channel`, `Computer`                            |
+| `ProcessId`, `ThreadId` (`uint`)          | `Execution@ProcessID`, `Execution@ThreadID`      |
+| `UserId` (SDDL string), `ActivityId`      | `Security@UserID`, `Correlation@ActivityID`      |
+
+`EventData` lists the event's `<Data Name="…">` items under `EventData` (named by `Name`, or `Data` when unnamed),
+or the leaf elements under `UserData` (named by element), in order, with the same text the XML output shows. Use
+`TryGetValue(name, out value)` to look one up.
+
+Fields are read from the event template's substitution values as each record is parsed (an EventID is read as the
+UInt16 it is stored as, not parsed back from text), so they cost far less than rendering. They are opt-in all the same:
+parses that don't ask for them run exactly as fast as before, and reading a field that wasn't requested throws
+`InvalidOperationException`. `EvtxFields.System` reads the System fields; `EvtxFields.EventData` (or `All`) adds the
+pairs, which cost a formatted value per data item. A field the event doesn't have keeps its default (0, or null).
+
+For statistics, set `FieldsOnly = true` as well: records aren't rendered at all (`Utf8` is empty), about 2.5x faster
+than rendering XML.
 
 ## JSON output
 

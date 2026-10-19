@@ -56,6 +56,8 @@ I'd ever bother to, which keeps the history really clean to track. Commits with 
 - **XML and JSON output** — renders BinXml straight to UTF-8 XML or JSON (no xml-to-json conversion, no UTF-16 detour)
 - **Streaming** — `ReadEvents` / `ReadEventsAsync` stream events and `WriteTo` writes JSON Lines or XML to any
   `Stream`, reading the file chunk by chunk; memory stays at a few MB whatever the file size
+- **Typed fields** — `EventId`, `Provider`, `Level`, `TimeCreated`, `Channel`, … and EventData/UserData name/value
+  pairs, read straight from each template's substitution values (opt-in; `FieldsOnly` skips rendering for stats)
 - **One options record** — `EvtxOptions` is immutable and shareable; every entry point is thread-safe
 - **Multi-threaded** — parallel chunk processing with configurable thread count
 - **Template pre-compilation** — compiles BinXml templates once for zero repeated overhead
@@ -97,6 +99,19 @@ using FileStream output = File.Create("security.jsonl");
 EvtxParser.WriteTo("security.evtx", output, new EvtxOptions { Format = OutputFormat.JsonStructured });
 ```
 
+### Typed fields
+
+```csharp
+EvtxOptions options = new() { Fields = EvtxFields.All };
+foreach (EvtxEvent evt in EvtxParser.ReadEvents("security.evtx", options))
+{
+    if ((evt.EventId == 4624) && evt.EventData.TryGetValue("TargetUserName", out string user))
+        Console.WriteLine($"{evt.TimeCreated:O} logon: {user}");
+}
+```
+
+Add `FieldsOnly = true` to skip rendering entirely when you only need fields (about 2.5x faster than rendering XML).
+
 ### Consume events as they're parsed
 
 ```csharp
@@ -115,6 +130,8 @@ Every entry point takes an optional `EvtxOptions` (an immutable record: `new Evt
 | `ValidateChecksums` | `false` | Skip chunks that fail CRC32 validation (reported as diagnostics)                     |
 | `Salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it |
 | `WevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt      |
+| `Fields`            | `None`  | Typed fields to read: `EvtxFields.System`, `EventData` or `All`                      |
+| `FieldsOnly`        | `false` | Read typed fields without rendering (`Utf8` stays empty)                             |
 | `XmlEventsRoot`     | `false` | `WriteTo` with XML: wrap the records in `<Events>` so the output is one XML document |
 
 ## Benchmark Results

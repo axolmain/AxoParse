@@ -25,13 +25,18 @@ internal sealed partial class BinXmlParser
     /// GUID, or null to decode every template body. Never share a cache between formats.</param>
     /// <param name="wevtCache">Provider templates used when a record's embedded template is missing or corrupt, or null.</param>
     /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt instead of failing it.</param>
+    /// <param name="readsFields">True if typed fields are read: templates compiled into <paramref name="compiledCache"/>
+    /// then keep their program, which their <see cref="CompiledTemplate.Fields"/> are built from. Otherwise the
+    /// programs are dropped once compiled (keeping them grows every worker's live heap, which slows parallel parses).</param>
     public BinXmlParser(
         byte[] fileData,
         int chunkFileOffset,
         Dictionary<Guid, CompiledTemplate?>? compiledCache,
         WevtCache? wevtCache = null,
-        bool salvage = false)
+        bool salvage = false,
+        bool readsFields = false)
     {
+        _readsFields = readsFields;
         _salvage = salvage;
         _wevtCache = wevtCache;
         _fileData = fileData;
@@ -310,7 +315,9 @@ internal sealed partial class BinXmlParser
         {
             if (!_compiledCache.TryGetValue(templateGuid, out compiled))
             {
-                compiled = CompileProgram((int)defDataOffset, (int)dataSize) is { } program ? Lower<TWriter>(program) : null;
+                compiled = CompileProgram((int)defDataOffset, (int)dataSize) is { } program
+                    ? Lower<TWriter>(program, _readsFields)
+                    : null;
                 _compiledCache[templateGuid] = compiled;
             }
             compileFailed = compiled == null;
@@ -319,7 +326,8 @@ internal sealed partial class BinXmlParser
         if ((!embedded || compileFailed) && (_wevtCache?.Get(templateGuid, TWriter.Format) is { } provider))
             compiled = provider;
 
-        if (compiled == CompiledTemplate.DecodeDirectly)
+        CompiledTemplate? fieldSource = compiled;
+        if (compiled is { DecodesBody: true })
             compiled = null;
 
         entry = new ResolvedTemplate
@@ -329,7 +337,8 @@ internal sealed partial class BinXmlParser
             IsSet = true,
             Format = TWriter.Format,
             DecodeBody = embedded && (compiled == null),
-            Compiled = compiled
+            Compiled = compiled,
+            FieldSource = fieldSource
         };
         return ref entry;
     }
@@ -420,9 +429,15 @@ internal sealed partial class BinXmlParser
     private readonly bool _salvage;
 
     /// <summary>
+    /// True if typed fields are read, so compiled templates keep their programs (see the constructor).
+    /// </summary>
+    private readonly bool _readsFields;
+
+    /// <summary>
     /// First corruption salvaged while rendering the current record, or null if it decoded cleanly.
     /// </summary>
     private string? _salvageDiagnostic;
+
 
     /// <summary>
     /// Number of <see cref="ResolvedTemplateMemo"/> slots (a power of two).
@@ -459,7 +474,7 @@ internal sealed partial class BinXmlParser
     /// <summary>
     /// Cache of templates compiled for this parser's output format, keyed by template GUID and shared across the chunks
     /// a worker renders, or null to decode every template body. A null entry marks a corrupt template;
-    /// <see cref="CompiledTemplate.DecodeDirectly"/> a usable one that is decoded rather than compiled.
+    /// one that <see cref="CompiledTemplate.DecodesBody"/> a usable one that is decoded rather than compiled.
     /// </summary>
     private readonly Dictionary<Guid, CompiledTemplate?>? _compiledCache;
 
@@ -527,6 +542,12 @@ internal sealed partial class BinXmlParser
         /// The compiled template to write (the embedded one or a provider fallback), or null.
         /// </summary>
         public CompiledTemplate? Compiled;
+
+        /// <summary>
+        /// The template that renders (compiled or decoded directly), whose <see cref="CompiledTemplate.Fields"/> are the
+        /// instance's fields, or null if it is unavailable or corrupt.
+        /// </summary>
+        public CompiledTemplate? FieldSource;
     }
 
     /// <summary>
