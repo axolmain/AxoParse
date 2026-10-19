@@ -106,7 +106,7 @@ public class EvtxChunk
     /// Template definitions preloaded from this chunk's 32-entry template pointer table,
     /// keyed by chunk-relative offset.
     /// </summary>
-    public IReadOnlyDictionary<uint, BinXmlTemplateDefinition> Templates { get; }
+    internal IReadOnlyDictionary<uint, BinXmlTemplateDefinition> Templates { get; }
 
     #endregion
 

@@ -30,7 +30,7 @@ public readonly record struct EvtxChunkHeader(
     ChunkFlags Flags,
     uint Checksum)
 {
-    #region Public Methods
+    #region Non-Public Methods
 
     /// <summary>
     /// Parses the 512-byte chunk header, verifying the "ElfChnk\0" signature and reading
@@ -38,7 +38,7 @@ public readonly record struct EvtxChunkHeader(
     /// </summary>
     /// <param name="data">At least 512 bytes starting at the chunk boundary.</param>
     /// <returns>A populated <see cref="EvtxChunkHeader"/> value.</returns>
-    public static EvtxChunkHeader ParseEvtxChunkHeader(ReadOnlySpan<byte> data)
+    internal static EvtxChunkHeader ParseEvtxChunkHeader(ReadOnlySpan<byte> data)
     {
         if (data.Length < 512)
             throw new EvtxParseException(EvtxParseError.ChunkHeaderTooShort, "Chunk header too short");
@@ -66,7 +66,7 @@ public readonly record struct EvtxChunkHeader(
     /// </summary>
     /// <param name="chunkData">Full 64KB chunk data.</param>
     /// <returns>True if the computed checksum matches the stored value, or the chunk has no checksums.</returns>
-    public bool ValidateDataChecksum(ReadOnlySpan<byte> chunkData)
+    internal bool ValidateDataChecksum(ReadOnlySpan<byte> chunkData)
     {
         if ((Flags & ChunkFlags.NoCrc32) != 0) return true;
         uint clampedEnd = Math.Min(FreeSpaceOffset, (uint)chunkData.Length);
@@ -82,7 +82,7 @@ public readonly record struct EvtxChunkHeader(
     /// </summary>
     /// <param name="chunkData">Full 64KB chunk data.</param>
     /// <returns>True if the computed checksum matches the stored value, or the chunk has no checksums.</returns>
-    public bool ValidateHeaderChecksum(ReadOnlySpan<byte> chunkData)
+    internal bool ValidateHeaderChecksum(ReadOnlySpan<byte> chunkData)
     {
         if ((Flags & ChunkFlags.NoCrc32) != 0) return true;
         return Crc32.Compute(chunkData[..120], chunkData[128..512]) == Checksum;

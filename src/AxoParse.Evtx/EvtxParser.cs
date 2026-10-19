@@ -54,7 +54,7 @@ public class EvtxParser
     /// <summary>
     /// The complete EVTX file bytes. Retained so parsed records can lazily reference event data via spans.
     /// </summary>
-    public ReadOnlyMemory<byte> RawData { get; }
+    internal ReadOnlyMemory<byte> RawData { get; }
 
     /// <summary>
     /// Total number of event records across all parsed chunks.
@@ -64,6 +64,15 @@ public class EvtxParser
     #endregion
 
     #region Public Methods
+
+    /// <summary>
+    /// Parses the EVTX file header: the first 128 bytes of the file, starting with the <c>ElfFile\0</c> signature.
+    /// For callers that read a file chunk by chunk (see <see cref="EvtxChunk.ParseStandalone"/>).
+    /// </summary>
+    /// <param name="data">At least the first 128 bytes of the file.</param>
+    /// <returns>The parsed header.</returns>
+    /// <exception cref="EvtxParseException">The data is shorter than 128 bytes or the signature is wrong.</exception>
+    public static EvtxFileHeader ParseFileHeader(ReadOnlySpan<byte> data) => EvtxFileHeader.ParseEvtxFileHeader(data);
 
     /// <summary>
     /// Parses an entire EVTX file from a byte array.

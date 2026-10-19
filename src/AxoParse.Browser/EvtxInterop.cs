@@ -154,7 +154,7 @@ public partial class EvtxInterop
     [JSExport]
     public static string ParseFileHeader(byte[] headerData)
     {
-        EvtxFileHeader header = EvtxFileHeader.ParseEvtxFileHeader(headerData);
+        EvtxFileHeader header = EvtxParser.ParseFileHeader(headerData);
 
         using MemoryStream stream = new(256);
         using Utf8JsonWriter writer = new(stream);

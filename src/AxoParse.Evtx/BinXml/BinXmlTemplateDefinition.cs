@@ -36,7 +36,7 @@ internal readonly struct TemplateHeaderLayout
 /// <param name="Guid">Offset 4, 16 bytes — Template identifier GUID.</param>
 /// <param name="DataSize">Offset 20, 4 bytes — Size of the template body (fragment header + element tree + EOF token).</param>
 /// <param name="DataFileOffset">Absolute file offset of the template body bytes.</param>
-public readonly record struct BinXmlTemplateDefinition(
+internal readonly record struct BinXmlTemplateDefinition(
     uint DefDataOffset,
     uint NextTemplateOffset,
     Guid Guid,
