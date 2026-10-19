@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Runtime.InteropServices;
 
 namespace AxoParse.Evtx.BinXml;
@@ -93,231 +92,13 @@ internal readonly record struct TemplateOp(
 
 /// <summary>
 /// A template body compiled once into a flat, format-neutral instruction list: element structure, literal text and
-/// substitution gaps, with names and text unescaped. Each output format lowers it into its own compiled form
-/// (<see cref="LowerToXml"/>, <see cref="LowerToJson"/>), so the BinXml token walk exists once instead of once per
-/// format. It replaced separate XML and JSON template compilers, whose output it reproduces exactly (verified over every
-/// sample template and 5,400 mutated ones before they were removed).
+/// substitution gaps, with names and text unescaped. Each output format turns it into a <see cref="CompiledTemplate"/>
+/// by replaying it through that format's writer (<see cref="BinXmlParser.CompileXml"/>,
+/// <see cref="BinXmlParser.CompileJson"/>), so the BinXml token walk exists once and compiled output follows the same
+/// rules as decoded output.
 /// </summary>
-/// <param name="Ops">Instructions in template order.</param>
-internal sealed record TemplateProgram(TemplateOp[] Ops)
-{
-    #region Public Methods
-
-    /// <summary>
-    /// Lowers the program to the XML compiled form: static XML parts interleaved with substitution slots, with
-    /// optional attribute markup moved into its slot (see <see cref="CompiledTemplate.FromParts"/>).
-    /// </summary>
-    /// <returns>The compiled XML template.</returns>
-    public CompiledTemplate LowerToXml()
-    {
-        TemplatePartsBuilder parts = new();
-        List<int> subIds = new();
-        List<bool> isOptional = new();
-        List<bool> inAttrValue = new();
-        // Whether the innermost open context is an attribute value (true) or element content (false)
-        Stack<bool> inAttr = new();
-        inAttr.Push(false);
-
-        foreach (TemplateOp op in Ops)
-        {
-            switch (op.Kind)
-            {
-                case TemplateOpKind.StartElement:
-                    parts.Current.Append('<').Append(op.Text);
-                    break;
-                case TemplateOpKind.BeginAttributes:
-                case TemplateOpKind.EndAttributes:
-                    break;
-                case TemplateOpKind.Attribute:
-                    parts.Current.Append(' ').Append(op.Text).Append("=\"");
-                    inAttr.Push(true);
-                    break;
-                case TemplateOpKind.EndAttribute:
-                    inAttr.Pop();
-                    parts.Current.Append('"');
-                    break;
-                case TemplateOpKind.CloseStartElement:
-                    parts.Current.Append('>');
-                    inAttr.Push(false);
-                    break;
-                case TemplateOpKind.EndElement:
-                    inAttr.Pop();
-                    parts.Current.Append("</").Append(op.Text).Append('>');
-                    break;
-                case TemplateOpKind.CloseEmptyElement:
-                    parts.Current.Append("></").Append(op.Text).Append('>');
-                    break;
-                case TemplateOpKind.Text:
-                    parts.Current.Append(BinXmlValueFormatter.XmlEscapeString(op.Text!));
-                    break;
-                case TemplateOpKind.CharRef:
-                    parts.Current.Append("&#").Append(op.CharValue.ToString(NumberFormatInfo.InvariantInfo)).Append(';');
-                    break;
-                case TemplateOpKind.EntityRef:
-                    parts.Current.Append('&').Append(op.Text).Append(';');
-                    break;
-                case TemplateOpKind.CData:
-                    parts.Current.Append("<![CDATA[").Append(op.Text).Append("]]>");
-                    break;
-                case TemplateOpKind.Substitution:
-                    subIds.Add(op.SubId);
-                    isOptional.Add(op.IsOptional);
-                    inAttrValue.Add(inAttr.Peek());
-                    parts.NextPart();
-                    break;
-            }
-        }
-
-        return CompiledTemplate.FromParts(parts.ToArray(), subIds, isOptional, inAttrValue);
-    }
-
-    /// <summary>
-    /// Lowers the program to the JSON compiled form, the structural
-    /// <c>{"#name":…,"#attrs":{…},"#content":[…]}</c> shape: names and text JSON-escaped, entities resolved, content
-    /// items comma-separated, and substitutions in content quoted as string items.
-    /// </summary>
-    /// <returns>The compiled JSON template.</returns>
-    public CompiledJsonTemplate LowerToJson()
-    {
-        TemplatePartsBuilder parts = new();
-        List<int> subIds = new();
-        List<bool> isOptional = new();
-        List<bool> inAttrValue = new();
-        // Innermost open context: inside an attribute value (a JSON string literal) or element content (an array),
-        // and whether the next content item needs a leading comma
-        Stack<(bool InAttr, bool NeedsComma)> contexts = new();
-        contexts.Push((false, false));
-        // Per open element: whether no attribute has been written yet
-        Stack<bool> firstAttr = new();
-
-        foreach (TemplateOp op in Ops)
-        {
-            switch (op.Kind)
-            {
-                case TemplateOpKind.StartElement:
-                    BeginContentItem(parts, contexts);
-                    parts.Current.Append("{\"#name\":\"").Append(BinXmlValueFormatter.JsonEscapeString(op.Text!)).Append('"');
-                    break;
-                case TemplateOpKind.BeginAttributes:
-                    parts.Current.Append(",\"#attrs\":{");
-                    firstAttr.Push(true);
-                    break;
-                case TemplateOpKind.Attribute:
-                    if (!firstAttr.Peek())
-                        parts.Current.Append(',');
-                    firstAttr.Pop();
-                    firstAttr.Push(false);
-                    parts.Current.Append('"').Append(BinXmlValueFormatter.JsonEscapeString(op.Text!)).Append("\":\"");
-                    contexts.Push((true, false));
-                    break;
-                case TemplateOpKind.EndAttribute:
-                    contexts.Pop();
-                    parts.Current.Append('"');
-                    break;
-                case TemplateOpKind.EndAttributes:
-                    firstAttr.Pop();
-                    parts.Current.Append('}');
-                    break;
-                case TemplateOpKind.CloseStartElement:
-                    parts.Current.Append(",\"#content\":[");
-                    contexts.Push((false, false));
-                    break;
-                case TemplateOpKind.EndElement:
-                    contexts.Pop();
-                    parts.Current.Append("]}");
-                    break;
-                case TemplateOpKind.CloseEmptyElement:
-                    parts.Current.Append('}');
-                    break;
-                case TemplateOpKind.Text:
-                case TemplateOpKind.CData:
-                    AppendJsonText(parts, contexts, BinXmlValueFormatter.JsonEscapeString(op.Text!));
-                    break;
-                case TemplateOpKind.CharRef:
-                    AppendJsonText(parts, contexts, BinXmlValueFormatter.JsonEscapeString(((char)op.CharValue).ToString()));
-                    break;
-                case TemplateOpKind.EntityRef:
-                    AppendJsonText(parts, contexts, BinXmlValueFormatter.JsonEscapeString(ResolveEntity(op.Text!)));
-                    break;
-                case TemplateOpKind.Substitution:
-                {
-                    bool attr = contexts.Peek().InAttr;
-                    if (!attr)
-                    {
-                        BeginContentItem(parts, contexts);
-                        parts.Current.Append('"');
-                    }
-                    subIds.Add(op.SubId);
-                    isOptional.Add(op.IsOptional);
-                    inAttrValue.Add(attr);
-                    parts.NextPart();
-                    if (!attr)
-                        parts.Current.Append('"');
-                    break;
-                }
-            }
-        }
-
-        return new CompiledJsonTemplate(parts.ToArray(), subIds.ToArray(), isOptional.ToArray(), inAttrValue.ToArray());
-    }
-
-    #endregion
-
-    #region Non-Public Methods
-
-    /// <summary>
-    /// Appends already-escaped text: directly inside an attribute value, or as a quoted string item in content.
-    /// </summary>
-    /// <param name="parts">Parts being built.</param>
-    /// <param name="contexts">Open JSON contexts.</param>
-    /// <param name="escaped">JSON-escaped text.</param>
-    private static void AppendJsonText(TemplatePartsBuilder parts, Stack<(bool InAttr, bool NeedsComma)> contexts, string escaped)
-    {
-        if (contexts.Peek().InAttr)
-        {
-            parts.Current.Append(escaped);
-            return;
-        }
-
-        BeginContentItem(parts, contexts);
-        parts.Current.Append('"').Append(escaped).Append('"');
-    }
-
-    /// <summary>
-    /// In element content, writes the comma separating this item from the previous one. Does nothing inside an
-    /// attribute value, which is a single string.
-    /// </summary>
-    /// <param name="parts">Parts being built.</param>
-    /// <param name="contexts">Open JSON contexts; the innermost one's comma state is updated.</param>
-    private static void BeginContentItem(TemplatePartsBuilder parts, Stack<(bool InAttr, bool NeedsComma)> contexts)
-    {
-        (bool inAttr, bool needsComma) = contexts.Pop();
-        if (!inAttr)
-        {
-            if (needsComma)
-                parts.Current.Append(',');
-            needsComma = true;
-        }
-        contexts.Push((inAttr, needsComma));
-    }
-
-    /// <summary>
-    /// Resolves the five predefined XML entities for JSON output; any other entity is kept as <c>&amp;name;</c>.
-    /// </summary>
-    /// <param name="name">Entity name.</param>
-    /// <returns>The resolved text.</returns>
-    private static string ResolveEntity(string name) => name switch
-    {
-        "amp" => "&",
-        "lt" => "<",
-        "gt" => ">",
-        "quot" => "\"",
-        "apos" => "'",
-        _ => $"&{name};"
-    };
-
-    #endregion
-}
+/// <param name="Ops">The instructions, in document order.</param>
+internal sealed record TemplateProgram(TemplateOp[] Ops);
 
 /// <summary>
 /// Reads element, attribute and entity names during a template walk. EVTX chunk templates and WEVT provider
@@ -375,7 +156,7 @@ internal readonly struct WevtInlineNameReader : ITemplateNameReader
 
 /// <summary>
 /// The format-neutral template compiler: one BinXml token walk that records a <see cref="TemplateProgram"/>, which
-/// each output format then lowers. Used for EVTX chunk templates (<see cref="BinXmlParser.CompileProgram"/>) and WEVT
+/// each output format then compiles through its writer. Used for EVTX chunk templates (<see cref="BinXmlParser.CompileProgram"/>) and WEVT
 /// provider templates (<see cref="Wevt.WevtCache"/>), which differ only in how names are stored.
 /// </summary>
 internal static class TemplateProgramCompiler

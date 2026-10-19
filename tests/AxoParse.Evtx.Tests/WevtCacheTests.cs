@@ -1,4 +1,5 @@
 using AxoParse.Evtx.BinXml;
+using AxoParse.Evtx.Evtx;
 using AxoParse.Evtx.Wevt;
 
 namespace AxoParse.Evtx.Tests;
@@ -128,8 +129,8 @@ public class WevtCacheTests
     }
 
     /// <summary>
-    /// Verifies that every provider template that compiled can be lowered to both XML and JSON, so any of them can
-    /// serve as a fallback whatever the output format.
+    /// Verifies that every provider template that compiled is available compiled for both XML and JSON, so any of them
+    /// can serve as a fallback whatever the output format.
     /// </summary>
     [Fact]
     public void CompiledTemplatesLowerToXmlAndJson()
@@ -146,8 +147,8 @@ public class WevtCacheTests
 
         foreach (Guid guid in guids)
         {
-            CompiledTemplate? xml = cache.GetXml(guid);
-            CompiledJsonTemplate? json = cache.GetJson(guid);
+            CompiledTemplate? xml = cache.Get(guid, OutputFormat.Xml);
+            CompiledTemplate? json = cache.Get(guid, OutputFormat.Json);
             Assert.Equal(xml == null, json == null);
             if (xml != null)
                 lowered++;

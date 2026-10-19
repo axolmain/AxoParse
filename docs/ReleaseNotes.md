@@ -60,6 +60,11 @@
   cancellation token, so existing calls still compile. Compiled callers need a rebuild (the method signatures changed).
 - Template compilation now goes through one format-neutral compiler (phases 1–3 of the renderer refactor). It removes
   the separate XML, JSON and WEVT template compilers (~880 lines). Output is unchanged.
+- Compiled templates are now built by replaying the template through the same XML or JSON writer the decoder uses,
+  so compiled and decoded output follow one set of rules (a new test checks they match on every sample and seeded
+  mutations). One compiled template type, one executor, one template-instance handler and one value formatter replace
+  the per-format pairs. Output is unchanged, except in one case on corrupt input where the two paths disagreed: an
+  optional attribute whose value index is past the instance's values is now omitted on both.
 - **API:** `Parse`, `ParseAsync` and the `WriteTo` overloads take `bool salvage = false` as their last parameter.
 
 ---

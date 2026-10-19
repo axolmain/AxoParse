@@ -172,6 +172,45 @@ internal static class BinXmlValueFormatter
     }
 
     /// <summary>
+    /// Appends a NUL-terminated ANSI string value with JSON escaping applied twice (for text inside an embedded BinXml
+    /// fragment rendered as a JSON string), as UTF-8. Bytes map 1:1 to U+0000..U+00FF, so there are no surrogates and
+    /// double escaping is per character; rendering stops at the first NUL.
+    /// </summary>
+    /// <param name="vub">UTF-8 builder that receives the escaped text.</param>
+    /// <param name="valueBytes">ANSI string bytes.</param>
+    internal static void AppendAnsiJsonEscapedTwice(ref ValueUtf8Builder vub, ReadOnlySpan<byte> valueBytes)
+    {
+        for (int i = 0; i < valueBytes.Length; i++)
+        {
+            byte b = valueBytes[i];
+            if (b == 0) break;
+            AppendJsonEscapedTwiceChar(ref vub, (char)b);
+        }
+    }
+
+    /// <summary>
+    /// Appends a NUL-terminated ANSI string value with XML entity escaping (&amp;, &lt;, &gt;, &quot;, &apos;) as UTF-8.
+    /// Bytes map 1:1 to U+0000..U+00FF; rendering stops at the first NUL.
+    /// </summary>
+    /// <param name="vub">UTF-8 builder that receives the escaped text.</param>
+    /// <param name="valueBytes">ANSI string bytes.</param>
+    internal static void AppendAnsiXmlEscaped(ref ValueUtf8Builder vub, ReadOnlySpan<byte> valueBytes)
+    {
+        for (int i = 0; i < valueBytes.Length; i++)
+        {
+            byte b = valueBytes[i];
+            if (b == 0) break;
+            if (b == '&') vub.Append("&amp;"u8);
+            else if (b == '<') vub.Append("&lt;"u8);
+            else if (b == '>') vub.Append("&gt;"u8);
+            else if (b == '"') vub.Append("&quot;"u8);
+            else if (b == '\'') vub.Append("&apos;"u8);
+            else if (b < 0x80) vub.Append(b);
+            else AppendLatin1(ref vub, (char)b);
+        }
+    }
+
+    /// <summary>
     /// Appends one Latin-1 character (U+0080..U+00FF, from an ANSI string byte) as its 2-byte UTF-8 sequence.
     /// </summary>
     /// <param name="vub">UTF-8 builder that receives the output.</param>
@@ -559,26 +598,6 @@ internal static class BinXmlValueFormatter
     }
 
     /// <summary>
-    /// Returns a JSON-escaped copy of <paramref name="str"/> per RFC 8259, for template compilation where a heap
-    /// string is needed. Text with no escape characters is returned unchanged; otherwise unpaired surrogates also
-    /// become U+FFFD, matching the renderer's escaping.
-    /// </summary>
-    /// <param name="str">The string to escape.</param>
-    /// <returns>The escaped string, or the original string if no escaping was needed.</returns>
-    internal static string JsonEscapeString(string str)
-    {
-        if (str.AsSpan().IndexOfAny(JsonEscapeChars) < 0)
-            return str;
-
-        // Escaped output is valid UTF-16 (unpaired surrogates already replaced), so the UTF-8 round trip is lossless
-        ValueUtf8Builder vub = new(stackalloc byte[256]);
-        AppendJsonEscaped(ref vub, str.AsSpan());
-        string result = Encoding.UTF8.GetString(vub.AsSpan());
-        vub.Dispose();
-        return result;
-    }
-
-    /// <summary>
     /// Reads a length-prefixed UTF-16LE string as a span, avoiding a heap allocation.
     /// The returned span points directly into <paramref name="data"/> and is only valid
     /// while the underlying buffer is alive.
@@ -606,20 +625,6 @@ internal static class BinXmlValueFormatter
     internal static string ReadUnicodeTextStringAsString(ReadOnlySpan<byte> data, ref int pos)
     {
         return new string(ReadUnicodeTextString(data, ref pos));
-    }
-
-    /// <summary>
-    /// Returns an XML-escaped copy of <paramref name="str"/>. Used during template compilation
-    /// where a heap string is needed rather than span-based appending.
-    /// </summary>
-    /// <param name="str">The string to escape.</param>
-    /// <returns>The escaped string, or the original string if no escaping was needed.</returns>
-    internal static string XmlEscapeString(string str)
-    {
-        if (str.AsSpan().IndexOfAny(XmlEscapeChars) < 0)
-            return str;
-        return str.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;")
-            .Replace("\"", "&quot;").Replace("'", "&apos;");
     }
 
     #endregion

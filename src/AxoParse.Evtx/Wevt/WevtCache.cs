@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using AxoParse.Evtx.BinXml;
+using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Wevt;
 
@@ -120,18 +121,20 @@ public sealed class WevtCache
         _templates.TryAdd(guid, new WevtTemplateEntry(CompileWevt(binXml)));
 
     /// <summary>
-    /// The fallback template for <paramref name="guid"/> lowered to XML, or null if there is none or it didn't compile.
+    /// The fallback template for <paramref name="guid"/> compiled for <paramref name="format"/>, or null if there is
+    /// none, it didn't compile, or it can't be split into static parts (WEVT bodies use inline names, so the decoder
+    /// can't render them directly).
     /// </summary>
     /// <param name="guid">Template GUID from the record's template instance.</param>
-    /// <returns>The compiled XML template, or null.</returns>
-    internal CompiledTemplate? GetXml(Guid guid) => _templates.TryGetValue(guid, out WevtTemplateEntry? entry) ? entry.Xml : null;
-
-    /// <summary>
-    /// The fallback template for <paramref name="guid"/> lowered to JSON, or null if there is none or it didn't compile.
-    /// </summary>
-    /// <param name="guid">Template GUID from the record's template instance.</param>
-    /// <returns>The compiled JSON template, or null.</returns>
-    internal CompiledJsonTemplate? GetJson(Guid guid) => _templates.TryGetValue(guid, out WevtTemplateEntry? entry) ? entry.Json : null;
+    /// <param name="format">Output format.</param>
+    /// <returns>The compiled template, or null.</returns>
+    internal CompiledTemplate? Get(Guid guid, OutputFormat format)
+    {
+        if (!_templates.TryGetValue(guid, out WevtTemplateEntry? entry))
+            return null;
+        CompiledTemplate? compiled = format == OutputFormat.Json ? entry.Json : entry.Xml;
+        return compiled == CompiledTemplate.DecodeDirectly ? null : compiled;
+    }
 
     /// <summary>
     /// Compiles a WEVT template body with the shared template compiler, reading WEVT inline names. Malformed bodies
@@ -167,8 +170,8 @@ public sealed class WevtCache
     #region Nested Types
 
     /// <summary>
-    /// One provider template: its program (null if it didn't compile) and its XML/JSON lowerings, built on first use.
-    /// The lowerings are published without locking: racing threads build identical results and either may win.
+    /// One provider template: its program (null if it didn't compile) and its XML/JSON compiled forms, built on first
+    /// use. They are published without locking: racing threads build identical results and either may win.
     /// </summary>
     /// <param name="program">Compiled program, or null.</param>
     private sealed class WevtTemplateEntry(TemplateProgram? program)
@@ -179,24 +182,24 @@ public sealed class WevtCache
         public TemplateProgram? Program { get; } = program;
 
         /// <summary>
-        /// XML lowering, or null if <see cref="Program"/> is null.
+        /// Compiled for XML, or null if <see cref="Program"/> is null.
         /// </summary>
-        public CompiledTemplate? Xml => _xml ??= Program?.LowerToXml();
+        public CompiledTemplate? Xml => (_xml ??= Program is { } program ? BinXmlParser.CompileXml(program) : null);
 
         /// <summary>
-        /// JSON lowering, or null if <see cref="Program"/> is null.
+        /// Compiled for JSON, or null if <see cref="Program"/> is null.
         /// </summary>
-        public CompiledJsonTemplate? Json => _json ??= Program?.LowerToJson();
+        public CompiledTemplate? Json => (_json ??= Program is { } program ? BinXmlParser.CompileJson(program) : null);
 
         /// <summary>
-        /// Cached XML lowering.
+        /// Cached XML form.
         /// </summary>
         private CompiledTemplate? _xml;
 
         /// <summary>
-        /// Cached JSON lowering.
+        /// Cached JSON form.
         /// </summary>
-        private CompiledJsonTemplate? _json;
+        private CompiledTemplate? _json;
     }
 
     #endregion
