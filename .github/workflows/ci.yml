@@ -90,7 +90,9 @@ jobs:
           cache-dependency-path: demos/AxoParse.React/package-lock.json
 
       - name: Install .NET workloads
-        run: dotnet workload restore src/AxoParse.Browser/AxoParse.Browser.csproj
+        # Only wasm-tools (AxoParse.Browser), from the manifests the SDK ships with. `workload restore` first updates to
+        # the newest workload set, which fails whenever that set names a manifest not yet on NuGet (iOS, 2026-10-19).
+        run: dotnet workload install wasm-tools --skip-manifest-update
 
       - name: Publish WASM module
         run: dotnet publish src/AxoParse.Browser -c Release
