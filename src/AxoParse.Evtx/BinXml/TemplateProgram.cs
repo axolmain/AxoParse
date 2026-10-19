@@ -320,37 +320,99 @@ internal sealed record TemplateProgram(TemplateOp[] Ops)
 }
 
 /// <summary>
-/// Partial class containing the format-neutral template compiler: one BinXml token walk that records a
-/// <see cref="TemplateProgram"/>, which each output format then lowers.
+/// Reads element, attribute and entity names during a template walk. EVTX chunk templates and WEVT provider
+/// templates share the BinXml token grammar but store names differently, so the walk is generic over this.
 /// </summary>
-internal sealed partial class BinXmlParser
+internal interface ITemplateNameReader
+{
+    /// <summary>
+    /// Reads an element or attribute name at <paramref name="pos"/>, advancing past its bytes.
+    /// </summary>
+    /// <param name="data">Template body.</param>
+    /// <param name="pos">Position of the name field.</param>
+    /// <returns>The name, or null if it can't be read (the template is treated as uncompilable).</returns>
+    string? ReadName(ReadOnlySpan<byte> data, ref int pos);
+
+    /// <summary>
+    /// Reads an EntityRef token's name at <paramref name="pos"/>, advancing past its bytes.
+    /// </summary>
+    /// <param name="data">Template body.</param>
+    /// <param name="pos">Position of the name field (after the token byte).</param>
+    /// <returns>The name, or null if it can't be read.</returns>
+    string? ReadEntityName(ReadOnlySpan<byte> data, ref int pos);
+}
+
+/// <summary>
+/// Reads WEVT inline names: no name-table offset, each name stored in place as
+/// hash (2) + character count (2) + UTF-16LE characters + NUL (2) = 6 + 2 × count bytes.
+/// </summary>
+internal readonly struct WevtInlineNameReader : ITemplateNameReader
+{
+    #region Public Methods
+
+    /// <inheritdoc/>
+    public string? ReadName(ReadOnlySpan<byte> data, ref int pos) => ReadInline(data, ref pos);
+
+    /// <inheritdoc/>
+    public string? ReadEntityName(ReadOnlySpan<byte> data, ref int pos) => ReadInline(data, ref pos);
+
+    #endregion
+
+    #region Non-Public Methods
+
+    /// <summary>
+    /// Reads one inline WEVT name.
+    /// </summary>
+    /// <param name="data">Template body.</param>
+    /// <param name="pos">Position of the name; advanced past it, including the NUL.</param>
+    /// <returns>The name, or null if it runs past the data.</returns>
+    private static string? ReadInline(ReadOnlySpan<byte> data, ref int pos)
+    {
+        if (pos + 4 > data.Length)
+            return null;
+
+        ushort numChars = MemoryMarshal.Read<ushort>(data[(pos + 2)..]);
+        int stringBytes = numChars * 2;
+        if (pos + 4 + stringBytes + 2 > data.Length)
+            return null;
+
+        string name = new(MemoryMarshal.Cast<byte, char>(data.Slice(pos + 4, stringBytes)));
+        pos += 4 + stringBytes + 2;
+        return name;
+    }
+
+    #endregion
+}
+
+/// <summary>
+/// The format-neutral template compiler: one BinXml token walk that records a <see cref="TemplateProgram"/>, which
+/// each output format then lowers. Used for EVTX chunk templates (<see cref="BinXmlParser.CompileProgram"/>) and WEVT
+/// provider templates (<see cref="Wevt.WevtCache"/>), which differ only in how names are stored.
+/// </summary>
+internal static class TemplateProgramCompiler
 {
     #region Non-Public Methods
 
     /// <summary>
-    /// Compiles a template body into a <see cref="TemplateProgram"/>, which the XML and JSON writers lower into their
-    /// compiled forms. Returns null if the template contains nested template instances or other constructs that
-    /// prevent static compilation; the writers then interpret the template body token by token.
+    /// Compiles a template body into a program. Returns null if the template contains nested template instances or
+    /// other constructs that prevent static compilation; the writers then interpret the body token by token.
     /// </summary>
-    /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
-    /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>
-    /// <returns>The program, or null if the template cannot be statically compiled.</returns>
-    internal TemplateProgram? CompileProgram(int defDataOffset, int dataSize)
+    /// <typeparam name="TNames">How names are stored in this body.</typeparam>
+    /// <param name="body">Template body (BinXml fragment).</param>
+    /// <param name="names">Name reader for the body.</param>
+    /// <returns>The program, or null.</returns>
+    internal static TemplateProgram? Compile<TNames>(ReadOnlySpan<byte> body, TNames names)
+        where TNames : struct, ITemplateNameReader
     {
-        int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
-        if (tplBodyFileOffset + dataSize > _chunkEnd) return null;
-
-        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, dataSize);
-        int tplChunkBase = defDataOffset + 24;
         List<TemplateOp> ops = new();
         bool bail = false;
 
         int pos = 0;
         // Skip fragment header
-        if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
+        if ((body.Length >= 4) && (body[0] == BinXmlToken.FragmentHeader))
             pos += 4;
 
-        CompileProgramContent(tplBody, ref pos, tplChunkBase, ops, ref bail, 0);
+        CompileContent(body, ref pos, names, ops, ref bail, 0);
         return bail ? null : new TemplateProgram(ops.ToArray());
     }
 
@@ -359,14 +421,16 @@ internal sealed partial class BinXmlParser
     /// enclosing construct (EOF, close/end element, next attribute). Sets <paramref name="bail"/> for nested template
     /// instances and unsupported tokens.
     /// </summary>
+    /// <typeparam name="TNames">How names are stored in this body.</typeparam>
     /// <param name="data">BinXml byte stream (template body).</param>
     /// <param name="pos">Current read position; advanced past consumed tokens.</param>
-    /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
+    /// <param name="names">Name reader for the body.</param>
     /// <param name="ops">Program being recorded.</param>
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
-    private void CompileProgramContent(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                       List<TemplateOp> ops, ref bool bail, int depth)
+    private static void CompileContent<TNames>(ReadOnlySpan<byte> data, ref int pos, TNames names,
+                                               List<TemplateOp> ops, ref bool bail, int depth)
+        where TNames : struct, ITemplateNameReader
     {
         while (pos < data.Length)
         {
@@ -384,7 +448,7 @@ internal sealed partial class BinXmlParser
             switch (baseTok)
             {
                 case BinXmlToken.OpenStartElement:
-                    CompileProgramElement(data, ref pos, binxmlChunkBase, ops, ref bail, depth + 1);
+                    CompileElement(data, ref pos, names, ops, ref bail, depth + 1);
                     break;
 
                 case BinXmlToken.Value:
@@ -411,11 +475,17 @@ internal sealed partial class BinXmlParser
                     break;
 
                 case BinXmlToken.EntityRef:
+                {
                     pos++;
-                    uint nameOff = MemoryMarshal.Read<uint>(data[pos..]);
-                    pos += 4;
-                    ops.Add(new TemplateOp(TemplateOpKind.EntityRef, ReadName(nameOff)));
+                    string? entityName = names.ReadEntityName(data, ref pos);
+                    if (entityName == null)
+                    {
+                        bail = true;
+                        return;
+                    }
+                    ops.Add(new TemplateOp(TemplateOpKind.EntityRef, entityName));
                     break;
+                }
 
                 case BinXmlToken.CDataSection:
                     pos++;
@@ -434,14 +504,16 @@ internal sealed partial class BinXmlParser
     /// Records one element: its start, attribute list (when the 0x40 flag is set), and either child content
     /// (CloseStartElement … EndElement) or an empty close.
     /// </summary>
+    /// <typeparam name="TNames">How names are stored in this body.</typeparam>
     /// <param name="data">BinXml byte stream (template body).</param>
     /// <param name="pos">Current read position; advanced past the entire element.</param>
-    /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
+    /// <param name="names">Name reader for the body.</param>
     /// <param name="ops">Program being recorded.</param>
     /// <param name="bail">Set to true if compilation must abort.</param>
     /// <param name="depth">Current recursion depth for stack overflow protection.</param>
-    private void CompileProgramElement(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-                                       List<TemplateOp> ops, ref bool bail, int depth)
+    private static void CompileElement<TNames>(ReadOnlySpan<byte> data, ref int pos, TNames names,
+                                               List<TemplateOp> ops, ref bool bail, int depth)
+        where TNames : struct, ITemplateNameReader
     {
         if (depth >= _maxRecursionDepth)
         {
@@ -455,16 +527,13 @@ internal sealed partial class BinXmlParser
 
         pos += 2; // depId
         pos += 4; // dataSize
-        uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
-        pos += 4;
-
-        if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase))
+        string? elemName = names.ReadName(data, ref pos);
+        if (elemName == null)
         {
             bail = true;
             return;
         }
 
-        string elemName = ReadName(nameOffset);
         ops.Add(new TemplateOp(TemplateOpKind.StartElement, elemName));
 
         if (hasAttrs)
@@ -482,16 +551,15 @@ internal sealed partial class BinXmlParser
                 if (attrBase != BinXmlToken.Attribute) break;
 
                 pos++;
-                uint attrNameOff = MemoryMarshal.Read<uint>(data[pos..]);
-                pos += 4;
-                if (!TrySkipInlineName(data, ref pos, attrNameOff, binxmlChunkBase))
+                string? attrName = names.ReadName(data, ref pos);
+                if (attrName == null)
                 {
                     bail = true;
                     return;
                 }
 
-                ops.Add(new TemplateOp(TemplateOpKind.Attribute, ReadName(attrNameOff)));
-                CompileProgramContent(data, ref pos, binxmlChunkBase, ops, ref bail, depth + 1);
+                ops.Add(new TemplateOp(TemplateOpKind.Attribute, attrName));
+                CompileContent(data, ref pos, names, ops, ref bail, depth + 1);
                 if (bail) return;
                 ops.Add(new TemplateOp(TemplateOpKind.EndAttribute));
             }
@@ -503,7 +571,7 @@ internal sealed partial class BinXmlParser
         {
             pos++;
             ops.Add(new TemplateOp(TemplateOpKind.CloseStartElement));
-            CompileProgramContent(data, ref pos, binxmlChunkBase, ops, ref bail, depth + 1);
+            CompileContent(data, ref pos, names, ops, ref bail, depth + 1);
             if (bail) return;
             if ((pos < data.Length) && (data[pos] == BinXmlToken.EndElement))
                 pos++;
@@ -511,10 +579,74 @@ internal sealed partial class BinXmlParser
             return;
         }
 
-        // CloseEmptyElement is consumed; end of data or any other token is left for the caller, as before
+        // CloseEmptyElement is consumed; end of data or any other token is left for the caller
         if ((pos < data.Length) && (data[pos] == BinXmlToken.CloseEmptyElement))
             pos++;
         ops.Add(new TemplateOp(TemplateOpKind.CloseEmptyElement, elemName));
+    }
+
+    #endregion
+
+    #region Non-Public Fields
+
+    /// <summary>
+    /// Maximum element nesting depth before compilation gives up (guards against stack overflow on crafted input).
+    /// </summary>
+    private const int _maxRecursionDepth = 64;
+
+    #endregion
+}
+
+/// <summary>
+/// Partial class containing the EVTX entry point to the template compiler.
+/// </summary>
+internal sealed partial class BinXmlParser
+{
+    #region Non-Public Methods
+
+    /// <summary>
+    /// Compiles an EVTX chunk template body into a <see cref="TemplateProgram"/>, which the XML and JSON writers lower
+    /// into their compiled forms. Returns null if the body runs past the chunk or can't be compiled statically.
+    /// </summary>
+    /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
+    /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>
+    /// <returns>The program, or null if the template cannot be statically compiled.</returns>
+    internal TemplateProgram? CompileProgram(int defDataOffset, int dataSize)
+    {
+        int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
+        if (tplBodyFileOffset + dataSize > _chunkEnd) return null;
+
+        return TemplateProgramCompiler.Compile(_fileData.AsSpan(tplBodyFileOffset, dataSize),
+            new ChunkNameReader(this, defDataOffset + 24));
+    }
+
+    #endregion
+
+    #region Nested Types
+
+    /// <summary>
+    /// Reads EVTX chunk names: a 4-byte chunk-relative offset into the chunk's name table, with the name stored inline
+    /// right after the field the first time it is defined (see <see cref="TrySkipInlineName"/>).
+    /// </summary>
+    /// <param name="parser">Parser for the chunk, which resolves and caches names.</param>
+    /// <param name="binxmlChunkBase">Chunk-relative offset of the template body, to recognise inline definitions.</param>
+    private readonly struct ChunkNameReader(BinXmlParser parser, int binxmlChunkBase) : ITemplateNameReader
+    {
+        /// <inheritdoc/>
+        public string? ReadName(ReadOnlySpan<byte> data, ref int pos)
+        {
+            uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
+            pos += 4;
+            return TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase) ? parser.ReadName(nameOffset) : null;
+        }
+
+        /// <inheritdoc/>
+        public string? ReadEntityName(ReadOnlySpan<byte> data, ref int pos)
+        {
+            uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
+            pos += 4;
+            return parser.ReadName(nameOffset);
+        }
     }
 
     #endregion

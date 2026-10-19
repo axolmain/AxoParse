@@ -386,45 +386,53 @@ internal sealed partial class BinXmlParser
         TemplateInstanceHeader hdr = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase,
             valueOffsets, valueSizes, valueTypes);
 
-        if (hdr.DataSize == 0) return;
-
-        int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
-        if ((uint)(tplBodyFileOffset + hdr.DataSize) > (uint)_chunkEnd) return;
-
         ReadOnlySpan<int> offsets = valueOffsets.Slice(0, hdr.NumValues);
         ReadOnlySpan<int> sizes = valueSizes.Slice(0, hdr.NumValues);
         ReadOnlySpan<byte> types = valueTypes.Slice(0, hdr.NumValues);
 
+        int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
+        bool embedded = (hdr.DataSize != 0) && ((uint)(tplBodyFileOffset + hdr.DataSize) <= (uint)_chunkEnd);
+
         // Check compiled JSON cache
-        if (_compiledJsonCache != null)
+        CompiledJsonTemplate? compiled = null;
+        bool compileFailed = false;
+        if (embedded && (_compiledJsonCache != null))
         {
-            if (!_compiledJsonCache.TryGetValue(hdr.TemplateGuid, out CompiledJsonTemplate? compiled))
+            if (!_compiledJsonCache.TryGetValue(hdr.TemplateGuid, out compiled))
             {
                 compiled = CompileProgram((int)hdr.DefDataOffset, (int)hdr.DataSize)?.LowerToJson();
                 _compiledJsonCache[hdr.TemplateGuid] = compiled;
             }
-
-            if (compiled != null)
-            {
-                if (!escaped)
-                {
-                    WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb);
-                }
-                else if (compiled.EscapedUtf8Parts != null)
-                {
-                    WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb, escaped: true);
-                }
-                else
-                {
-                    // Parts contain surrogates, so per-part escaping is not exact: render, then escape the whole
-                    ValueUtf8Builder tempVsb = new(stackalloc byte[512]);
-                    WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref tempVsb);
-                    BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, tempVsb.AsSpan());
-                    tempVsb.Dispose();
-                }
-                return;
-            }
+            compileFailed = compiled == null;
         }
+
+        // An embedded template that is missing, runs past its chunk, or won't compile falls back to the provider
+        // template with the same GUID, as in the Rust evtx crate; a usable embedded template is never replaced
+        if ((!embedded || compileFailed) && (_wevtCache?.GetJson(hdr.TemplateGuid) is { } provider))
+            compiled = provider;
+
+        if (compiled != null)
+        {
+            if (!escaped)
+            {
+                WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb);
+            }
+            else if (compiled.EscapedUtf8Parts != null)
+            {
+                WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb, escaped: true);
+            }
+            else
+            {
+                // Parts contain surrogates, so per-part escaping is not exact: render, then escape the whole
+                ValueUtf8Builder tempVsb = new(stackalloc byte[512]);
+                WriteCompiledJson(compiled, offsets, sizes, types, binxmlChunkBase, ref tempVsb);
+                BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, tempVsb.AsSpan());
+                tempVsb.Dispose();
+            }
+            return;
+        }
+
+        if (!embedded) return;
 
         // Fallback: parse template body with substitutions (requires arrays for recursive ParseContentJson)
         ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize);

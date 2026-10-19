@@ -4,12 +4,12 @@ using AxoParse.Evtx.BinXml;
 namespace AxoParse.Evtx.Wevt;
 
 /// <summary>
-/// Template cache built from WEVT_TEMPLATE resources in Windows provider PE binaries, compiled into
-/// <see cref="CompiledTemplate"/> objects.
+/// Template cache built from WEVT_TEMPLATE resources in Windows provider PE binaries (DLL/EXE), keyed by template GUID.
 /// <para>
-/// Not yet used during parsing: <see cref="Evtx.EvtxParser"/> copies these templates into a dictionary its chunk workers
-/// never read (they use per-thread caches), so passing a cache has no effect on output. The intended use, matching the
-/// Rust evtx crate, is a fallback for chunks whose embedded templates are missing or corrupt.
+/// Used as a <b>fallback</b>, as in the Rust evtx crate: when a record's template instance points at an embedded
+/// template that is missing (size 0), runs past its chunk, or can't be compiled (corrupt), the parser renders the
+/// record with the provider template of the same GUID instead of failing it. A valid embedded template is always used
+/// as is, so passing a cache never changes output for intact logs. Typical use is carved or damaged logs.
 /// </para>
 /// </summary>
 public sealed class WevtCache
@@ -17,7 +17,7 @@ public sealed class WevtCache
     #region Properties
 
     /// <summary>
-    /// Number of templates that were successfully compiled into <see cref="CompiledTemplate"/> objects.
+    /// Number of templates that compiled, i.e. that can be used as a fallback.
     /// </summary>
     /// <remarks>
     /// O(n) — iterates the entire dictionary. Intended for diagnostics, not hot-path use.
@@ -27,9 +27,9 @@ public sealed class WevtCache
         get
         {
             int count = 0;
-            foreach (KeyValuePair<Guid, CompiledTemplate?> kvp in _templates)
+            foreach (KeyValuePair<Guid, WevtTemplateEntry> kvp in _templates)
             {
-                if (kvp.Value is not null)
+                if (kvp.Value.Program is not null)
                     count++;
             }
             return count;
@@ -98,8 +98,7 @@ public sealed class WevtCache
         for (int i = 0; i < wevtTemplates.Count; i++)
         {
             WevtTemplate wt = wevtTemplates[i];
-            CompiledTemplate? compiled = WevtTemplateCompiler.Compile(wt.BinXmlData);
-            if (_templates.TryAdd(wt.Guid, compiled))
+            if (AddTemplate(wt.Guid, wt.BinXmlData))
                 added++;
         }
 
@@ -111,18 +110,46 @@ public sealed class WevtCache
     #region Non-Public Methods
 
     /// <summary>
-    /// Copies the WEVT templates into <paramref name="targetCache"/> with
-    /// <see cref="ConcurrentDictionary{TKey,TValue}.TryAdd"/>. The parser's chunk workers don't read that dictionary, so
-    /// this currently has no effect on output. Seeding the worker caches instead would be wrong: the cache is checked
-    /// before a chunk's own template is compiled, so WEVT templates would override in-file ones, and
-    /// <see cref="WevtTemplateCompiler"/> handles optional attributes differently from the EVTX template compiler.
+    /// Compiles one WEVT template body (a BinXml fragment with inline names) and adds it under
+    /// <paramref name="guid"/>. First-in wins for duplicate GUIDs.
     /// </summary>
-    /// <param name="targetCache">The parser's compiled template cache to pre-populate.</param>
-    internal void PopulateCache(ConcurrentDictionary<Guid, CompiledTemplate?> targetCache)
+    /// <param name="guid">Template GUID, matching the GUID in EVTX template definitions.</param>
+    /// <param name="binXml">Template body starting at the fragment header (TEMP entry offset 40).</param>
+    /// <returns>True if the GUID was new.</returns>
+    internal bool AddTemplate(Guid guid, ReadOnlySpan<byte> binXml) =>
+        _templates.TryAdd(guid, new WevtTemplateEntry(CompileWevt(binXml)));
+
+    /// <summary>
+    /// The fallback template for <paramref name="guid"/> lowered to XML, or null if there is none or it didn't compile.
+    /// </summary>
+    /// <param name="guid">Template GUID from the record's template instance.</param>
+    /// <returns>The compiled XML template, or null.</returns>
+    internal CompiledTemplate? GetXml(Guid guid) => _templates.TryGetValue(guid, out WevtTemplateEntry? entry) ? entry.Xml : null;
+
+    /// <summary>
+    /// The fallback template for <paramref name="guid"/> lowered to JSON, or null if there is none or it didn't compile.
+    /// </summary>
+    /// <param name="guid">Template GUID from the record's template instance.</param>
+    /// <returns>The compiled JSON template, or null.</returns>
+    internal CompiledJsonTemplate? GetJson(Guid guid) => _templates.TryGetValue(guid, out WevtTemplateEntry? entry) ? entry.Json : null;
+
+    /// <summary>
+    /// Compiles a WEVT template body with the shared template compiler, reading WEVT inline names. Malformed bodies
+    /// (including ones that would read past the data) compile to null.
+    /// </summary>
+    /// <param name="binXml">Template body.</param>
+    /// <returns>The program, or null.</returns>
+    private static TemplateProgram? CompileWevt(ReadOnlySpan<byte> binXml)
     {
-        foreach (KeyValuePair<Guid, CompiledTemplate?> kvp in _templates)
+        if (binXml.Length < 4)
+            return null;
+        try
         {
-            targetCache.TryAdd(kvp.Key, kvp.Value);
+            return TemplateProgramCompiler.Compile(binXml, default(WevtInlineNameReader));
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            return null;
         }
     }
 
@@ -131,10 +158,46 @@ public sealed class WevtCache
     #region Non-Public Fields
 
     /// <summary>
-    /// Compiled templates keyed by GUID. First-in wins for duplicate GUIDs.
-    /// Null values indicate templates that were extracted but failed compilation.
+    /// Templates keyed by GUID. First-in wins for duplicate GUIDs.
     /// </summary>
-    private readonly ConcurrentDictionary<Guid, CompiledTemplate?> _templates = new();
+    private readonly ConcurrentDictionary<Guid, WevtTemplateEntry> _templates = new();
+
+    #endregion
+
+    #region Nested Types
+
+    /// <summary>
+    /// One provider template: its program (null if it didn't compile) and its XML/JSON lowerings, built on first use.
+    /// The lowerings are published without locking: racing threads build identical results and either may win.
+    /// </summary>
+    /// <param name="program">Compiled program, or null.</param>
+    private sealed class WevtTemplateEntry(TemplateProgram? program)
+    {
+        /// <summary>
+        /// Compiled program, or null if the template didn't compile.
+        /// </summary>
+        public TemplateProgram? Program { get; } = program;
+
+        /// <summary>
+        /// XML lowering, or null if <see cref="Program"/> is null.
+        /// </summary>
+        public CompiledTemplate? Xml => _xml ??= Program?.LowerToXml();
+
+        /// <summary>
+        /// JSON lowering, or null if <see cref="Program"/> is null.
+        /// </summary>
+        public CompiledJsonTemplate? Json => _json ??= Program?.LowerToJson();
+
+        /// <summary>
+        /// Cached XML lowering.
+        /// </summary>
+        private CompiledTemplate? _xml;
+
+        /// <summary>
+        /// Cached JSON lowering.
+        /// </summary>
+        private CompiledJsonTemplate? _json;
+    }
 
     #endregion
 }

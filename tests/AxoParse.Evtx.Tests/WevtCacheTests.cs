@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using AxoParse.Evtx.BinXml;
 using AxoParse.Evtx.Wevt;
 
@@ -129,19 +128,33 @@ public class WevtCacheTests
     }
 
     /// <summary>
-    /// Verifies that PopulateCache correctly injects WEVT templates into a parser's compiled cache.
+    /// Verifies that every provider template that compiled can be lowered to both XML and JSON, so any of them can
+    /// serve as a fallback whatever the output format.
     /// </summary>
     [Fact]
-    public void PopulateCacheInjectsTemplatesIntoConcurrentDictionary()
+    public void CompiledTemplatesLowerToXmlAndJson()
     {
-        string dllPath = Path.Combine(_dllsDir, "adtschema.dll");
+        byte[] peData = File.ReadAllBytes(Path.Combine(_dllsDir, "adtschema.dll"));
         WevtCache cache = new();
-        cache.AddFromFile(dllPath);
+        cache.AddFromPeData(peData);
 
-        ConcurrentDictionary<Guid, CompiledTemplate?> targetCache = new();
-        cache.PopulateCache(targetCache);
+        int lowered = 0;
+        // The manifest lists 464 templates under 312 distinct GUIDs; the cache keeps the first of each
+        HashSet<Guid> guids = new();
+        foreach (WevtTemplate template in WevtManifest.ParseCrimManifest(PeResourceReader.ExtractWevtTemplate(peData)!))
+            guids.Add(template.Guid);
 
-        Assert.Equal(cache.Count, targetCache.Count);
+        foreach (Guid guid in guids)
+        {
+            CompiledTemplate? xml = cache.GetXml(guid);
+            CompiledJsonTemplate? json = cache.GetJson(guid);
+            Assert.Equal(xml == null, json == null);
+            if (xml != null)
+                lowered++;
+        }
+
+        Assert.Equal(cache.CompiledCount, lowered);
+        Assert.True(lowered > 0);
     }
 
     #endregion
