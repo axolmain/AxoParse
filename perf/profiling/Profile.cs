@@ -12,7 +12,7 @@ long[] RunTest(int threads, OutputFormat format)
 {
     for (int i = 0; i < warmupRuns; i++)
     {
-        EvtxParser.Parse(data, threads, format);
+        EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = format });
     }
 
     GC.Collect();
@@ -23,7 +23,7 @@ long[] RunTest(int threads, OutputFormat format)
     for (int i = 0; i < measuredRuns; i++)
     {
         Stopwatch sw = Stopwatch.StartNew();
-        EvtxParser.Parse(data, threads, format);
+        EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = format });
         sw.Stop();
         times[i] = sw.ElapsedMilliseconds;
     }

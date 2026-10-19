@@ -104,7 +104,7 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Verifies that WrittenTimeUtc returns a valid UTC DateTime derived from the FILETIME value.
+    /// Verifies that <see cref="EvtxEvent.WrittenTimeUtc"/> converts the record header FILETIME to a plausible UTC time.
     /// </summary>
     [Fact]
     public void WrittenTimeUtcReturnsValidDateTime()
@@ -114,15 +114,17 @@ public class EvtxRecordTests(ITestOutputHelper testOutputHelper)
 
         ReadOnlySpan<byte> recordData = data.AsSpan(chunkStart + _chunkHeaderSize);
         EvtxRecord? record = EvtxRecord.ParseEvtxRecord(recordData, chunkStart + _chunkHeaderSize);
-
         Assert.NotNull(record);
-        DateTime writtenTime = record.Value.WrittenTimeUtc;
+
+        EvtxEvent evt = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken).Events.First();
+        DateTime writtenTime = evt.WrittenTimeUtc;
+        Assert.Equal(record.Value.EventRecordId, evt.RecordId);
         Assert.Equal(DateTimeKind.Utc, writtenTime.Kind);
         Assert.True((writtenTime.Year >= 2000) && (writtenTime.Year <= 2100),
             $"WrittenTimeUtc {writtenTime} should be a reasonable date");
         Assert.Equal(DateTime.FromFileTimeUtc((long)record.Value.WrittenTime), writtenTime);
 
-        testOutputHelper.WriteLine($"Record {record.Value.EventRecordId} WrittenTimeUtc: {writtenTime:O}");
+        testOutputHelper.WriteLine($"Record {evt.RecordId} WrittenTimeUtc: {writtenTime:O}");
     }
 
     #endregion

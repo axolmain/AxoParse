@@ -49,14 +49,14 @@ public class ChecksumValidatedRecordCountTests
         CancellationToken token = TestContext.Current.CancellationToken;
         byte[] data = await File.ReadAllBytesAsync(Path.Combine(TestPaths.TestDataDir, fileName), token);
 
-        EvtxParser parser = EvtxParser.Parse(data, 1, validateChecksums: true, cancellationToken: token);
-        Assert.Equal(expected, parser.TotalRecords);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, ValidateChecksums = true }, token);
+        Assert.Equal(expected, parser.RecordCount);
 
-        int written = EvtxParser.WriteTo(data, Stream.Null, OutputFormat.Xml, 1, validateChecksums: true, token);
+        int written = EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = 1, ValidateChecksums = true }, token);
         Assert.Equal(expected, written);
 
         int yielded = 0;
-        await foreach (EvtxEvent _ in EvtxParser.ParseAsync(data, 1, validateChecksums: true, cancellationToken: token))
+        await foreach (EvtxEvent _ in EvtxParser.ReadEventsAsync(data, new EvtxOptions { MaxThreads = 1, ValidateChecksums = true }, token))
             yielded++;
         Assert.Equal(expected, yielded);
     }

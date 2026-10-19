@@ -47,7 +47,7 @@ public class FileParseBenchmarks
     /// </summary>
     /// <returns>Total record count, returned so the JIT cannot eliminate the work.</returns>
     [Benchmark]
-    public int Parse() => EvtxParser.Parse(_data, Threads, Format).TotalRecords;
+    public int Parse() => EvtxParser.Parse(_data, new EvtxOptions { MaxThreads = Threads, Format = Format }).RecordCount;
 
     #endregion
 

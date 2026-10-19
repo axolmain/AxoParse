@@ -184,13 +184,13 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 });
 
         HashSet<ulong> ids = [];
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
             if (evt.IsSuccess)
-                ids.Add(evt.Record.EventRecordId);
+                ids.Add(evt.RecordId);
         }
 
         return ids;
@@ -207,16 +207,16 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
 
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 });
 
         int extraCount = 0;
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
-            if (!evt.IsSuccess || referenceIds.Contains(evt.Record.EventRecordId))
+            if (!evt.IsSuccess || referenceIds.Contains(evt.RecordId))
                 continue;
 
-            ulong id = evt.Record.EventRecordId;
-            string xml = evt.Xml;
+            ulong id = evt.RecordId;
+            string xml = evt.GetText();
             extraCount++;
 
             // Must have the mandatory Event envelope
@@ -256,20 +256,20 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
 
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 });
 
         // First pass: collect min/max timestamps from reference-verified records
         DateTime minTime = DateTime.MaxValue;
         DateTime maxTime = DateTime.MinValue;
         List<EvtxEvent> extraEvents = [];
 
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
             if (!evt.IsSuccess)
                 continue;
 
-            DateTime ts = evt.Record.WrittenTimeUtc;
-            if (referenceIds.Contains(evt.Record.EventRecordId))
+            DateTime ts = evt.WrittenTimeUtc;
+            if (referenceIds.Contains(evt.RecordId))
             {
                 if (ts < minTime) minTime = ts;
                 if (ts > maxTime) maxTime = ts;
@@ -289,13 +289,13 @@ public class RecoveredRecordValidationTests(ITestOutputHelper testOutputHelper)
 
         foreach (EvtxEvent evt in extraEvents)
         {
-            DateTime ts = evt.Record.WrittenTimeUtc;
+            DateTime ts = evt.WrittenTimeUtc;
             Assert.True((ts >= lowerBound) && (ts <= upperBound),
-                $"[{label}] Record {evt.Record.EventRecordId}: timestamp {ts:O} is outside " +
+                $"[{label}] Record {evt.RecordId}: timestamp {ts:O} is outside " +
                 $"plausible range [{lowerBound:O}, {upperBound:O}]");
 
             testOutputHelper.WriteLine(
-                $"  Record {evt.Record.EventRecordId}: {ts:O} (within range)");
+                $"  Record {evt.RecordId}: {ts:O} (within range)");
         }
 
         testOutputHelper.WriteLine(

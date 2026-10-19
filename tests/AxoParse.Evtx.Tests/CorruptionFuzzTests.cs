@@ -83,23 +83,23 @@ public class CorruptionFuzzTests
     {
         try
         {
-            EvtxParser parser = EvtxParser.Parse(data, threads, OutputFormat.Xml, cancellationToken: token);
-            foreach (EvtxEvent _ in parser.GetEvents()) { }
-            EvtxParser.WriteTo(data, Stream.Null, OutputFormat.Json, threads, cancellationToken: token);
-            EvtxParser.WriteTo(data, Stream.Null, OutputFormat.Xml, threads, validateChecksums: true, token);
+            EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = OutputFormat.Xml }, token);
+            foreach (EvtxEvent _ in parser.Events) { }
+            EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.Json, MaxThreads = threads }, token);
+            EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = threads, ValidateChecksums = true }, token);
 
-            EvtxParser salvaged = EvtxParser.Parse(data, threads, OutputFormat.Json, cancellationToken: token, salvage: true);
-            foreach (EvtxEvent evt in salvaged.GetEvents())
+            EvtxLog salvaged = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = OutputFormat.Json, Salvage = true }, token);
+            foreach (EvtxEvent evt in salvaged.Events)
             {
-                if (evt.Json.IsEmpty)
+                if (evt.Utf8.IsEmpty)
                     continue;
                 try
                 {
-                    using JsonDocument _ = JsonDocument.Parse(evt.Json);
+                    using JsonDocument _ = JsonDocument.Parse(evt.Utf8);
                 }
                 catch (JsonException ex)
                 {
-                    return $"record {evt.Record.EventRecordId} ({evt.Diagnostic ?? "rendered"}) is not valid JSON: {ex.Message}";
+                    return $"record {evt.RecordId} ({evt.Diagnostic?.Message ?? "rendered"}) is not valid JSON: {ex.Message}";
                 }
             }
 

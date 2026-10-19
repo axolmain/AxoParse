@@ -24,19 +24,19 @@ public class WevtFallbackTests
         (byte[] corrupted, WevtCache cache) = CorruptFirstTemplate();
 
         // Without a cache the corrupt body is decoded directly, and its first token is invalid: the record fails
-        EvtxEvent withoutCache = EvtxParser.Parse(corrupted, 1, cancellationToken: token).GetEvents().First();
+        EvtxEvent withoutCache = EvtxParser.Parse(corrupted, new EvtxOptions { MaxThreads = 1 }, token).Events.First();
         Assert.False(withoutCache.IsSuccess);
-        Assert.Empty(withoutCache.Xml);
+        Assert.Empty(withoutCache.GetText());
 
-        EvtxEvent xml = EvtxParser.Parse(corrupted, 1, wevtCache: cache, cancellationToken: token).GetEvents().First();
-        Assert.True(xml.IsSuccess, xml.Diagnostic);
-        Assert.StartsWith("<Event><Data>", xml.Xml);
-        Assert.EndsWith("</Data></Event>", xml.Xml);
+        EvtxEvent xml = EvtxParser.Parse(corrupted, new EvtxOptions { MaxThreads = 1, WevtCache = cache }, token).Events.First();
+        Assert.True(xml.IsSuccess, xml.Diagnostic?.Message);
+        Assert.StartsWith("<Event><Data>", xml.GetText());
+        Assert.EndsWith("</Data></Event>", xml.GetText());
 
-        EvtxEvent json = EvtxParser.Parse(corrupted, 1, OutputFormat.Json, wevtCache: cache, cancellationToken: token)
-            .GetEvents().First();
-        Assert.True(json.IsSuccess, json.Diagnostic);
-        string jsonText = Encoding.UTF8.GetString(json.Json.Span);
+        EvtxEvent json = EvtxParser.Parse(corrupted, new EvtxOptions { MaxThreads = 1, Format = OutputFormat.Json, WevtCache = cache }, token)
+            .Events.First();
+        Assert.True(json.IsSuccess, json.Diagnostic?.Message);
+        string jsonText = Encoding.UTF8.GetString(json.Utf8.Span);
         Assert.StartsWith("{\"#name\":\"Event\",\"#content\":[{\"#name\":\"Data\",\"#content\":[\"", jsonText);
     }
 
@@ -50,9 +50,9 @@ public class WevtFallbackTests
         CancellationToken token = TestContext.Current.CancellationToken;
         (byte[] corrupted, WevtCache cache) = CorruptFirstTemplate();
 
-        string expected = EvtxParser.Parse(corrupted, 1, wevtCache: cache, cancellationToken: token).GetEvents().First().Xml;
+        string expected = EvtxParser.Parse(corrupted, new EvtxOptions { MaxThreads = 1, WevtCache = cache }, token).Events.First().GetText();
         using MemoryStream stream = new();
-        EvtxParser.WriteTo(corrupted, stream, OutputFormat.Xml, 1, cancellationToken: token, wevtCache: cache);
+        EvtxParser.WriteTo(corrupted, stream, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = 1, WevtCache = cache }, token);
 
         Assert.StartsWith(expected, Encoding.UTF8.GetString(stream.ToArray()));
     }
@@ -75,18 +75,18 @@ public class WevtFallbackTests
         {
             using MemoryStream plain = new();
             using MemoryStream cached = new();
-            EvtxParser.WriteTo(data, plain, format, 1, cancellationToken: token);
-            EvtxParser.WriteTo(data, cached, format, 1, cancellationToken: token, wevtCache: cache);
+            EvtxParser.WriteTo(data, plain, new EvtxOptions { Format = format, MaxThreads = 1 }, token);
+            EvtxParser.WriteTo(data, cached, new EvtxOptions { Format = format, MaxThreads = 1, WevtCache = cache }, token);
             Assert.True(plain.ToArray().AsSpan().SequenceEqual(cached.ToArray()), $"{format}: cache changed output");
 
-            List<EvtxEvent> plainEvents = EvtxParser.Parse(data, 1, format, cancellationToken: token).GetEvents().ToList();
-            List<EvtxEvent> cachedEvents = EvtxParser.Parse(data, 1, format, wevtCache: cache, cancellationToken: token)
-                .GetEvents().ToList();
+            List<EvtxEvent> plainEvents = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, Format = format }, token).Events.ToList();
+            List<EvtxEvent> cachedEvents = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, Format = format, WevtCache = cache }, token)
+                .Events.ToList();
             Assert.Equal(plainEvents.Count, cachedEvents.Count);
             for (int i = 0; i < plainEvents.Count; i++)
             {
-                Assert.Equal(plainEvents[i].Xml, cachedEvents[i].Xml);
-                Assert.True(plainEvents[i].Json.Span.SequenceEqual(cachedEvents[i].Json.Span));
+                Assert.Equal(plainEvents[i].GetText(), cachedEvents[i].GetText());
+                Assert.True(plainEvents[i].Utf8.Span.SequenceEqual(cachedEvents[i].Utf8.Span));
             }
         }
     }

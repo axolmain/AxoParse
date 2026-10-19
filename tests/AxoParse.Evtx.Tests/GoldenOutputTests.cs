@@ -40,7 +40,7 @@ public class GoldenOutputTests
                 foreach (int threads in _threadCounts)
                 {
                     using MemoryStream stream = new();
-                    EvtxParser.WriteTo(data, stream, format, threads, cancellationToken: token);
+                    EvtxParser.WriteTo(data, stream, new EvtxOptions { Format = format, MaxThreads = threads }, token);
                     string hash = Convert.ToHexStringLower(SHA256.HashData(stream.GetBuffer().AsSpan(0, (int)stream.Length)));
 
                     // Output must not depend on thread count; the single-threaded hash is what gets blessed

@@ -19,6 +19,6 @@ for (int i = 1; i < args.Length; i++)
 // Stream chunks straight from disk to stdout: each worker reads the 64 KB chunk it renders, so the file is never
 // loaded whole and memory stays flat (matches Rust evtx_dump, which also reads chunk by chunk)
 using Stream stdout = Console.OpenStandardOutput();
-EvtxParser.WriteTo(args[0], stdout, format, threads);
+EvtxParser.WriteTo(args[0], stdout, new EvtxOptions { Format = format, MaxThreads = threads });
 
 return 0;

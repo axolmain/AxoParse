@@ -71,7 +71,7 @@ public class CompiledDecoderParityTests(ITestOutputHelper output)
             EvtxChunk chunk;
             try
             {
-                chunk = EvtxChunk.Parse(data, offset, new Dictionary<Guid, CompiledTemplate?>(), OutputFormat.Xml);
+                chunk = EvtxChunk.Parse(data.AsSpan(offset, EvtxChunk.ChunkSize), offset);
             }
             catch (EvtxParseException)
             {

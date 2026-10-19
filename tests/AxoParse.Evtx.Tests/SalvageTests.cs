@@ -27,31 +27,31 @@ public class SalvageTests
         CancellationToken token = TestContext.Current.CancellationToken;
         byte[] data = CorruptChannelClose();
 
-        EvtxEvent strict = EvtxParser.Parse(data, 1, format, cancellationToken: token).GetEvents().First();
+        EvtxEvent strict = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, Format = format }, token).Events.First();
         Assert.False(strict.IsSuccess);
-        Assert.Contains("unexpected token 0xFF", strict.Diagnostic);
-        Assert.Empty(strict.Xml);
-        Assert.True(strict.Json.IsEmpty);
+        Assert.Contains("unexpected token 0xFF", strict.Diagnostic?.Message);
+        Assert.Empty(strict.GetText());
+        Assert.True(strict.Utf8.IsEmpty);
 
-        EvtxEvent salvaged = EvtxParser.Parse(data, 1, format, cancellationToken: token, salvage: true).GetEvents().First();
+        EvtxEvent salvaged = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, Format = format, Salvage = true }, token).Events.First();
         Assert.False(salvaged.IsSuccess);
-        Assert.StartsWith("BinXml salvaged", salvaged.Diagnostic);
-        Assert.Contains("unexpected token 0xFF", salvaged.Diagnostic);
+        Assert.StartsWith("BinXml salvaged", salvaged.Diagnostic?.Message);
+        Assert.Contains("unexpected token 0xFF", salvaged.Diagnostic?.Message);
 
         if (format == OutputFormat.Xml)
         {
             // Channel lost its CloseStartElement, so it renders empty; decoding stops right after it and the open
             // System and Event elements are closed
-            XElement root = XDocument.Parse(salvaged.Xml).Root!;
+            XElement root = XDocument.Parse(salvaged.GetText()).Root!;
             Assert.Equal("Event", root.Name.LocalName);
-            Assert.EndsWith("<Channel></Channel></System></Event>", salvaged.Xml);
-            Assert.DoesNotContain("<Computer>", salvaged.Xml);
+            Assert.EndsWith("<Channel></Channel></System></Event>", salvaged.GetText());
+            Assert.DoesNotContain("<Computer>", salvaged.GetText());
         }
         else
         {
-            using JsonDocument json = JsonDocument.Parse(salvaged.Json);
+            using JsonDocument json = JsonDocument.Parse(salvaged.Utf8);
             Assert.Equal("Event", json.RootElement.GetProperty("#name").GetString());
-            Assert.EndsWith("{\"#name\":\"Channel\"}]}]}", Encoding.UTF8.GetString(salvaged.Json.Span));
+            Assert.EndsWith("{\"#name\":\"Channel\"}]}]}", Encoding.UTF8.GetString(salvaged.Utf8.Span));
         }
     }
 
@@ -70,11 +70,11 @@ public class SalvageTests
         byte[] data = CorruptChannelClose();
 
         StringBuilder expected = new();
-        foreach (EvtxEvent evt in EvtxParser.Parse(data, 1, cancellationToken: token, salvage: salvage).GetEvents())
-            expected.Append(evt.Xml);
+        foreach (EvtxEvent evt in EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, Salvage = salvage }, token).Events)
+            expected.Append(evt.GetText());
 
         using MemoryStream stream = new();
-        EvtxParser.WriteTo(data, stream, OutputFormat.Xml, 1, cancellationToken: token, salvage: salvage);
+        EvtxParser.WriteTo(data, stream, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = 1, Salvage = salvage }, token);
         Assert.Equal(expected.ToString(), Encoding.UTF8.GetString(stream.ToArray()));
     }
 
