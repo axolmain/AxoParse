@@ -86,17 +86,18 @@ foreach (EvtxChunk chunk in parser.Chunks)
 | `maxThreads`        | `0`     | Thread count. `0`/`-1` = all cores, `1` = single-threaded |
 | `format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.Json`                 |
 | `validateChecksums` | `false` | Skip chunks that fail CRC32 validation                    |
-| `wevtCache`         | `null`  | Currently has no effect (fallback for damaged templates planned for 0.3.0) |
+| `wevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt |
 
-`WriteTo` takes the same options except `wevtCache`.
+`WriteTo` takes the same options (`wevtCache` is its last parameter, after the cancellation token).
 
 ## WEVT template cache
 
-> **Note:** `WevtCache` currently has no effect on output. `EvtxParser` never consults its templates; the
-> templates embedded in the EVTX file are always used. Making it a fallback for chunks whose embedded templates are
-> missing or corrupt (as the Rust `evtx` crate does) is planned for 0.3.0.
+`WevtCache` is a **fallback** for damaged logs, as in the Rust `evtx` crate. When a record's embedded template is
+missing (size 0), runs past its chunk, or won't compile, the record is rendered with the provider template of the
+same GUID instead. A usable embedded template is never replaced, so passing a cache doesn't change output for an
+intact log.
 
-`WevtCache` extracts templates from Windows provider DLLs:
+Load templates from Windows provider DLLs:
 
 ```csharp
 using AxoParse.Evtx.Wevt;
@@ -107,5 +108,5 @@ cache.AddFromDirectory(@"C:\Windows\System32", "*.dll");
 EvtxParser parser = EvtxParser.Parse(fileData, wevtCache: cache);
 ```
 
-This extracts and compiles WEVT_TEMPLATE resources from PE binaries. Passing the cache to `Parse` or `ParseAsync` is
-accepted but changes nothing yet (see the note above); JSON output and `WriteTo` don't take one at all.
+This extracts and compiles the WEVT_TEMPLATE resources in each PE binary, keyed by template GUID. The same cache works
+for XML and JSON output, and with `Parse`, `ParseAsync` and `WriteTo`, and can be shared across threads and calls.

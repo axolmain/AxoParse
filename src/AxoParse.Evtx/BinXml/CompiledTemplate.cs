@@ -95,6 +95,46 @@ internal sealed class CompiledTemplate
     public readonly byte[]?[] Utf8Parts;
 
     /// <summary>
+    /// Builds a compiled template from accumulated parts and per-substitution flags. For an optional substitution
+    /// inside an attribute value, the attribute markup around it (the <c> name="</c> prefix and the closing <c>"</c>)
+    /// moves out of the static parts into the slot, so it is emitted only when the value is non-empty and an
+    /// absent optional value drops the whole attribute.
+    /// </summary>
+    /// <param name="parts">Static parts; modified in place when markup moves into a slot.</param>
+    /// <param name="subIds">Substitution index of each slot.</param>
+    /// <param name="isOptional">Whether each substitution is optional (0x0E).</param>
+    /// <param name="inAttrValue">Whether each substitution is inside an attribute value.</param>
+    /// <returns>The compiled template.</returns>
+    internal static CompiledTemplate FromParts(string[] parts, IReadOnlyList<int> subIds, IReadOnlyList<bool> isOptional,
+                                               IReadOnlyList<bool> inAttrValue)
+    {
+        SubSlot[] slots = new SubSlot[subIds.Count];
+        for (int i = 0; i < slots.Length; i++)
+        {
+            string? prefix = null;
+            string? suffix = null;
+
+            if (isOptional[i] && inAttrValue[i])
+            {
+                string before = parts[i];
+                string after = parts[i + 1];
+                int spacePos = before.LastIndexOf(' ');
+                if ((spacePos >= 0) && after.StartsWith('"'))
+                {
+                    prefix = before[spacePos..];
+                    suffix = "\"";
+                    parts[i] = before[..spacePos];
+                    parts[i + 1] = after[1..];
+                }
+            }
+
+            slots[i] = new SubSlot(subIds[i], isOptional[i], prefix, suffix);
+        }
+
+        return new CompiledTemplate(parts, slots);
+    }
+
+    /// <summary>
     /// Appends a static part: its pre-encoded UTF-8 bytes when available, otherwise its text as raw UTF-16.
     /// </summary>
     /// <param name="vub">UTF-8 builder that receives the part.</param>

@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx.Wevt;
 
 namespace AxoParse.Evtx.BinXml;
 
@@ -25,13 +26,16 @@ internal sealed partial class BinXmlParser
     /// <param name="templates">Preloaded template definitions for this chunk, keyed by chunk-relative offset.</param>
     /// <param name="compiledCache">Shared cross-chunk cache of compiled XML templates keyed by GUID. Null when using JSON output.</param>
     /// <param name="compiledJsonCache">Shared cross-chunk cache of compiled JSON templates keyed by GUID. Null when using XML output.</param>
+    /// <param name="wevtCache">Provider templates used when a record's embedded template is missing or corrupt, or null.</param>
     public BinXmlParser(
         byte[] fileData,
         int chunkFileOffset,
         Dictionary<uint, BinXmlTemplateDefinition> templates,
         Dictionary<Guid, CompiledTemplate?>? compiledCache,
-        Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache = null)
+        Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache = null,
+        WevtCache? wevtCache = null)
     {
+        _wevtCache = wevtCache;
         _fileData = fileData;
         _chunkFileOffset = chunkFileOffset;
         _chunkEnd = Math.Min(chunkFileOffset + EvtxChunk.ChunkSize, fileData.Length);
@@ -577,26 +581,36 @@ internal sealed partial class BinXmlParser
         TemplateInstanceHeader hdr = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase,
             valueOffsets, valueSizes, valueTypes);
 
-        if (hdr.DataSize == 0) return;
-
-        int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
-        if (tplBodyFileOffset + (int)hdr.DataSize > _chunkEnd) return;
-
         // Slice spans to actual value count
         ReadOnlySpan<int> offsets = valueOffsets.Slice(0, hdr.NumValues);
         ReadOnlySpan<int> sizes = valueSizes.Slice(0, hdr.NumValues);
         ReadOnlySpan<byte> types = valueTypes.Slice(0, hdr.NumValues);
 
+        int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
+        bool embedded = (hdr.DataSize != 0) && (tplBodyFileOffset + (int)hdr.DataSize <= _chunkEnd);
+
         // Check compiled cache
         CompiledTemplate? compiled = null;
-        if (_compiledCache != null)
+        bool compileFailed = false;
+        if (embedded && (_compiledCache != null))
         {
             if (!_compiledCache.TryGetValue(hdr.TemplateGuid, out compiled))
             {
-                compiled = CompileTemplate((int)hdr.DefDataOffset, (int)hdr.DataSize);
+                compiled = CompileProgram((int)hdr.DefDataOffset, (int)hdr.DataSize)?.LowerToXml();
                 _compiledCache[hdr.TemplateGuid] = compiled;
             }
+            compileFailed = compiled == null;
         }
+
+        // An embedded template that is missing, runs past its chunk, or won't compile falls back to the provider
+        // template with the same GUID, as in the Rust evtx crate; a usable embedded template is never replaced
+        if ((!embedded || compileFailed) && (_wevtCache?.GetXml(hdr.TemplateGuid) is { } provider))
+        {
+            WriteCompiled(provider, offsets, sizes, types, binxmlChunkBase, ref vsb);
+            return;
+        }
+
+        if (!embedded) return;
 
         if (compiled != null)
         {
@@ -1062,6 +1076,11 @@ internal sealed partial class BinXmlParser
     /// Raw EVTX file bytes shared across all chunks and records.
     /// </summary>
     private readonly byte[] _fileData;
+
+    /// <summary>
+    /// Provider (WEVT) templates used as a fallback for missing or corrupt embedded templates, or null.
+    /// </summary>
+    private readonly WevtCache? _wevtCache;
 
     /// <summary>
     /// Exclusive end of this chunk within <see cref="_fileData"/>: <c>_chunkFileOffset + 65536</c>, clamped to the data
