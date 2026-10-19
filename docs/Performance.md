@@ -50,7 +50,12 @@ neither goes through a UTF-16 `string`.
 - Compiled templates store their static fragments pre-encoded as UTF-8, so warm records are mostly `memcpy` plus value
   formatting.
 - JSON escaping is vectorised. Embedded BinXml values are written pre-escaped instead of rendered and then escaped.
-- Numbers are formatted with the invariant culture, so output doesn't depend on the machine's locale.
+  Short ASCII text with nothing to escape (most names and values) skips the vectorised search and the transcoder and
+  is copied one byte per character; past 16 characters the vectorised path wins.
+- Integers are formatted with `Utf8Formatter`, which is culture-free (output doesn't depend on the machine's locale)
+  and skips the `NumberFormatInfo` lookup that `TryFormat` pays on every call.
+- A chunk's records are in time order, so FILETIME formatting remembers the last calendar date and skips the
+  date arithmetic when the day repeats.
 
 The two formats run at similar speeds. XML is slightly faster single-threaded on the benchmark file.
 
@@ -61,7 +66,10 @@ Templates are the biggest performance lever. A typical EVTX file has a handful o
 - First record with a given template: full BinXml tree walk + compilation
 - All subsequent records: interleave static string fragments with formatted values (no parsing)
 
-Each worker thread keeps its own compiled-template cache, so a template is compiled at most once per thread.
+Each worker thread keeps its own compiled-template cache, so a template is compiled at most once per thread. Within a
+chunk, each template definition is also resolved once (its GUID, size, compiled form or fallback) and remembered by
+its offset, so later instances skip both the definition lookup and the cache lookup. An instance's values are read in
+one pass: their sizes and types stay in the record's descriptor array, and only their offsets are computed.
 
 ## Benchmarks
 

@@ -79,12 +79,11 @@ public class CompiledDecoderParityTests(ITestOutputHelper output)
                 continue;
             }
 
-            Dictionary<uint, BinXmlTemplateDefinition> templates = new(chunk.Templates);
             foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.Json })
             {
                 Dictionary<Guid, CompiledTemplate?> cache = new();
-                BinXmlParser compiled = new(data, offset, templates, cache);
-                BinXmlParser decoded = new(data, offset, templates, compiledCache: null);
+                BinXmlParser compiled = new(data, offset, cache);
+                BinXmlParser decoded = new(data, offset, compiledCache: null);
                 foreach (EvtxRecord record in chunk.Records)
                 {
                     count++;
