@@ -298,7 +298,7 @@ internal sealed partial class BinXmlParser
     /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
     /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>
     /// <returns>A compiled JSON template, or null if the template cannot be statically compiled.</returns>
-    private CompiledJsonTemplate? CompileJsonTemplate(int defDataOffset, int dataSize)
+    internal CompiledJsonTemplate? CompileJsonTemplate(int defDataOffset, int dataSize)
     {
         int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
         if (tplBodyFileOffset + dataSize > _chunkEnd) return null;

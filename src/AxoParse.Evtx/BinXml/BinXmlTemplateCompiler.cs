@@ -206,7 +206,7 @@ internal sealed partial class BinXmlParser
     /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
     /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>
     /// <returns>A compiled template, or null if the template cannot be statically compiled.</returns>
-    private CompiledTemplate? CompileTemplate(int defDataOffset, int dataSize)
+    internal CompiledTemplate? CompileTemplate(int defDataOffset, int dataSize)
     {
         int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
         if (tplBodyFileOffset + dataSize > _chunkEnd) return null;
@@ -229,38 +229,7 @@ internal sealed partial class BinXmlParser
 
         if (bail) return null;
 
-        string[] partsArr = parts.ToArray();
-        int[] subIdsArr = subIds.ToArray();
-        bool[] isOptionalArr = isOptional.ToArray();
-        bool[] inAttrValueArr = inAttrValue.ToArray();
-
-        // Build packed slot array. For optional substitutions inside attribute values,
-        // move the attribute markup (' attrName="' prefix and '"' suffix) into the slot
-        // so they are only emitted when the value is non-empty.
-        SubSlot[] slots = new SubSlot[subIdsArr.Length];
-        for (int i = 0; i < subIdsArr.Length; i++)
-        {
-            string? prefix = null;
-            string? suffix = null;
-
-            if (isOptionalArr[i] && inAttrValueArr[i])
-            {
-                string before = partsArr[i];
-                string after = partsArr[i + 1];
-                int spacePos = before.LastIndexOf(' ');
-                if ((spacePos >= 0) && after.StartsWith('"'))
-                {
-                    prefix = before[spacePos..];
-                    suffix = "\"";
-                    partsArr[i] = before[..spacePos];
-                    partsArr[i + 1] = after[1..];
-                }
-            }
-
-            slots[i] = new SubSlot(subIdsArr[i], isOptionalArr[i], prefix, suffix);
-        }
-
-        return new CompiledTemplate(partsArr, slots);
+        return CompiledTemplate.FromParts(parts.ToArray(), subIds, isOptional, inAttrValue);
     }
 
     #endregion
