@@ -157,7 +157,7 @@ internal readonly struct WevtInlineNameReader : ITemplateNameReader
 /// <summary>
 /// The format-neutral template compiler: one BinXml token walk that records a <see cref="TemplateProgram"/>, which
 /// each output format then compiles through its writer. Used for EVTX chunk templates (<see cref="BinXmlParser.CompileProgram"/>) and WEVT
-/// provider templates (<see cref="Wevt.WevtCache"/>), which differ only in how names are stored.
+/// provider templates (<see cref="WevtCache"/>), which differ only in how names are stored.
 /// </summary>
 internal static class TemplateProgramCompiler
 {

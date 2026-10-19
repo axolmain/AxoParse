@@ -1,4 +1,4 @@
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 using BenchmarkDotNet.Attributes;
 
 namespace AxoParse.Benchmarks;

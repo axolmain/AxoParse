@@ -4,8 +4,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
-using AxoParse.Evtx.Evtx;
-using AxoParse.Evtx.Wevt;
 
 namespace AxoParse.Evtx.BinXml;
 

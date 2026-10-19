@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Bit flags stored at offset 120 of the EVTX file header (4 bytes).

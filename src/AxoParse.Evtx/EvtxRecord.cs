@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Raw on-disk layout of the first 24 bytes of an EVTX event record header.

@@ -2,9 +2,8 @@ using System.Buffers;
 using System.Runtime.InteropServices;
 using System.Text;
 using AxoParse.Evtx.BinXml;
-using AxoParse.Evtx.Wevt;
 
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Chunk status flags stored at chunk header offset 120.

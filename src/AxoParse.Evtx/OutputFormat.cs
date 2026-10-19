@@ -1,4 +1,4 @@
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Specifies the output format for parsed EVTX event records.

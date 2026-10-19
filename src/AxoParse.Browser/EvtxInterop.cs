@@ -2,7 +2,7 @@ using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 
 namespace AxoParse.Browser;
 

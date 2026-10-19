@@ -1,5 +1,5 @@
 using System.Globalization;
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 
 if (args.Length == 0) return 1;
 

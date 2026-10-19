@@ -1,6 +1,5 @@
 using System.Text;
 using Microsoft.Win32.SafeHandles;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 

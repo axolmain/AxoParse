@@ -1,4 +1,4 @@
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Identifies the specific validation failure that caused an <see cref="EvtxParseException"/>.

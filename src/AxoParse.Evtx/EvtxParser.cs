@@ -2,10 +2,9 @@ using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using AxoParse.Evtx.BinXml;
-using AxoParse.Evtx.Wevt;
 using Microsoft.Win32.SafeHandles;
 
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Top-level orchestrator. Parses the file header, slices chunks, and collects all parsed data.

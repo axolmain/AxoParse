@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Text;
-using AxoParse.Evtx.Evtx;
 using AxoParse.Evtx.Wevt;
 
 namespace AxoParse.Evtx.Tests;

@@ -1,4 +1,4 @@
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// A single parsed EVTX event pairing record metadata with rendered output and optional diagnostics.

@@ -1,4 +1,3 @@
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 

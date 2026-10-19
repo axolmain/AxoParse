@@ -1,5 +1,4 @@
 using AxoParse.Evtx.BinXml;
-using AxoParse.Evtx.Evtx;
 using AxoParse.Evtx.Wevt;
 
 namespace AxoParse.Evtx.Tests;

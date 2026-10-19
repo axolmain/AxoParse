@@ -1,6 +1,5 @@
 using System.Text;
 using AxoParse.Evtx.BinXml;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
