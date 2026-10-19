@@ -95,8 +95,8 @@ internal readonly record struct TemplateOp(
 /// A template body compiled once into a flat, format-neutral instruction list: element structure, literal text and
 /// substitution gaps, with names and text unescaped. Each output format lowers it into its own compiled form
 /// (<see cref="LowerToXml"/>, <see cref="LowerToJson"/>), so the BinXml token walk exists once instead of once per
-/// format. Phase 1 of docs/plans/FormatNeutralRenderer.md: built alongside the existing compilers, which it must
-/// reproduce exactly.
+/// format. It replaced separate XML and JSON template compilers, whose output it reproduces exactly (verified over every
+/// sample template and 5,400 mutated ones before they were removed).
 /// </summary>
 /// <param name="Ops">Instructions in template order.</param>
 internal sealed record TemplateProgram(TemplateOp[] Ops)
@@ -261,60 +261,6 @@ internal sealed record TemplateProgram(TemplateOp[] Ops)
         return new CompiledJsonTemplate(parts.ToArray(), subIds.ToArray(), isOptional.ToArray(), inAttrValue.ToArray());
     }
 
-    /// <summary>
-    /// Describes the first difference between a template compiled by the per-format XML compiler and the same
-    /// template lowered from its program, or returns null if they are identical (including both being null).
-    /// Used by the phase-1 equivalence test and the debug-build check at compile sites.
-    /// </summary>
-    /// <param name="expected">Output of the existing XML compiler.</param>
-    /// <param name="actual">Program lowered with <see cref="LowerToXml"/>, or null if the program didn't compile.</param>
-    /// <returns>A description of the first difference, or null.</returns>
-    internal static string? DescribeDifference(CompiledTemplate? expected, CompiledTemplate? actual)
-    {
-        if ((expected == null) || (actual == null))
-            return (expected == null) == (actual == null) ? null : $"null mismatch: expected {(expected == null ? "null" : "template")}, got {(actual == null ? "null" : "template")}";
-        if (expected.Parts.Length != actual.Parts.Length)
-            return $"part count {expected.Parts.Length} vs {actual.Parts.Length}";
-        for (int i = 0; i < expected.Parts.Length; i++)
-        {
-            if (!string.Equals(expected.Parts[i], actual.Parts[i], StringComparison.Ordinal))
-                return $"part {i}: \"{expected.Parts[i]}\" vs \"{actual.Parts[i]}\"";
-        }
-
-        for (int i = 0; i < expected.Slots.Length; i++)
-        {
-            SubSlot e = expected.Slots[i];
-            SubSlot a = actual.Slots[i];
-            if ((e.SubId != a.SubId) || (e.IsOptional != a.IsOptional) ||
-                !string.Equals(e.AttrPrefix, a.AttrPrefix, StringComparison.Ordinal) ||
-                !string.Equals(e.AttrSuffix, a.AttrSuffix, StringComparison.Ordinal))
-                return $"slot {i}: ({e.SubId}, {e.IsOptional}, {e.AttrPrefix}, {e.AttrSuffix}) vs ({a.SubId}, {a.IsOptional}, {a.AttrPrefix}, {a.AttrSuffix})";
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// JSON counterpart of <see cref="DescribeDifference(CompiledTemplate?, CompiledTemplate?)"/>.
-    /// </summary>
-    /// <param name="expected">Output of the existing JSON compiler.</param>
-    /// <param name="actual">Program lowered with <see cref="LowerToJson"/>, or null if the program didn't compile.</param>
-    /// <returns>A description of the first difference, or null.</returns>
-    internal static string? DescribeDifference(CompiledJsonTemplate? expected, CompiledJsonTemplate? actual)
-    {
-        if ((expected == null) || (actual == null))
-            return (expected == null) == (actual == null) ? null : $"null mismatch: expected {(expected == null ? "null" : "template")}, got {(actual == null ? "null" : "template")}";
-        if (!expected.Parts.AsSpan().SequenceEqual(actual.Parts))
-            return $"parts differ: [{string.Join("|", expected.Parts)}] vs [{string.Join("|", actual.Parts)}]";
-        if (!expected.SubIds.AsSpan().SequenceEqual(actual.SubIds))
-            return "substitution IDs differ";
-        if (!expected.IsOptional.AsSpan().SequenceEqual(actual.IsOptional))
-            return "optional flags differ";
-        if (!expected.InAttrValue.AsSpan().SequenceEqual(actual.InAttrValue))
-            return "attribute-value flags differ";
-        return null;
-    }
-
     #endregion
 
     #region Non-Public Methods
@@ -382,9 +328,9 @@ internal sealed partial class BinXmlParser
     #region Non-Public Methods
 
     /// <summary>
-    /// Compiles a template body into a <see cref="TemplateProgram"/>. Returns null if the template contains nested
-    /// template instances or other constructs that prevent static compilation (the same cases in which
-    /// <see cref="CompileTemplate"/> and <see cref="CompileJsonTemplate"/> return null).
+    /// Compiles a template body into a <see cref="TemplateProgram"/>, which the XML and JSON writers lower into their
+    /// compiled forms. Returns null if the template contains nested template instances or other constructs that
+    /// prevent static compilation; the writers then interpret the template body token by token.
     /// </summary>
     /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
     /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>

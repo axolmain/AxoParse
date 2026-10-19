@@ -1,181 +1,110 @@
-using System.Runtime.InteropServices;
 using AxoParse.Evtx.BinXml;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
 /// <summary>
-/// Phase-1 gate for the format-neutral renderer (docs/plans/FormatNeutralRenderer.md): every template, compiled once
-/// into a <see cref="TemplateProgram"/> and lowered, must reproduce exactly what today's per-format compilers produce,
-/// for XML and JSON, including when compilation bails (both null) or throws (both throw).
+/// Exact-output tests for <see cref="TemplateProgram"/> lowering on hand-built programs covering constructs the sample
+/// templates rarely or never contain (character and entity references, CDATA, optional attributes, an empty attribute
+/// list, an element inside an attribute value). The expected strings are what the former per-format compilers
+/// produced; the golden output test covers the common shapes on real data.
 /// </summary>
-public class TemplateProgramTests(ITestOutputHelper output)
+public class TemplateProgramTests
 {
     #region Public Methods
 
     /// <summary>
-    /// Verifies that lowering reproduces the existing XML and JSON compilers for every template definition in every
-    /// chunk's template table across all sample files.
+    /// Verifies text is XML-escaped / JSON-escaped, character references render as <c>&amp;#N;</c> in XML and as the
+    /// character in JSON, predefined entities resolve only in JSON (others stay <c>&amp;name;</c>), and CDATA is kept
+    /// verbatim in XML and escaped as a string item in JSON.
     /// </summary>
     [Fact]
-    public void LoweredProgramMatchesExistingCompilersForAllSampleTemplates()
+    public void LowersTextCharRefEntityRefAndCData()
     {
-        List<string> failures = new();
-        int templates = 0;
-        foreach (string file in Directory.GetFiles(TestPaths.TestDataDir, "*.evtx").Order(StringComparer.Ordinal))
-        {
-            byte[] data = File.ReadAllBytes(file);
-            foreach ((int chunkOffset, BinXmlTemplateDefinition definition) in TemplateDefinitions(data))
-            {
-                templates++;
-                string? difference = Compare(data, chunkOffset, definition);
-                if (difference != null)
-                    failures.Add($"{Path.GetFileName(file)} chunk 0x{chunkOffset:X} template 0x{definition.DefDataOffset:X}: {difference}");
-            }
-        }
+        TemplateProgram program = new([
+            new(TemplateOpKind.StartElement, "Data"), new(TemplateOpKind.CloseStartElement),
+            new(TemplateOpKind.Text, "a<b&\"c\""), new(TemplateOpKind.CharRef, CharValue: 9),
+            new(TemplateOpKind.EntityRef, "amp"), new(TemplateOpKind.EntityRef, "custom"),
+            new(TemplateOpKind.CData, "x]y\"z"), new(TemplateOpKind.EndElement, "Data")]);
 
-        output.WriteLine($"Compared {templates} templates");
-        Assert.True(templates > 100, $"Only {templates} templates found; the corpus should have far more");
-        Assert.True(failures.Count == 0, $"{failures.Count} template(s) differ:\n" + string.Join('\n', failures.Take(20)));
+        Assert.Equal(["<Data>a&lt;b&amp;&quot;c&quot;&#9;&amp;&custom;<![CDATA[x]y\"z]]></Data>"], program.LowerToXml().Parts);
+        Assert.Equal(["{\"#name\":\"Data\",\"#content\":[\"a<b&\\\"c\\\"\",\"\\t\",\"&\",\"&custom;\",\"x]y\\\"z\"]}"],
+            program.LowerToJson().Parts);
     }
 
     /// <summary>
-    /// Verifies equivalence on corrupted template bodies: each sample template is mutated with seeded random byte
-    /// overwrites, exercising the bail, unexpected-close-token, depth-limit and exception paths, which must behave
-    /// identically in the program compiler and the existing compilers.
+    /// Verifies attribute lowering: an optional substitution that is an attribute's whole value moves the
+    /// <c> Name="</c> / <c>"</c> markup into its XML slot (so an empty value drops the attribute), a normal one stays
+    /// in the parts, and a present-but-empty attribute list still emits <c>"#attrs":{}</c> in JSON.
     /// </summary>
     [Fact]
-    public void LoweredProgramMatchesExistingCompilersForMutatedTemplates()
+    public void LowersAttributesOptionalSlotsAndEmptyAttributeList()
     {
-        List<string> failures = new();
-        int compared = 0;
-        foreach (string file in Directory.GetFiles(TestPaths.TestDataDir, "*.evtx").Order(StringComparer.Ordinal))
-        {
-            byte[] original = File.ReadAllBytes(file);
-            // One template per chunk keeps this fast while still covering every sample's template shapes
-            foreach (IGrouping<int, (int ChunkOffset, BinXmlTemplateDefinition Definition)> chunk in
-                     TemplateDefinitions(original).GroupBy(t => t.ChunkOffset).Take(16))
-            {
-                (int chunkOffset, BinXmlTemplateDefinition definition) = chunk.First();
-                for (int round = 0; round < _mutationRounds; round++)
-                {
-                    Random rng = new((chunkOffset * 31) + round + Path.GetFileName(file).Length);
-                    byte[] data = (byte[])original.Clone();
-                    int bodyStart = chunkOffset + (int)definition.DefDataOffset + 24;
-                    int bodyLength = (int)Math.Min(definition.DataSize, (uint)(data.Length - bodyStart));
-                    if (bodyLength <= 4)
-                        continue;
-                    for (int m = rng.Next(1, 4); m > 0; m--)
-                        data[bodyStart + 4 + rng.Next(bodyLength - 4)] = (byte)rng.Next(256);
+        TemplateProgram program = new([
+            new(TemplateOpKind.StartElement, "Provider"), new(TemplateOpKind.BeginAttributes),
+            new(TemplateOpKind.Attribute, "Name"), new(TemplateOpKind.Substitution, SubId: 0, IsOptional: true),
+            new(TemplateOpKind.EndAttribute),
+            new(TemplateOpKind.Attribute, "Guid"), new(TemplateOpKind.Text, "{"), new(TemplateOpKind.Substitution, SubId: 1),
+            new(TemplateOpKind.EndAttribute),
+            new(TemplateOpKind.EndAttributes), new(TemplateOpKind.CloseEmptyElement, "Provider"),
+            new(TemplateOpKind.StartElement, "Empty"), new(TemplateOpKind.BeginAttributes), new(TemplateOpKind.EndAttributes),
+            new(TemplateOpKind.CloseEmptyElement, "Empty")]);
 
-                    compared++;
-                    string? difference = Compare(data, chunkOffset, definition);
-                    if (difference != null)
-                        failures.Add($"{Path.GetFileName(file)} chunk 0x{chunkOffset:X} template 0x{definition.DefDataOffset:X} round {round}: {difference}");
-                }
-            }
-        }
+        CompiledTemplate xml = program.LowerToXml();
+        Assert.Equal(["<Provider", " Guid=\"{", "\"></Provider><Empty></Empty>"], xml.Parts);
+        Assert.Equal((0, true, " Name=\"", "\""), (xml.Slots[0].SubId, xml.Slots[0].IsOptional, xml.Slots[0].AttrPrefix, xml.Slots[0].AttrSuffix));
+        Assert.Equal((1, false, null, null), (xml.Slots[1].SubId, xml.Slots[1].IsOptional, xml.Slots[1].AttrPrefix, xml.Slots[1].AttrSuffix));
 
-        output.WriteLine($"Compared {compared} mutated templates");
-        Assert.True(failures.Count == 0, $"{failures.Count} mutated template(s) differ:\n" + string.Join('\n', failures.Take(20)));
-    }
-
-    #endregion
-
-    #region Non-Public Methods
-
-    /// <summary>
-    /// Compiles one template with the existing XML and JSON compilers and with the program compiler (lowered both
-    /// ways), each on a fresh parser so name caches can't hide differences.
-    /// </summary>
-    /// <param name="data">File bytes.</param>
-    /// <param name="chunkOffset">File offset of the chunk holding the template.</param>
-    /// <param name="definition">Template definition from the chunk's template table.</param>
-    /// <returns>Null if equivalent; otherwise a description of the difference.</returns>
-    private static string? Compare(byte[] data, int chunkOffset, BinXmlTemplateDefinition definition)
-    {
-        int offset = (int)definition.DefDataOffset;
-        int size = (int)definition.DataSize;
-
-        (CompiledTemplate? xml, string? xmlError) = Try(() => NewParser(data, chunkOffset).CompileTemplate(offset, size));
-        (CompiledTemplate? loweredXml, string? programXmlError) =
-            Try(() => NewParser(data, chunkOffset).CompileProgram(offset, size)?.LowerToXml());
-        if ((xmlError != null) || (programXmlError != null))
-        {
-            if ((xmlError == null) != (programXmlError == null))
-                return $"XML: existing compiler {xmlError ?? "succeeded"}, program {programXmlError ?? "succeeded"}";
-        }
-        else if (TemplateProgram.DescribeDifference(xml, loweredXml) is { } xmlDifference)
-        {
-            return "XML " + xmlDifference;
-        }
-
-        (CompiledJsonTemplate? json, string? jsonError) = Try(() => NewParser(data, chunkOffset).CompileJsonTemplate(offset, size));
-        (CompiledJsonTemplate? loweredJson, string? programJsonError) =
-            Try(() => NewParser(data, chunkOffset).CompileProgram(offset, size)?.LowerToJson());
-        if ((jsonError != null) || (programJsonError != null))
-            return (jsonError == null) == (programJsonError == null) ? null : $"JSON: existing compiler {jsonError ?? "succeeded"}, program {programJsonError ?? "succeeded"}";
-        return TemplateProgram.DescribeDifference(json, loweredJson) is { } jsonDifference ? "JSON " + jsonDifference : null;
+        CompiledJsonTemplate json = program.LowerToJson();
+        Assert.Equal(["{\"#name\":\"Provider\",\"#attrs\":{\"Name\":\"", "\",\"Guid\":\"{", "\"}},{\"#name\":\"Empty\",\"#attrs\":{}}"],
+            json.Parts);
+        Assert.Equal([true, true], json.InAttrValue);
+        Assert.Equal([true, false], json.IsOptional);
     }
 
     /// <summary>
-    /// Creates a parser scoped to one chunk, with its template table preloaded.
+    /// Verifies content lowering: JSON content items are comma-separated, substitutions in content are quoted string
+    /// items, and a nested element starts its own comma state.
     /// </summary>
-    /// <param name="data">File bytes.</param>
-    /// <param name="chunkOffset">File offset of the chunk.</param>
-    /// <returns>The parser.</returns>
-    private static BinXmlParser NewParser(byte[] data, int chunkOffset)
+    [Fact]
+    public void LowersContentItemsAndNestedElements()
     {
-        ReadOnlySpan<byte> chunk = data.AsSpan(chunkOffset, EvtxChunk.ChunkSize);
-        Dictionary<uint, BinXmlTemplateDefinition> templates = BinXmlTemplateDefinition.PreloadFromChunk(
-            chunk, MemoryMarshal.Cast<byte, uint>(chunk.Slice(384, 128)), chunkOffset);
-        return new BinXmlParser(data, chunkOffset, templates, null);
+        TemplateProgram program = new([
+            new(TemplateOpKind.StartElement, "Event"), new(TemplateOpKind.CloseStartElement),
+            new(TemplateOpKind.Substitution, SubId: 2), new(TemplateOpKind.Text, "t"),
+            new(TemplateOpKind.StartElement, "Child"), new(TemplateOpKind.CloseStartElement),
+            new(TemplateOpKind.Substitution, SubId: 3, IsOptional: true), new(TemplateOpKind.EndElement, "Child"),
+            new(TemplateOpKind.EndElement, "Event")]);
+
+        CompiledTemplate xml = program.LowerToXml();
+        Assert.Equal(["<Event>", "t<Child>", "</Child></Event>"], xml.Parts);
+        Assert.Equal([2, 3], xml.Slots.Select(s => s.SubId));
+
+        CompiledJsonTemplate json = program.LowerToJson();
+        Assert.Equal(["{\"#name\":\"Event\",\"#content\":[\"", "\",\"t\",{\"#name\":\"Child\",\"#content\":[\"", "\"]}]}"],
+            json.Parts);
+        Assert.Equal([false, false], json.InAttrValue);
+        Assert.Equal([false, true], json.IsOptional);
     }
 
     /// <summary>
-    /// Enumerates every template definition in the template table of every chunk with a valid header.
+    /// Verifies that an element inside an attribute value renders its markup inline (no JSON comma) and that its own
+    /// content is element content again, not attribute-value context.
     /// </summary>
-    /// <param name="data">File bytes.</param>
-    /// <returns>Chunk offset and definition pairs.</returns>
-    private static IEnumerable<(int ChunkOffset, BinXmlTemplateDefinition Definition)> TemplateDefinitions(byte[] data)
+    [Fact]
+    public void LowersElementInsideAttributeValue()
     {
-        for (int chunkOffset = _fileHeaderSize; chunkOffset + EvtxChunk.ChunkSize <= data.Length; chunkOffset += EvtxChunk.ChunkSize)
-        {
-            if (!data.AsSpan(chunkOffset, 8).SequenceEqual("ElfChnk\0"u8))
-                continue;
-            ReadOnlySpan<byte> chunk = data.AsSpan(chunkOffset, EvtxChunk.ChunkSize);
-            Dictionary<uint, BinXmlTemplateDefinition> templates = BinXmlTemplateDefinition.PreloadFromChunk(
-                chunk, MemoryMarshal.Cast<byte, uint>(chunk.Slice(384, 128)), chunkOffset);
-            foreach (BinXmlTemplateDefinition definition in templates.Values.OrderBy(d => d.DefDataOffset))
-                yield return (chunkOffset, definition);
-        }
+        TemplateProgram program = new([
+            new(TemplateOpKind.StartElement, "A"), new(TemplateOpKind.BeginAttributes),
+            new(TemplateOpKind.Attribute, "x"), new(TemplateOpKind.StartElement, "B"), new(TemplateOpKind.CloseStartElement),
+            new(TemplateOpKind.Substitution, SubId: 0), new(TemplateOpKind.EndElement, "B"), new(TemplateOpKind.Substitution, SubId: 1),
+            new(TemplateOpKind.EndAttribute), new(TemplateOpKind.EndAttributes), new(TemplateOpKind.CloseEmptyElement, "A")]);
+
+        Assert.Equal(["<A x=\"<B>", "</B>", "\"></A>"], program.LowerToXml().Parts);
+
+        CompiledJsonTemplate json = program.LowerToJson();
+        Assert.Equal(["{\"#name\":\"A\",\"#attrs\":{\"x\":\"{\"#name\":\"B\",\"#content\":[\"", "\"]}", "\"}}"], json.Parts);
+        Assert.Equal([false, true], json.InAttrValue);
     }
-
-    /// <summary>
-    /// Runs a compile step, capturing an exception as its type name instead of throwing.
-    /// </summary>
-    /// <typeparam name="T">Result type.</typeparam>
-    /// <param name="step">Compile step.</param>
-    /// <returns>The result and null, or default and the exception's type name.</returns>
-    private static (T? Result, string? Error) Try<T>(Func<T?> step) where T : class
-    {
-        try
-        {
-            return (step(), null);
-        }
-        catch (Exception ex)
-        {
-            return (null, $"threw {ex.GetType().Name}");
-        }
-    }
-
-    #endregion
-
-    #region Non-Public Fields
-
-    private const int _fileHeaderSize = 4096;
-
-    private const int _mutationRounds = 25;
 
     #endregion
 }

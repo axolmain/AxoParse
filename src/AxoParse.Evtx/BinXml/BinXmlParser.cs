@@ -593,7 +593,7 @@ internal sealed partial class BinXmlParser
         {
             if (!_compiledCache.TryGetValue(hdr.TemplateGuid, out compiled))
             {
-                compiled = CompileTemplate((int)hdr.DefDataOffset, (int)hdr.DataSize);
+                compiled = CompileProgram((int)hdr.DefDataOffset, (int)hdr.DataSize)?.LowerToXml();
                 _compiledCache[hdr.TemplateGuid] = compiled;
             }
         }
