@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Raw on-disk layout of the first 24 bytes of an EVTX event record header.
@@ -39,7 +39,7 @@ internal readonly struct RecordHeaderLayout
 /// <param name="EventDataFileOffset">Absolute byte offset of the BinXml event data within the file buffer.</param>
 /// <param name="EventDataLength">Length in bytes of the BinXml event data payload.</param>
 /// <param name="SizeCopy">Trailing copy of <paramref name="Size"/> used for backward traversal integrity checks.</param>
-public readonly record struct EvtxRecord(
+internal readonly record struct EvtxRecord(
     uint Size,
     ulong EventRecordId,
     ulong WrittenTime,
@@ -47,12 +47,12 @@ public readonly record struct EvtxRecord(
     int EventDataLength,
     uint SizeCopy)
 {
-    #region Properties
+    #region Fields
 
     /// <summary>
-    /// Converts the FILETIME <see cref="WrittenTime"/> to a UTC <see cref="DateTime"/>.
+    /// Size of the record header before the BinXml event data: 4 signature + 4 size + 8 record ID + 8 written time.
     /// </summary>
-    public DateTime WrittenTimeUtc => DateTime.FromFileTimeUtc((long)WrittenTime);
+    public const int HeaderSize = 24;
 
     #endregion
 
@@ -85,7 +85,7 @@ public readonly record struct EvtxRecord(
             Size: header.Size,
             EventRecordId: header.EventRecordId,
             WrittenTime: header.WrittenTime,
-            EventDataFileOffset: fileOffset + 24,
+            EventDataFileOffset: fileOffset + HeaderSize,
             EventDataLength: eventDataLength,
             SizeCopy: sizeCopy
         );

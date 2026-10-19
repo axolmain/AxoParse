@@ -1,4 +1,3 @@
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests.ReferenceComparison;
 
@@ -54,18 +53,18 @@ public class SequentialRecordIdTests(ITestOutputHelper testOutputHelper)
                 continue;
 
             byte[] data = File.ReadAllBytes(path);
-            EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1, cancellationToken: TestContext.Current.CancellationToken);
+            EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 }, TestContext.Current.CancellationToken);
 
             ulong previousId = 0;
             int count = 0;
-            foreach (EvtxEvent evt in parser.GetEvents())
+            foreach (EvtxEvent evt in parser.Events)
             {
                 if (!evt.IsSuccess)
                     continue;
 
-                Assert.True(evt.Record.EventRecordId > previousId,
-                    $"[{fileName}] Record {evt.Record.EventRecordId} should be > {previousId}");
-                previousId = evt.Record.EventRecordId;
+                Assert.True(evt.RecordId > previousId,
+                    $"[{fileName}] Record {evt.RecordId} should be > {previousId}");
+                previousId = evt.RecordId;
                 count++;
             }
 
@@ -82,7 +81,7 @@ public class SequentialRecordIdTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, "security.evtx");
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 }, TestContext.Current.CancellationToken);
 
         foreach (EvtxChunk chunk in parser.Chunks)
         {
@@ -109,13 +108,13 @@ public class SequentialRecordIdTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 });
 
         ulong expected = 1;
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
             Assert.True(evt.IsSuccess, $"[{fileName}] Record {expected} failed: {evt.Diagnostic}");
-            Assert.Equal(expected, evt.Record.EventRecordId);
+            Assert.Equal(expected, evt.RecordId);
             expected++;
         }
 

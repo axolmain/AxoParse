@@ -2,7 +2,7 @@ using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 
 namespace AxoParse.Browser;
 
@@ -35,10 +35,10 @@ public partial class EvtxInterop
 
         for (int i = offset; i < end; i++)
         {
-            (int chunkIndex, EvtxRecord record, string xml) = _storedRecords[i];
+            (int chunkIndex, ulong recordId, DateTime writtenTime, string xml) = _storedRecords[i];
             writer.WriteStartObject();
-            writer.WriteNumber("recordId", record.EventRecordId);
-            writer.WriteString("timestamp", FileTimeToIso(record.WrittenTime));
+            writer.WriteNumber("recordId", recordId);
+            writer.WriteString("timestamp", ToIso(writtenTime));
             writer.WriteString("xml", xml);
             writer.WriteNumber("chunkIndex", chunkIndex);
             WriteXmlFields(writer, xml);
@@ -66,24 +66,20 @@ public partial class EvtxInterop
     [JSExport]
     public static string ParseEvtxFile(byte[] data)
     {
-        EvtxParser parser = EvtxParser.Parse(data, 1);
+        EvtxLog log = EvtxParser.Parse(data, _singleThread);
 
-        _storedRecords = new List<(int, EvtxRecord, string)>(parser.TotalRecords);
-        for (int ci = 0; ci < parser.Chunks.Count; ci++)
+        _storedRecords = new List<(int, ulong, DateTime, string)>(log.RecordCount);
+        for (int ci = 0; ci < log.Chunks.Count; ci++)
         {
-            EvtxChunk chunk = parser.Chunks[ci];
-            for (int ri = 0; ri < chunk.Records.Count; ri++)
-            {
-                string xml = ri < chunk.ParsedXml.Count ? chunk.ParsedXml[ri] : "";
-                _storedRecords.Add((ci, chunk.Records[ri], xml));
-            }
+            foreach (EvtxEvent evt in log.Chunks[ci].Events)
+                _storedRecords.Add((ci, evt.RecordId, evt.WrittenTimeUtc, evt.GetText()));
         }
 
         using MemoryStream stream = new(128);
         using Utf8JsonWriter writer = new(stream);
         writer.WriteStartObject();
-        writer.WriteNumber("totalRecords", parser.TotalRecords);
-        writer.WriteNumber("numChunks", parser.Chunks.Count);
+        writer.WriteNumber("totalRecords", log.RecordCount);
+        writer.WriteNumber("numChunks", log.Chunks.Count);
         writer.WriteEndObject();
         writer.Flush();
         return Encoding.UTF8.GetString(stream.ToArray());
@@ -99,29 +95,27 @@ public partial class EvtxInterop
     [JSExport]
     public static string ParseEvtxToJson(byte[] data)
     {
-        EvtxParser parser = EvtxParser.Parse(data, 1); // single-threaded in WASM
+        EvtxLog log = EvtxParser.Parse(data, _singleThread);
 
         using MemoryStream stream = new();
         using Utf8JsonWriter writer = new(stream);
 
         writer.WriteStartObject();
 
-        writer.WriteNumber("totalRecords", parser.TotalRecords);
-        writer.WriteNumber("numChunks", parser.Chunks.Count);
+        writer.WriteNumber("totalRecords", log.RecordCount);
+        writer.WriteNumber("numChunks", log.Chunks.Count);
 
         writer.WriteStartArray("records");
 
-        for (int ci = 0; ci < parser.Chunks.Count; ci++)
+        for (int ci = 0; ci < log.Chunks.Count; ci++)
         {
-            EvtxChunk chunk = parser.Chunks[ci];
-            for (int ri = 0; ri < chunk.Records.Count; ri++)
+            foreach (EvtxEvent evt in log.Chunks[ci].Events)
             {
-                EvtxRecord record = chunk.Records[ri];
-                string xml = ri < chunk.ParsedXml.Count ? chunk.ParsedXml[ri] : "";
+                string xml = evt.GetText();
 
                 writer.WriteStartObject();
-                writer.WriteNumber("recordId", record.EventRecordId);
-                writer.WriteString("timestamp", FileTimeToIso(record.WrittenTime));
+                writer.WriteNumber("recordId", evt.RecordId);
+                writer.WriteString("timestamp", ToIso(evt.WrittenTimeUtc));
                 writer.WriteString("xml", xml);
                 writer.WriteNumber("chunkIndex", ci);
 
@@ -154,7 +148,7 @@ public partial class EvtxInterop
     [JSExport]
     public static string ParseFileHeader(byte[] headerData)
     {
-        EvtxFileHeader header = EvtxFileHeader.ParseEvtxFileHeader(headerData);
+        EvtxFileHeader header = EvtxParser.ParseFileHeader(headerData);
 
         using MemoryStream stream = new(256);
         using Utf8JsonWriter writer = new(stream);
@@ -183,20 +177,19 @@ public partial class EvtxInterop
     {
         try
         {
-            EvtxChunk chunk = EvtxChunk.ParseStandalone(chunkData);
+            EvtxChunk chunk = EvtxParser.ParseChunk(chunkData);
 
             using MemoryStream stream = new();
             using Utf8JsonWriter writer = new(stream);
             writer.WriteStartArray();
 
-            for (int i = 0; i < chunk.Records.Count; i++)
+            foreach (EvtxEvent evt in chunk.Events)
             {
-                EvtxRecord record = chunk.Records[i];
-                string xml = i < chunk.ParsedXml.Count ? chunk.ParsedXml[i] : "";
+                string xml = evt.GetText();
 
                 writer.WriteStartObject();
-                writer.WriteNumber("recordId", record.EventRecordId);
-                writer.WriteString("timestamp", FileTimeToIso(record.WrittenTime));
+                writer.WriteNumber("recordId", evt.RecordId);
+                writer.WriteString("timestamp", ToIso(evt.WrittenTimeUtc));
                 writer.WriteNumber("chunkIndex", chunkIndex);
                 WriteMetadataFields(writer, xml);
                 writer.WriteEndObject();
@@ -226,19 +219,19 @@ public partial class EvtxInterop
     {
         try
         {
-            EvtxChunk chunk = EvtxChunk.ParseStandalone(chunkData);
+            EvtxChunk chunk = EvtxParser.ParseChunk(chunkData);
 
-            if ((recordIndex < 0) || (recordIndex >= chunk.Records.Count))
+            if ((recordIndex < 0) || (recordIndex >= chunk.Events.Count))
                 return "{}";
 
-            EvtxRecord record = chunk.Records[recordIndex];
-            string xml = recordIndex < chunk.ParsedXml.Count ? chunk.ParsedXml[recordIndex] : "";
+            EvtxEvent evt = chunk.Events[recordIndex];
+            string xml = evt.GetText();
 
             using MemoryStream stream = new();
             using Utf8JsonWriter writer = new(stream);
             writer.WriteStartObject();
-            writer.WriteNumber("recordId", record.EventRecordId);
-            writer.WriteString("timestamp", FileTimeToIso(record.WrittenTime));
+            writer.WriteNumber("recordId", evt.RecordId);
+            writer.WriteString("timestamp", ToIso(evt.WrittenTimeUtc));
             writer.WriteString("xml", xml);
             writer.WriteNumber("chunkIndex", chunkIndex);
             WriteXmlFields(writer, xml);
@@ -432,14 +425,11 @@ public partial class EvtxInterop
         return xml.Substring(gt + 1, close - gt - 1);
     }
 
-    private static string FileTimeToIso(ulong filetime)
-    {
-        if (filetime == 0) return "";
-        const long epochDelta = 504_911_232_000_000_000L; // 1601-01-01 to 0001-01-01 in ticks
-        long ticks = (long)filetime + epochDelta;
-        if ((ticks < DateTime.MinValue.Ticks) || (ticks > DateTime.MaxValue.Ticks)) return "";
-        return new DateTime(ticks, DateTimeKind.Utc).ToString("o");
-    }
+    /// <summary>
+    /// Formats a record's written time as ISO 8601, or "" for a zero or out-of-range FILETIME.
+    /// </summary>
+    private static string ToIso(DateTime writtenTime) =>
+        writtenTime.Ticks <= _fileTimeEpochTicks ? "" : writtenTime.ToString("o");
 
     private static void WriteEmptyFields(Utf8JsonWriter writer)
     {
@@ -529,6 +519,11 @@ public partial class EvtxInterop
 
     #region Non-Public Fields
 
+    /// <summary>
+    /// Ticks of 1601-01-01, the FILETIME epoch: <see cref="EvtxEvent.WrittenTimeUtc"/> for a zero FILETIME.
+    /// </summary>
+    private const long _fileTimeEpochTicks = 504_911_232_000_000_000L;
+
     private static readonly string[] _levelNames = ["LogAlways", "Critical", "Error", "Warning", "Information", "Verbose"];
 
     /// <summary>
@@ -536,7 +531,12 @@ public partial class EvtxInterop
     /// Each entry holds the chunk index, record header, and pre-extracted XML string
     /// so that <see cref="GetRecordPage"/> can serialise on demand without re-parsing.
     /// </summary>
-    private static List<(int ChunkIndex, EvtxRecord Record, string Xml)> _storedRecords = [];
+    private static List<(int ChunkIndex, ulong RecordId, DateTime WrittenTime, string Xml)> _storedRecords = [];
+
+    /// <summary>
+    /// Parse options for WASM, where there is a single thread.
+    /// </summary>
+    private static readonly EvtxOptions _singleThread = new() { MaxThreads = 1 };
 
     #endregion
 }

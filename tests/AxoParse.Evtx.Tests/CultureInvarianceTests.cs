@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -26,7 +25,7 @@ public class CultureInvarianceTests
             foreach (string file in Directory.GetFiles(_testDataDir, "*.evtx"))
             {
                 byte[] data = File.ReadAllBytes(file);
-                foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.Json })
+                foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.JsonStructured })
                 {
                     CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
                     CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;
@@ -93,7 +92,7 @@ public class CultureInvarianceTests
     private static byte[] Render(byte[] data, OutputFormat format)
     {
         using MemoryStream stream = new();
-        EvtxParser.WriteTo(data, stream, format, maxThreads: 1, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxParser.WriteTo(data, stream, new EvtxOptions { Format = format, MaxThreads = 1 }, TestContext.Current.CancellationToken);
         return stream.ToArray();
     }
 

@@ -1,12 +1,11 @@
 using System.Security.Cryptography;
 using System.Text;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
 /// <summary>
 /// Locks the exact rendered output of every sample file. The expected SHA-256 of each (sample, format) pair's
-/// <see cref="EvtxParser.WriteTo"/> output lives in <c>Golden/output-sha256.txt</c>; any byte change fails the test.
+/// record output and <c>WriteTo</c> output lives in <c>Golden/output-sha256.txt</c>; any byte change fails the test.
 /// <para>
 /// After an intentional output change, re-bless with <c>AXOPARSE_REBLESS=1 dotnet test ...</c>, which rewrites the
 /// hash file from the current output; review and commit the diff. On a mismatch, the actual output is written to a
@@ -18,11 +17,19 @@ public class GoldenOutputTests
     #region Public Methods
 
     /// <summary>
-    /// Verifies that <see cref="EvtxParser.WriteTo"/> output for every sample file, in both formats, single- and
-    /// multi-threaded, hashes to the committed golden value, and that every sample has a golden entry.
+    /// Verifies the output of every sample file, in both formats, single- and multi-threaded, against the committed
+    /// golden hashes, and that every sample has golden entries. Two hashes per (format, sample):
+    /// <list type="bullet">
+    /// <item><c>&lt;format&gt;/&lt;sample&gt;</c>: every event's <see cref="EvtxEvent.Utf8"/> from
+    /// <see cref="EvtxParser.Parse(byte[], EvtxOptions?, CancellationToken)"/>, concatenated. These are the rendered
+    /// record bytes, so any rendering change shows up here.</item>
+    /// <item><c>framed/&lt;format&gt;/&lt;sample&gt;</c>: the output of
+    /// <see cref="EvtxParser.WriteTo(byte[], Stream, EvtxOptions?, CancellationToken)"/>, which adds the framing
+    /// (a line feed after each record).</item>
+    /// </list>
     /// </summary>
     [Fact]
-    public void WriteToOutputMatchesGoldenHashes()
+    public void OutputMatchesGoldenHashes()
     {
         CancellationToken token = TestContext.Current.CancellationToken;
         Dictionary<string, string> golden = ReadGolden();
@@ -36,30 +43,45 @@ public class GoldenOutputTests
             string name = Path.GetFileName(file);
             foreach (OutputFormat format in _formats)
             {
-                string key = Key(format, name);
-                string? reference = null;
-                foreach (int threads in _threadCounts)
+                Check(Key(format, name), threads =>
                 {
-                    using MemoryStream stream = new();
-                    EvtxParser.WriteTo(data, stream, format, threads, cancellationToken: token);
-                    string hash = Convert.ToHexStringLower(SHA256.HashData(stream.GetBuffer().AsSpan(0, (int)stream.Length)));
+                    using MemoryStream records = new();
+                    foreach (EvtxEvent evt in EvtxParser.Parse(data, new EvtxOptions { Format = format, MaxThreads = threads }, token).Events)
+                        records.Write(evt.Utf8.Span);
+                    return records.ToArray();
+                });
+                Check("framed/" + Key(format, name), threads =>
+                {
+                    using MemoryStream framed = new();
+                    EvtxParser.WriteTo(data, framed, new EvtxOptions { Format = format, MaxThreads = threads }, token);
+                    return framed.ToArray();
+                });
 
-                    // Output must not depend on thread count; the single-threaded hash is what gets blessed
-                    reference ??= hash;
-                    bool threadMismatch = hash != reference;
-                    bool goldenMismatch = !_rebless && (!golden.TryGetValue(key, out string? expected) || (expected != hash));
-                    if (threadMismatch || goldenMismatch)
+                void Check(string key, Func<int, byte[]> render)
+                {
+                    string? reference = null;
+                    foreach (int threads in _threadCounts)
                     {
-                        dumpDir ??= Directory.CreateTempSubdirectory("axoparse-golden-").FullName;
-                        string dumpPath = Path.Combine(dumpDir, $"{name}.{threads}t.{Extension(format)}");
-                        File.WriteAllBytes(dumpPath, stream.ToArray());
-                        failures.Add(threadMismatch
-                            ? $"{key} ({threads} threads): output differs from 1 thread -> {dumpPath}"
-                            : $"{key} ({threads} threads): {(golden.ContainsKey(key) ? "hash changed" : "no golden entry")} -> {dumpPath}");
-                    }
-                }
+                        byte[] output = render(threads);
+                        string hash = Convert.ToHexStringLower(SHA256.HashData(output));
 
-                actual[key] = reference!;
+                        // Output must not depend on thread count; the single-threaded hash is what gets blessed
+                        reference ??= hash;
+                        bool threadMismatch = hash != reference;
+                        bool goldenMismatch = !_rebless && (!golden.TryGetValue(key, out string? expected) || (expected != hash));
+                        if (threadMismatch || goldenMismatch)
+                        {
+                            dumpDir ??= Directory.CreateTempSubdirectory("axoparse-golden-").FullName;
+                            string dumpPath = Path.Combine(dumpDir, $"{key.Replace('/', '.')}.{threads}t.{Extension(format)}");
+                            File.WriteAllBytes(dumpPath, output);
+                            failures.Add(threadMismatch
+                                ? $"{key} ({threads} threads): output differs from 1 thread -> {dumpPath}"
+                                : $"{key} ({threads} threads): {(golden.ContainsKey(key) ? "hash changed" : "no golden entry")} -> {dumpPath}");
+                        }
+                    }
+
+                    actual[key] = reference!;
+                }
             }
         }
 
@@ -90,15 +112,16 @@ public class GoldenOutputTests
     /// </summary>
     /// <param name="format">Rendered format.</param>
     /// <returns><c>xml</c> or <c>json</c>.</returns>
-    private static string Extension(OutputFormat format) => format == OutputFormat.Json ? "json" : "xml";
+    private static string Extension(OutputFormat format) => format == OutputFormat.JsonStructured ? "json" : "xml";
 
     /// <summary>
     /// Builds the golden-file key for a sample rendered in a format.
     /// </summary>
     /// <param name="format">Rendered format.</param>
     /// <param name="fileName">Sample file name (no directory).</param>
-    /// <returns>Key of the form <c>xml/security.evtx</c>.</returns>
-    private static string Key(OutputFormat format, string fileName) => $"{Extension(format)}/{fileName}";
+    /// <returns>Key of the form <c>xml/security.evtx</c> or <c>json-structured/security.evtx</c>.</returns>
+    private static string Key(OutputFormat format, string fileName) =>
+        $"{(format == OutputFormat.JsonStructured ? "json-structured" : "xml")}/{fileName}";
 
     /// <summary>
     /// Reads the golden hash file. Each non-comment line is <c>&lt;sha256&gt; &lt;format&gt;/&lt;file&gt;</c>.
@@ -128,7 +151,8 @@ public class GoldenOutputTests
     private static void WriteGolden(SortedDictionary<string, string> actual)
     {
         StringBuilder sb = new();
-        sb.Append("# SHA-256 of EvtxParser.WriteTo output per <format>/<sample>. Generated by GoldenOutputTests;\n");
+        sb.Append("# SHA-256 per <format>/<sample> of the events' concatenated output (EvtxEvent.Utf8), and per\n");
+        sb.Append("# framed/<format>/<sample> of EvtxParser.WriteTo output. Generated by GoldenOutputTests;\n");
         sb.Append($"# regenerate with {_reblessVariable}=1 after an intentional output change.\n");
         foreach (KeyValuePair<string, string> kv in actual)
             sb.Append(kv.Value).Append(' ').Append(kv.Key).Append('\n');
@@ -146,7 +170,7 @@ public class GoldenOutputTests
     /// </summary>
     private const string _reblessVariable = "AXOPARSE_REBLESS";
 
-    private static readonly OutputFormat[] _formats = [OutputFormat.Xml, OutputFormat.Json];
+    private static readonly OutputFormat[] _formats = [OutputFormat.Xml, OutputFormat.JsonStructured];
 
     /// <summary>
     /// Golden hash file in the test project's source tree (read and written in place, not copied to bin).

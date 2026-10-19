@@ -1,6 +1,5 @@
 using System.Buffers.Binary;
 using System.Text.Json;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -19,9 +18,8 @@ public class CorruptionFuzzTests
     #region Public Methods
 
     /// <summary>
-    /// Verifies that no seeded mutation of any sample makes <see cref="EvtxParser.Parse"/> or
-    /// <see cref="EvtxParser.WriteTo"/> throw an undocumented exception, single-threaded and (every tenth round)
-    /// multi-threaded. Each mutation gets <see cref="_perMutationTimeout"/>, so an infinite loop is reported with its
+    /// Verifies that no seeded mutation of any sample makes <c>Parse</c>, <c>WriteTo</c> or <c>ReadEvents</c> throw an
+    /// undocumented exception, single-threaded and (every tenth round) multi-threaded. Each mutation gets <see cref="_perMutationTimeout"/>, so an infinite loop is reported with its
     /// seed instead of hanging the run, whatever the round count.
     /// </summary>
     [Fact]
@@ -84,23 +82,24 @@ public class CorruptionFuzzTests
     {
         try
         {
-            EvtxParser parser = EvtxParser.Parse(data, threads, OutputFormat.Xml, cancellationToken: token);
-            foreach (EvtxEvent _ in parser.GetEvents()) { }
-            EvtxParser.WriteTo(data, Stream.Null, OutputFormat.Json, threads, cancellationToken: token);
-            EvtxParser.WriteTo(data, Stream.Null, OutputFormat.Xml, threads, validateChecksums: true, token);
+            EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = OutputFormat.Xml }, token);
+            foreach (EvtxEvent _ in parser.Events) { }
+            EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.JsonStructured, MaxThreads = threads }, token);
+            EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = threads, ValidateChecksums = true }, token);
+            foreach (EvtxEvent _ in EvtxParser.ReadEvents(data, new EvtxOptions { MaxThreads = threads, Salvage = true }, token)) { }
 
-            EvtxParser salvaged = EvtxParser.Parse(data, threads, OutputFormat.Json, cancellationToken: token, salvage: true);
-            foreach (EvtxEvent evt in salvaged.GetEvents())
+            EvtxLog salvaged = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = OutputFormat.JsonStructured, Salvage = true }, token);
+            foreach (EvtxEvent evt in salvaged.Events)
             {
-                if (evt.Json.IsEmpty)
+                if (evt.Utf8.IsEmpty)
                     continue;
                 try
                 {
-                    using JsonDocument _ = JsonDocument.Parse(evt.Json);
+                    using JsonDocument _ = JsonDocument.Parse(evt.Utf8);
                 }
                 catch (JsonException ex)
                 {
-                    return $"record {evt.Record.EventRecordId} ({evt.Diagnostic ?? "rendered"}) is not valid JSON: {ex.Message}";
+                    return $"record {evt.RecordId} ({evt.Diagnostic?.Message ?? "rendered"}) is not valid JSON: {ex.Message}";
                 }
             }
 

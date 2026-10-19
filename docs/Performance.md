@@ -4,18 +4,18 @@
 
 | Method | Use when | Memory |
 |--------|----------|--------|
-| `EvtxParser.WriteTo` | You only need the rendered output (export, piping, hashing) | Flat: from a path or handle, a few reusable buffers per worker and the file is never loaded whole; nothing retained per record |
-| `EvtxParser.ParseAsync` | You want to start consuming events before the whole file is parsed | Holds only chunks not yet consumed (grows toward the whole file if the consumer is slower than the parser) |
-| `EvtxParser.Parse` | You need random access to chunks, records, templates, or diagnostics | Whole file's output held in memory |
+| `EvtxParser.WriteTo` | You only need the rendered output (export, piping, hashing) | Flat: from a path or stream, a few reusable buffers per worker and the file is never loaded whole; nothing retained per record |
+| `EvtxParser.ReadEvents` / `ReadEventsAsync` | You want to process events one by one as they're parsed | Flat: a few chunks per worker (workers wait when the consumer falls behind); events you keep keep their chunk alive |
+| `EvtxParser.Parse` | You need the whole log at once: random access to chunks and events, or all diagnostics | Every chunk's rendered output held in memory (from a path, the file itself is not) |
 
-`WriteTo` is what the benchmark CLI (`perf/AxoParse.Bench`) uses. Its output is byte-identical to concatenating `Parse`
-output (the tests check this for every sample file, format, and thread count).
+`WriteTo` is what the benchmark CLI (`perf/AxoParse.Bench`) uses. Its output is the record bytes `Parse` renders, each
+followed by a line feed (the tests check this for every sample file, format, and thread count).
 
 ## Threading
 
-| `maxThreads` | Behaviour |
-|--------------|-----------|
-| `0` or `-1` | Use all available cores (default) |
+| `EvtxOptions.MaxThreads` | Behaviour |
+|--------------------------|-----------|
+| `0` or negative | Use all available cores (default) |
 | `1` | Single-threaded — useful for debugging or constrained environments |
 | `N` | Use exactly N threads |
 
@@ -27,16 +27,16 @@ thread pool overhead.
 
 ## Memory
 
-`Parse`, `ParseAsync` and `WriteTo(byte[], ...)` take the whole file as a `byte[]`. `WriteTo(path, ...)` and
-`WriteTo(SafeFileHandle, ...)` read each 64 KB chunk on demand instead.
+The `byte[]` overloads take the whole file in memory. The path and stream overloads read each 64 KB chunk on demand
+instead, into a per-worker buffer.
 
-`Parse` renders each chunk's records into one exact-size UTF-8 buffer. `ParsedUtf8` and `ParsedJson` are slices of that
-buffer, so there's no per-record array. `ParsedXml` decodes a record to `string` only on first access, so if you
-don't read it, it costs nothing.
+Each chunk's records are rendered into one exact-size UTF-8 buffer. `EvtxEvent.Utf8` is a slice of that buffer, so
+there's no per-record array, and an `EvtxEvent` itself is a 16-byte struct (chunk + index). `GetText()` decodes to a
+`string` only when called.
 
-`WriteTo` runs as a pipeline: workers claim chunks in file order, read (for the path/handle overloads) and render each
-into a buffer from a small ring (4 per worker), while the calling thread writes each chunk as soon as it's next in
-order and hands its buffer back. Reading, rendering and writing overlap, and no worker waits for a whole batch to
+Every entry point runs as a pipeline: workers claim chunks in file order, read (for the path/stream overloads) and
+render each into a slot of a small ring (4 per worker), while the calling thread consumes each chunk as soon as it's
+next in order (writes it, or yields its events) and hands the slot back. Reading, rendering and writing overlap, and no worker waits for a whole batch to
 finish. Streaming from a path, the benchmark CLI peaks at about 8 MiB on the 30 MB sample single-threaded and 18 MiB
 with 8 threads (39 and 49 MiB when it loaded the file first).
 

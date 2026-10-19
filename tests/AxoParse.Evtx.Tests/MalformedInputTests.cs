@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -23,7 +22,7 @@ public class MalformedInputTests
     {
         CancellationToken token = TestContext.Current.CancellationToken;
         byte[] original = await File.ReadAllBytesAsync(Path.Combine(TestPaths.TestDataDir, "security.evtx"), token);
-        int expected = EvtxParser.Parse(original, 1, cancellationToken: token).TotalRecords;
+        int expected = EvtxParser.Parse(original, new EvtxOptions { MaxThreads = 1 }, token).RecordCount;
 
         byte[] data = (byte[])original.Clone();
         // Chunk header: FirstEventRecordId at +24, LastEventRecordId at +32 (both u64)
@@ -31,11 +30,11 @@ public class MalformedInputTests
         ulong first = BinaryPrimitives.ReadUInt64LittleEndian(chunk[24..]);
         BinaryPrimitives.WriteUInt64LittleEndian(chunk[32..], first - 2);
 
-        Assert.Equal(expected, EvtxParser.Parse(data, 1, cancellationToken: token).TotalRecords);
-        Assert.Equal(expected, EvtxParser.WriteTo(data, Stream.Null, OutputFormat.Xml, 1, cancellationToken: token));
+        Assert.Equal(expected, EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 }, token).RecordCount);
+        Assert.Equal(expected, EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = 1 }, token));
 
         int yielded = 0;
-        await foreach (EvtxEvent _ in EvtxParser.ParseAsync(data, 1, cancellationToken: token))
+        await foreach (EvtxEvent _ in EvtxParser.ReadEventsAsync(data, new EvtxOptions { MaxThreads = 1 }, token))
             yielded++;
         Assert.Equal(expected, yielded);
     }
@@ -48,22 +47,22 @@ public class MalformedInputTests
     /// <param name="format">Output format under test (XML and JSON have separate template-instance readers).</param>
     [Theory]
     [InlineData(OutputFormat.Xml)]
-    [InlineData(OutputFormat.Json)]
+    [InlineData(OutputFormat.JsonStructured)]
     public void HugeSubstitutionCountFailsRecordWithoutLargeAllocation(OutputFormat format)
     {
         CancellationToken token = TestContext.Current.CancellationToken;
         byte[] original = File.ReadAllBytes(Path.Combine(TestPaths.TestDataDir, "security.evtx"));
-        EvtxParser baseline = EvtxParser.Parse(original, 1, format, cancellationToken: token);
+        EvtxLog baseline = EvtxParser.Parse(original, new EvtxOptions { MaxThreads = 1, Format = format }, token);
 
         byte[] data = (byte[])original.Clone();
         BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(FirstRecordSubstitutionCountOffset(data)), 50_000_000);
 
         long before = GC.GetTotalAllocatedBytes(precise: true);
-        EvtxParser parser = EvtxParser.Parse(data, 1, format, cancellationToken: token);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, Format = format }, token);
         long allocated = GC.GetTotalAllocatedBytes(precise: true) - before;
 
-        Assert.Equal(baseline.TotalRecords, parser.TotalRecords);
-        EvtxEvent firstEvent = parser.GetEvents().First();
+        Assert.Equal(baseline.RecordCount, parser.RecordCount);
+        EvtxEvent firstEvent = parser.Events.First();
         Assert.False(firstEvent.IsSuccess);
         // A clean parse of this 2 MB file allocates ~10-20 MB; the old code added ~450 MB of descriptor arrays
         Assert.True(allocated < 100L * 1024 * 1024, $"Parse allocated {allocated / (1024 * 1024)} MB");

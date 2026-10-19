@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 
 string file = args.Length > 0 ? args[0] : "tests/data/security_big_sample.evtx";
 
@@ -12,7 +12,7 @@ long[] RunTest(int threads, OutputFormat format)
 {
     for (int i = 0; i < warmupRuns; i++)
     {
-        EvtxParser.Parse(data, threads, format);
+        EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = format });
     }
 
     GC.Collect();
@@ -23,7 +23,7 @@ long[] RunTest(int threads, OutputFormat format)
     for (int i = 0; i < measuredRuns; i++)
     {
         Stopwatch sw = Stopwatch.StartNew();
-        EvtxParser.Parse(data, threads, format);
+        EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = format });
         sw.Stop();
         times[i] = sw.ElapsedMilliseconds;
     }
@@ -32,7 +32,7 @@ long[] RunTest(int threads, OutputFormat format)
 }
 
 int[] threadCounts = [1, 8]; // , 8
-OutputFormat[] formats = [OutputFormat.Json, OutputFormat.Xml]; // , OutputFormat.Json
+OutputFormat[] formats = [OutputFormat.JsonStructured, OutputFormat.Xml]; // , OutputFormat.JsonStructured
 
 // results[format][threadIdx][run]
 long[][][] results = new long[formats.Length][][];

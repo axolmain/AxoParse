@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Bit flags stored at offset 120 of the EVTX file header (4 bytes).
@@ -59,7 +59,7 @@ public readonly record struct EvtxFileHeader(
     HeaderFlags FileFlags,
     uint Checksum)
 {
-    #region Public Methods
+    #region Non-Public Methods
 
     /// <summary>
     /// Parses the first 128 bytes of a raw EVTX file into an <see cref="EvtxFileHeader"/>.
@@ -67,7 +67,7 @@ public readonly record struct EvtxFileHeader(
     /// </summary>
     /// <param name="data">Raw file bytes; must be at least 128 bytes long.</param>
     /// <returns>A populated <see cref="EvtxFileHeader"/> with all header fields.</returns>
-    public static EvtxFileHeader ParseEvtxFileHeader(ReadOnlySpan<byte> data)
+    internal static EvtxFileHeader ParseEvtxFileHeader(ReadOnlySpan<byte> data)
     {
         if (data.Length < 128)
             throw new EvtxParseException(EvtxParseError.FileHeaderTooShort, "EVTX header too short");

@@ -2,23 +2,50 @@
 
 ## Release Notes
 
-### v0.3.0 (unreleased) — Streaming input, strict rendering with opt-in salvage, WEVT fallback, faster rendering
+### v0.3.0 (unreleased) — New API, streaming input, strict rendering with opt-in salvage, WEVT fallback, faster rendering
 
-Output for intact logs is unchanged, except for one bug fix: entity references with inline names (28 records across
-three samples now render in full; see Fixes). Every other output change affects corrupt input only.
+**This release breaks the public API** (see API below). Rendered record output for intact logs is unchanged, except
+for one bug fix: entity references with inline names (28 records across three samples now render in full; see Fixes).
+Every other rendering change affects corrupt input only. `WriteTo` now writes a line feed after each record.
+
+**API (breaking):**
+
+- **One namespace, `AxoParse.Evtx`** (was `AxoParse.Evtx.Evtx` and `AxoParse.Evtx.Wevt`).
+- **`EvtxOptions`** (an immutable record) replaces the optional parameters: `Format`, `MaxThreads`,
+  `ValidateChecksums`, `Salvage`, `WevtCache`, `XmlEventsRoot`. Every entry point is
+  `(input, [output,] EvtxOptions? options = null, CancellationToken ct = default)`.
+- **`EvtxParser` is a static class.** `Parse(byte[] | path)` returns an **`EvtxLog`** (`Header`, `Chunks`,
+  `RecordCount`, `Events`, `Diagnostics`) instead of an `EvtxParser` instance (`FileHeader`, `TotalRecords`,
+  `GetEvents()` and `RawData` are gone). `Parse(path)` reads chunks as it parses instead of loading the file.
+- **`ReadEvents` / `ReadEventsAsync`** (`byte[]` or path) replace `ParseAsync`. They stream events with bounded memory
+  (a few chunks per worker) instead of buffering every parsed chunk.
+- **`WriteTo(byte[] | path | Stream input, Stream output, ...)`**: the `SafeFileHandle` overload is replaced by a
+  seekable-`Stream` overload (a `FileStream` keeps the positional-read fast path). Output is now framed: a line feed
+  after each record, so JSON output is JSON Lines; `XmlEventsRoot` wraps XML output in `<Events>`. Record bytes are
+  unchanged.
+- **`EvtxEvent`** is a 16-byte view: `RecordId`, `WrittenTimeUtc`, `FileOffset`, `Utf8`, `GetText()`, `Diagnostic`,
+  `IsSuccess`, `IsSalvaged`. `Record`, `Xml` and `Json` are gone; `Utf8` holds the output in either format.
+- **`EvtxChunk`** exposes `Header`, `FileOffset`, `Recovered` and `Events`. `Records`, `ParsedXml`, `ParsedJson`,
+  `ParsedUtf8`, `RenderDiagnostics`, `Templates`, `GetEvent` and the public `Parse` overloads are gone;
+  `EvtxParser.ParseChunk(span)` replaces `ParseStandalone`, and `EvtxParser.ParseFileHeader(span)` replaces
+  `EvtxFileHeader.ParseEvtxFileHeader`.
+- **Typed diagnostics:** `EvtxDiagnostic` (`Kind`, `RecordId`, `FileOffset`, `Message`) replaces diagnostic strings
+  (messages keep their text). `EvtxLog.Diagnostics` now lists record diagnostics as well as skipped chunks.
+- **`OutputFormat.Json` is renamed `OutputFormat.JsonStructured`** (same bytes).
+- Internal now: `EvtxRecord`, `BinXmlTemplateDefinition`, `Crc32`, and the header `Parse*` / `Validate*Checksum`
+  methods.
 
 **New:**
 
-- **`EvtxParser.WriteTo(string path, ...)` and `WriteTo(SafeFileHandle file, ...)`** stream a file from disk. Each worker
-  reads the 64 KB chunk it renders (positional reads, so the handle's position isn't used), so reading overlaps
-  rendering and the file is never loaded whole. Output and record count are identical to `WriteTo(byte[], ...)`.
-  The benchmark CLI now uses it (see the peak memory column below).
+- **Streaming input.** `WriteTo`, `ReadEvents` and `Parse` given a path (or a stream) read each 64 KB chunk as a
+  worker renders it (positional reads for files), so reading overlaps rendering and the file is never loaded whole.
+  Output is identical to the in-memory overloads. The benchmark CLI uses it (see the peak memory column below).
 - **`WevtCache` now works, as a fallback.** When a record's embedded template is missing (size 0), runs past its chunk,
   or is corrupt, the record is rendered with the provider template of the same GUID, in XML and JSON, as in the Rust
   `evtx` crate. A usable embedded template is never replaced (tested: same-GUID provider templates leave an intact
   log's output byte-identical). Provider templates compile with the same compiler as embedded ones, so a recovered
   record renders exactly as it would have with its own template.
-- **`salvage: true`** (on `Parse`, `ParseAsync` and `WriteTo`) keeps the well-formed part of a record whose BinXml is
+- **`Salvage = true`** keeps the well-formed part of a record whose BinXml is
   corrupt instead of failing it. Decoding stops at the corruption and every open element is closed, so the XML or JSON
   is still well-formed. `EvtxEvent.Diagnostic` says where it stopped (`BinXml salvaged …`). Off by default.
 
@@ -71,20 +98,13 @@ The machine was busy during these runs; the README's cross-parser table is from 
   aren't compiled are decoded by one strict decoder shared by XML and JSON, as in the Rust `evtx` crate. An unknown
   token, nesting deeper than 64 levels, a name running past the data, a substitution outside a template, or an
   element inside an attribute value fails the record with a diagnostic. Before, the bytes were skipped and the record
-  could render partial or meaningless output (like `<></>`) while reporting success. Use `salvage: true` to keep the
+  could render partial or meaningless output (like `<></>`) while reporting success. Use `Salvage = true` to keep the
   well-formed part instead.
 - **Rendering only reads a record's own chunk.** A template body or substitution value that ran past the end of its
   64 KB chunk used to be read from the next chunk's bytes. Now the template is treated as unavailable or the record
   fails (with a diagnostic), as in the Rust `evtx` crate, which parses each chunk from its own buffer.
 - An optional attribute whose value index is past the instance's values is omitted (the compiled and decoded paths
   used to disagree).
-
-**API:**
-
-- `WriteTo` (all three overloads) gains `WevtCache? wevtCache = null` and then `bool salvage = false` as its **last**
-  parameters, after the cancellation token, so existing calls still compile.
-- `Parse` and `ParseAsync` gain `bool salvage = false` as their last parameter, after the cancellation token.
-- Compiled callers need a rebuild (the method signatures changed).
 
 **Internals:**
 
@@ -94,7 +114,9 @@ The machine was busy during these runs; the README's cross-parser table is from 
   sample and seeded mutations. One compiled template type, one executor, one template-instance handler and one value
   formatter replace the per-format pairs, and the separate XML, JSON and WEVT template compilers and both hand-written
   interpreters are gone.
-- `WriteTo` checks chunk magic and checksums on its worker threads, so `validateChecksums: true` costs less wall time.
+- `Parse`, `ReadEvents`, `ReadEventsAsync` and `WriteTo` run on one ordered chunk pipeline with one two-pass chunk
+  classification, so they agree on order and output by construction. Workers check chunk magic and checksums, so
+  `ValidateChecksums` costs less wall time. `Parse` no longer preloads each chunk's template table.
 
 ---
 
@@ -212,334 +234,165 @@ dotnet add package AxoParse.Evtx
 Or add directly to your `.csproj`:
 
 ```xml
-<PackageReference Include="AxoParse.Evtx" Version="0.2.1" />
+<PackageReference Include="AxoParse.Evtx" Version="0.3.0" />
 ```
 
 ---
 
 ## Quick Start
 
-### Parse an EVTX file (XML output)
-
 ```csharp
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 
-byte[] fileData = File.ReadAllBytes("security.evtx");
-EvtxParser parser = EvtxParser.Parse(fileData);
+// Whole log
+EvtxLog log = EvtxParser.Parse("security.evtx");
+foreach (EvtxEvent evt in log.Events)
+    Console.WriteLine(evt.IsSuccess ? evt.GetText() : $"Record {evt.RecordId} failed: {evt.Diagnostic?.Message}");
 
-foreach (EvtxEvent evt in parser.GetEvents())
-{
-    if (evt.IsSuccess)
-        Console.WriteLine(evt.Xml);
-    else
-        Console.WriteLine($"Record {evt.Record.EventRecordId} failed: {evt.Diagnostic}");
-}
+// Streaming, bounded memory
+foreach (EvtxEvent evt in EvtxParser.ReadEvents("security.evtx", new EvtxOptions { MaxThreads = 4 }))
+    Console.WriteLine(evt.RecordId);
+
+// Export as JSON Lines
+using FileStream output = File.Create("security.jsonl");
+EvtxParser.WriteTo("security.evtx", output, new EvtxOptions { Format = OutputFormat.JsonStructured });
 ```
 
-### JSON output
-
-```csharp
-EvtxParser parser = EvtxParser.Parse(fileData, format: OutputFormat.Json);
-
-foreach (EvtxEvent evt in parser.GetEvents())
-{
-    string json = System.Text.Encoding.UTF8.GetString(evt.Json.Span);
-    Console.WriteLine(json);
-}
-```
-
-### Stream output to a file
-
-```csharp
-using FileStream output = File.Create("security.json");
-int written = EvtxParser.WriteTo(fileData, output, OutputFormat.Json);
-```
-
-### Consume events as they're parsed
-
-```csharp
-await foreach (EvtxEvent evt in EvtxParser.ParseAsync(fileData, cancellationToken: token))
-{
-    if (evt.IsSuccess)
-        Console.WriteLine(evt.Xml);
-}
-```
-
-### Parallel parsing with checksum validation
-
-```csharp
-EvtxParser parser = EvtxParser.Parse(
-    fileData,
-    maxThreads: 4,
-    validateChecksums: true);
-
-Console.WriteLine($"Parsed {parser.TotalRecords} records from {parser.Chunks.Count} chunks");
-
-foreach (string diag in parser.Diagnostics)
-    Console.WriteLine($"Warning: {diag}");
-```
-
-### WEVT template cache
-
-`WevtCache` is a **fallback** for damaged logs, as in the Rust `evtx` crate. When a record's embedded template is
-missing (size 0), runs past its chunk, or won't compile, the record is rendered with the provider template of the
-same GUID instead. A usable embedded template is never replaced, so passing a cache doesn't change output for an
-intact log.
-
-```csharp
-using AxoParse.Evtx.Wevt;
-
-WevtCache cache = new WevtCache();
-cache.AddFromDirectory(@"C:\Windows\System32", "*.dll");
-
-EvtxParser parser = EvtxParser.Parse(fileData, wevtCache: cache);
-```
-
-### Direct chunk access (advanced)
-
-For performance-critical paths, access chunks directly instead of using `GetEvents()`:
-
-```csharp
-foreach (EvtxChunk chunk in parser.Chunks)
-{
-    for (int i = 0; i < chunk.Records.Count; i++)
-    {
-        EvtxRecord record = chunk.Records[i];
-        string xml = chunk.ParsedXml[i];
-        Console.WriteLine($"Record {record.EventRecordId}: {xml}");
-    }
-}
-```
-
-To write or hash output without decoding to `string`, use `chunk.ParsedUtf8[i].Span` instead.
+See [Getting Started](GettingStarted.md) for more.
 
 ---
 
 ## API Reference
 
+Every public type is in the `AxoParse.Evtx` namespace. Every type is immutable and safe to use from any thread, except
+`WevtCache` (add templates before sharing it).
+
 ### `EvtxParser`
 
-**Namespace:** `AxoParse.Evtx.Evtx`
-
-Primary entry point. Parses an entire EVTX file and provides access to chunks, records, and rendered events.
-
-#### `Parse` (static method)
-
 ```csharp
-public static EvtxParser Parse(
-    byte[] fileData,
-    int maxThreads = 0,
-    OutputFormat format = OutputFormat.Xml,
-    bool validateChecksums = false,
-    WevtCache? wevtCache = null,
-    CancellationToken cancellationToken = default)
+public static class EvtxParser
 ```
 
-| Parameter           | Default   | Description                                                                   |
-|---------------------|-----------|-------------------------------------------------------------------------------|
-| `fileData`          | —         | Complete EVTX file as byte array                                              |
-| `maxThreads`        | `0`       | Thread count. `0` or `-1` = all cores, `1` = single-threaded, `N` = N threads |
-| `format`            | `Xml`     | Output format. Chosen at parse time — compiled templates are format-specific  |
-| `validateChecksums` | `false`   | When `true`, chunks failing CRC32 validation are skipped                      |
-| `wevtCache`         | `null`    | Provider templates used when a record's embedded template is missing or corrupt |
-| `cancellationToken` | `default` | Cancellation token (throws `OperationCanceledException` if cancelled)         |
+Static entry points. All of them take an optional `EvtxOptions` (null = `EvtxOptions.Default`) and a
+`CancellationToken`, and produce events in one order whatever the thread count: valid chunks in file order, then
+records recovered from regions whose chunk header is damaged.
 
-**Returns:** Fully parsed `EvtxParser` instance.
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `Parse(byte[] fileData, EvtxOptions? options = null, CancellationToken ct = default)` | `EvtxLog` | Parses a file held in memory. |
+| `Parse(string path, ...)` | `EvtxLog` | Parses a file from disk, reading chunks as it goes (only the output is held in memory; files over 2 GB work). |
+| `ReadEvents(byte[] fileData \| string path, ...)` | `IEnumerable<EvtxEvent>` | Streams events while later chunks are parsed in the background; a few chunks per worker in memory. The path overload opens the file when enumeration starts and closes it when it ends. |
+| `ReadEventsAsync(byte[] fileData \| string path, ...)` | `IAsyncEnumerable<EvtxEvent>` | As `ReadEvents`, waiting for chunks without blocking a thread. |
+| `WriteTo(byte[] fileData \| string path \| Stream input, Stream output, ...)` | `int` (records written) | Writes every event's UTF-8 output, each followed by a line feed (JSON Lines for JSON). `input` must be readable and seekable; a `FileStream` is read with positional reads. `output` is written to but not flushed or closed. |
+| `ParseChunk(ReadOnlySpan<byte> chunkData, EvtxOptions? options = null)` | `EvtxChunk` | Decodes one standalone 64 KB chunk (carving, chunk-by-chunk reading). Offsets are chunk-relative. |
+| `ParseFileHeader(ReadOnlySpan<byte> data)` | `EvtxFileHeader` | Decodes the first 128 bytes of a file. |
 
-**Throws:** `EvtxParseException` if data is too short or missing the EVTX magic signature.
-
-#### `WriteTo` (static method)
-
-```csharp
-public static int WriteTo(
-    byte[] fileData,
-    Stream output,
-    OutputFormat format = OutputFormat.Xml,
-    int maxThreads = 0,
-    bool validateChecksums = false,
-    CancellationToken cancellationToken = default)
-
-public static int WriteTo(string path, Stream output, /* same options */)
-public static int WriteTo(SafeFileHandle file, Stream output, /* same options */)
-```
-
-The path and handle overloads stream the file: each worker reads the 64 KB chunk it renders with a positional read,
-so the file is never loaded whole, files over 2 GB work, and the handle's position isn't used or changed. The path
-overload opens the file with `FileShare.ReadWrite`, so a log another process still has open can be read. All three
-produce identical output.
-
-Parses the file and writes every record's rendered UTF-8 output to `output`. The order and bytes match concatenating
-`Parse` output: valid chunks in file order, then records recovered from regions whose chunk header is damaged.
-Workers render chunks into a bounded ring of reusable buffers while the calling thread writes them in order, so no
-per-record output is retained and rendering overlaps with writing.
-The stream is written to but not flushed or closed.
-
-Per-record render diagnostics aren't reported. A record that fails to render writes nothing. The optional `wevtCache`
-(the last parameter) works as in `Parse`.
-
-**Returns:** Number of records written, counted the same way as `TotalRecords` for the same input.
-
-**Throws:** `EvtxParseException` under the same conditions as `Parse`.
-
-#### `ParseAsync` (static method)
-
-```csharp
-public static IAsyncEnumerable<EvtxEvent> ParseAsync(
-    byte[] fileData,
-    int maxThreads = 0,
-    OutputFormat format = OutputFormat.Xml,
-    bool validateChecksums = false,
-    WevtCache? wevtCache = null,
-    CancellationToken cancellationToken = default)
-```
-
-Same parsing as `Parse`, but events are streamed. Chunks are parsed in parallel and yielded in file order through a
-reorder buffer, so the first events are available before the whole file is parsed. Parameters are the same as `Parse`.
-
-#### `GetEvents`
-
-```csharp
-public IEnumerable<EvtxEvent> GetEvents()
-```
-
-Enumerates all parsed events across all chunks in file order. Each event pairs record metadata with rendered output and
-optional diagnostic info.
-
-#### Properties
-
-| Property       | Type                       | Description                                             |
-|----------------|----------------------------|---------------------------------------------------------|
-| `Chunks`       | `IReadOnlyList<EvtxChunk>` | All successfully parsed 64KB chunks, in file order      |
-| `TotalRecords` | `int`                      | Total event records across all chunks                   |
-| `FileHeader`   | `EvtxFileHeader`           | Parsed file header (version, chunk count, flags)        |
-| `Diagnostics`  | `IReadOnlyList<string>`    | Parser-level diagnostic messages (e.g., skipped chunks) |
-| `RawData`      | `ReadOnlyMemory<byte>`     | Complete file bytes (retained for lazy record access)   |
+Throws `EvtxParseException` for a missing or invalid file header (or, from `ParseChunk`, chunk signature), and
+`OperationCanceledException` when cancelled.
 
 ---
 
-### `EvtxEvent`
-
-**Namespace:** `AxoParse.Evtx.Evtx`
+### `EvtxOptions`
 
 ```csharp
-public readonly record struct EvtxEvent(
-    EvtxRecord Record,
-    string Xml,
-    ReadOnlyMemory<byte> Json,
-    string? Diagnostic)
+public sealed record EvtxOptions
 ```
 
-A single parsed event pairing record metadata with rendered output. Primary consumption type via `GetEvents()`.
+| Property            | Type           | Default | Description |
+|---------------------|----------------|---------|-------------|
+| `Format`            | `OutputFormat` | `Xml`   | Format events are rendered in |
+| `MaxThreads`        | `int`          | `0`     | Worker threads; `0` or negative = all cores, `1` = calling thread only |
+| `ValidateChecksums` | `bool`         | `false` | Skip chunks failing CRC32 validation (reported as `ChunkChecksumMismatch`) |
+| `Salvage`           | `bool`         | `false` | Keep the well-formed prefix of a record whose BinXml is corrupt |
+| `WevtCache`         | `WevtCache?`   | `null`  | Provider templates for records whose embedded template is missing or corrupt |
+| `XmlEventsRoot`     | `bool`         | `false` | `WriteTo` with XML only: wrap the records in `<Events>` … `</Events>` lines |
 
-| Field        | Type                   | Description                                                                    |
-|--------------|------------------------|--------------------------------------------------------------------------------|
-| `Record`     | `EvtxRecord`           | Raw record metadata (ID, timestamps, offsets)                                  |
-| `Xml`        | `string`               | Rendered XML string. Populated when `OutputFormat.Xml`, otherwise empty        |
-| `Json`       | `ReadOnlyMemory<byte>` | Rendered UTF-8 JSON bytes. Populated when `OutputFormat.Json`, otherwise empty |
-| `Diagnostic` | `string?`              | Error message if BinXml rendering failed; `null` on success                    |
-
-| Property    | Type   | Description                                                        |
-|-------------|--------|--------------------------------------------------------------------|
-| `IsSuccess` | `bool` | `true` if the event rendered without errors (`Diagnostic is null`) |
+`EvtxOptions.Default` holds the defaults. Derive variants with `with`.
 
 ---
 
-### `EvtxRecord`
-
-**Namespace:** `AxoParse.Evtx.Evtx`
+### `EvtxLog`
 
 ```csharp
-public readonly record struct EvtxRecord(
-    uint Size,
-    ulong EventRecordId,
-    ulong WrittenTime,
-    int EventDataFileOffset,
-    int EventDataLength,
-    uint SizeCopy)
+public sealed class EvtxLog
 ```
 
-Parsed representation of a single EVTX event record.
-
-| Field                 | Type    | Description                                                     |
-|-----------------------|---------|-----------------------------------------------------------------|
-| `Size`                | `uint`  | Total record size in bytes (header + data + trailing size)      |
-| `EventRecordId`       | `ulong` | Monotonically increasing event record identifier                |
-| `WrittenTime`         | `ulong` | FILETIME timestamp when record was written                      |
-| `EventDataFileOffset` | `int`   | Absolute byte offset of BinXml data within file buffer          |
-| `EventDataLength`     | `int`   | Length in bytes of BinXml payload                               |
-| `SizeCopy`            | `uint`  | Trailing copy of `Size` for backward traversal integrity checks |
-
-| Property         | Type       | Description                                       |
-|------------------|------------|---------------------------------------------------|
-| `WrittenTimeUtc` | `DateTime` | Converts FILETIME `WrittenTime` to UTC `DateTime` |
-
-#### Methods
-
-```csharp
-public static EvtxRecord? ParseEvtxRecord(ReadOnlySpan<byte> data, int fileOffset)
-```
-
-Parses a record from a span. Returns `null` if the record has invalid size (corrupted/zero data).
-
-```csharp
-public ReadOnlySpan<byte> GetEventData(byte[] fileData)
-```
-
-Returns event data as a span into the original file buffer.
+| Property      | Type                              | Description |
+|---------------|-----------------------------------|-------------|
+| `Header`      | `EvtxFileHeader`                  | The file header |
+| `Chunks`      | `IReadOnlyList<EvtxChunk>`        | Chunks that produced events, in output order (checksum-skipped chunks excluded) |
+| `RecordCount` | `int`                             | Total events across `Chunks` |
+| `Events`      | `IEnumerable<EvtxEvent>`          | Every event, chunk by chunk |
+| `Diagnostics` | `IReadOnlyList<EvtxDiagnostic>`   | Skipped chunks and records that didn't decode cleanly, in output order |
 
 ---
 
 ### `EvtxChunk`
 
-**Namespace:** `AxoParse.Evtx.Evtx`
-
-Each EVTX file body consists of sequentially laid-out chunks, each exactly 64 KB. Self-contained units with own header,
-event records in BinXml, and trailing unused space.
-
-#### Constants
-
-| Constant    | Value   | Description                         |
-|-------------|---------|-------------------------------------|
-| `ChunkSize` | `65536` | Size of each chunk in bytes (64 KB) |
-
-#### Properties
-
-| Property            | Type                                                  | Description                                                 |
-|---------------------|-------------------------------------------------------|-------------------------------------------------------------|
-| `Header`            | `EvtxChunkHeader`                                     | Parsed chunk header with record ranges, offsets, checksums  |
-| `Records`           | `IReadOnlyList<EvtxRecord>`                           | Event records parsed from chunk's data area                 |
-| `ParsedUtf8`        | `IReadOnlyList<ReadOnlyMemory<byte>>`                 | Rendered UTF-8 output (XML or JSON) per record; slices of one chunk buffer |
-| `ParsedXml`         | `IReadOnlyList<string>`                               | Rendered XML strings, decoded lazily from `ParsedUtf8` (empty when format is JSON) |
-| `ParsedJson`        | `IReadOnlyList<ReadOnlyMemory<byte>>?`                | Rendered UTF-8 JSON per record (`null` when format is XML)  |
-| `RenderDiagnostics` | `IReadOnlyDictionary<int, string>`                    | Error messages for failed renders, keyed by record index    |
-| `Templates`         | `IReadOnlyDictionary<uint, BinXmlTemplateDefinition>` | Template definitions from chunk's template pointer table    |
-
-#### Methods
-
 ```csharp
-public static EvtxChunk Parse(ReadOnlySpan<byte> chunkData, int chunkFileOffset)
+public sealed class EvtxChunk
 ```
 
-Parses a 64KB chunk without BinXml rendering (header + templates + records only).
+| Member       | Type                        | Description |
+|--------------|-----------------------------|-------------|
+| `Header`     | `EvtxChunkHeader`           | Parsed chunk header (all zero for a recovered region) |
+| `FileOffset` | `long`                      | Absolute file offset of the chunk |
+| `Recovered`  | `bool`                      | True for a region whose chunk header was damaged; its records were found by scanning |
+| `Events`     | `IReadOnlyList<EvtxEvent>`  | The chunk's events, in record order |
+| `ChunkSize`  | `const int`                 | 65536 |
+
+---
+
+### `EvtxEvent`
 
 ```csharp
-public static EvtxChunk ParseStandalone(byte[] chunkData)
+public readonly struct EvtxEvent
 ```
 
-Parses a standalone 64KB chunk byte array with BinXml rendering. Treats the array as a self-contained "file" with
-chunk-relative offsets. Designed for WASM interop.
+A 16-byte view of one record of an `EvtxChunk`; reading it allocates nothing except `GetText()`.
+
+| Member           | Type                     | Description |
+|------------------|--------------------------|-------------|
+| `RecordId`       | `ulong`                  | Event record ID from the record header |
+| `WrittenTimeUtc` | `DateTime`               | Record header FILETIME as UTC (`DateTime.MinValue` if out of range) |
+| `FileOffset`     | `long`                   | Absolute file offset of the record header |
+| `Utf8`           | `ReadOnlyMemory<byte>`   | Rendered output; empty when rendering failed |
+| `GetText()`      | `string`                 | `Utf8` decoded to a new string |
+| `Diagnostic`     | `EvtxDiagnostic?`        | Why the record didn't decode cleanly, or null |
+| `IsSuccess`      | `bool`                   | No diagnostic |
+| `IsSalvaged`     | `bool`                   | `Utf8` holds only the part decoded before corruption |
+
+---
+
+### `EvtxDiagnostic` and `EvtxDiagnosticKind`
 
 ```csharp
-public EvtxEvent GetEvent(int index)
+public readonly record struct EvtxDiagnostic(EvtxDiagnosticKind Kind, ulong? RecordId, long FileOffset, string Message);
 ```
 
-Returns the `EvtxEvent` at a specific index within the chunk.
+| Kind                    | RecordId | FileOffset | Meaning |
+|-------------------------|----------|------------|---------|
+| `ChunkChecksumMismatch` | null     | chunk      | Chunk failed CRC32 validation and was skipped |
+| `RecordRenderFailed`    | set      | record     | BinXml couldn't be decoded; output is empty |
+| `RecordSalvaged`        | set      | record     | Output ends where decoding stopped (`Salvage`) |
+
+---
+
+### `OutputFormat`
+
+```csharp
+public enum OutputFormat
+{
+    Xml,            // The event's XML, as Event Viewer shows it
+    JsonStructured  // Lossless JSON of the XML tree: {"#name", "#attrs", "#content"} per element
+}
+```
 
 ---
 
 ### `EvtxChunkHeader`
 
-**Namespace:** `AxoParse.Evtx.Evtx`
+**Namespace:** `AxoParse.Evtx`
 
 ```csharp
 public readonly record struct EvtxChunkHeader(...)
@@ -561,31 +414,13 @@ checksums.
 | `Flags`                     | 120    | 4 bytes | `ChunkFlags` status flags                                  |
 | `Checksum`                  | 124    | 4 bytes | CRC32 of header bytes                                      |
 
-#### Methods
-
-```csharp
-public static EvtxChunkHeader ParseEvtxChunkHeader(ReadOnlySpan<byte> data)
-```
-
-Parses 512-byte chunk header. Verifies `ElfChnk\0` signature.
-
-```csharp
-public bool ValidateDataChecksum(ReadOnlySpan<byte> chunkData)
-```
-
-Validates event records data checksum: `CRC32(bytes[512..FreeSpaceOffset])`.
-
-```csharp
-public bool ValidateHeaderChecksum(ReadOnlySpan<byte> chunkData)
-```
-
-Validates chunk header checksum: `CRC32(bytes[0..120]) XOR CRC32(bytes[128..512])`.
+Read it with `EvtxChunk.Header`.
 
 ---
 
 ### `EvtxFileHeader`
 
-**Namespace:** `AxoParse.Evtx.Evtx`
+**Namespace:** `AxoParse.Evtx`
 
 ```csharp
 public readonly record struct EvtxFileHeader(...)
@@ -607,37 +442,13 @@ checksum.
 | `FileFlags`            | 120    | 4 bytes | `HeaderFlags` (Dirty/Full/NoCrc32)   |
 | `Checksum`             | 124    | 4 bytes | CRC32 of first 120 bytes             |
 
-#### Methods
-
-```csharp
-public static EvtxFileHeader ParseEvtxFileHeader(ReadOnlySpan<byte> data)
-```
-
-Parses first 128 bytes of raw EVTX file. Validates `ElfFile\0` magic signature at offset 0.
-
-**Throws:** `EvtxParseException` with `FileHeaderTooShort` or `InvalidFileSignature`.
-
----
-
-### `OutputFormat`
-
-**Namespace:** `AxoParse.Evtx.Evtx`
-
-```csharp
-public enum OutputFormat
-{
-    Xml,   // Render each event as an XML string
-    Json   // Render each event as a UTF-8 JSON byte array
-}
-```
-
-Format is chosen at parse time because compiled template caches store precompiled format-specific fragments.
+Read it with `EvtxLog.Header` or `EvtxParser.ParseFileHeader`.
 
 ---
 
 ### `HeaderFlags`
 
-**Namespace:** `AxoParse.Evtx.Evtx`
+**Namespace:** `AxoParse.Evtx`
 
 ```csharp
 [Flags]
@@ -656,7 +467,7 @@ Stored at offset 120 of the EVTX file header.
 
 ### `ChunkFlags`
 
-**Namespace:** `AxoParse.Evtx.Evtx`
+**Namespace:** `AxoParse.Evtx`
 
 ```csharp
 [Flags]
@@ -672,46 +483,27 @@ Stored at chunk header offset 120.
 
 ---
 
-### `EvtxParseException`
-
-**Namespace:** `AxoParse.Evtx.Evtx`
+### `EvtxParseException` and `EvtxParseError`
 
 ```csharp
-public class EvtxParseException : Exception
+public sealed class EvtxParseException : Exception
 {
     public EvtxParseError ErrorCode { get; }
 }
 ```
 
-Thrown when EVTX data fails structural validation. Use `ErrorCode` for programmatic handling:
-
-```csharp
-try
-{
-    EvtxParser parser = EvtxParser.Parse(fileData);
-}
-catch (EvtxParseException ex) when (ex.ErrorCode == EvtxParseError.InvalidFileSignature)
-{
-    Console.WriteLine("Not an EVTX file");
-}
-```
-
-### `EvtxParseError`
-
-**Namespace:** `AxoParse.Evtx.Evtx`
-
-| Value                   | Thrown By                              | Description                       |
-|-------------------------|----------------------------------------|-----------------------------------|
-| `FileHeaderTooShort`    | `EvtxFileHeader.ParseEvtxFileHeader`   | Data shorter than 128 bytes       |
-| `InvalidFileSignature`  | `EvtxFileHeader.ParseEvtxFileHeader`   | Missing `ElfFile\0` magic         |
-| `ChunkHeaderTooShort`   | `EvtxChunkHeader.ParseEvtxChunkHeader` | Chunk data shorter than 512 bytes |
-| `InvalidChunkSignature` | `EvtxChunkHeader.ParseEvtxChunkHeader` | Missing `ElfChnk\0` magic         |
+| Value                   | Thrown by                                     | Description                 |
+|-------------------------|-----------------------------------------------|-----------------------------|
+| `FileHeaderTooShort`    | every file entry point, `ParseFileHeader`     | Data shorter than 128 bytes |
+| `InvalidFileSignature`  | every file entry point, `ParseFileHeader`     | Missing `ElfFile\0` magic   |
+| `ChunkHeaderTooShort`   | (reserved)                                    | Chunk data shorter than 512 bytes |
+| `InvalidChunkSignature` | `ParseChunk`                                  | Missing `ElfChnk\0` magic   |
 
 ---
 
 ### `WevtCache`
 
-**Namespace:** `AxoParse.Evtx.Wevt`
+**Namespace:** `AxoParse.Evtx`
 
 Templates extracted and compiled from WEVT_TEMPLATE resources in Windows provider PE binaries, keyed by GUID.
 
@@ -754,21 +546,5 @@ same GUID are silently ignored.
 
 ## Error Handling
 
-The library follows a clear philosophy: **throw on "this isn't an EVTX file" errors, recover silently from "this EVTX
-file has corruption" errors.**
-
-### What throws
-
-- File data shorter than 128 bytes (`FileHeaderTooShort`)
-- Missing `ElfFile\0` magic signature (`InvalidFileSignature`)
-- Chunk data shorter than 512 bytes (`ChunkHeaderTooShort`)
-- Missing `ElfChnk\0` chunk magic (`InvalidChunkSignature`)
-
-### What recovers silently
-
-- **Chunks with bad magic** — skipped, then the 64KB region is scanned for individual records by `0x2A2A` record magic
-- **Records that fail BinXml parsing** — produce empty output (`""` for XML, a zero-length slice for JSON) with a
-  diagnostic message on the `EvtxEvent` (`WriteTo` writes nothing for them)
-- **CRC32 checksum failures** — only enforced when `validateChecksums: true`; failing chunks are skipped entirely
-
-Check `parser.Diagnostics` for parser-level warnings and `evt.IsSuccess` / `evt.Diagnostic` for per-record status.
+The library follows a clear philosophy: **throw on "this isn't an EVTX file" errors, recover from "this EVTX file has
+corruption" errors** and report them as `EvtxDiagnostic`s. See [Error Handling](ErrorHandling.md).

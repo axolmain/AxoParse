@@ -1,5 +1,5 @@
 using AxoParse.Evtx.BinXml;
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 using BenchmarkDotNet.Attributes;
 
 namespace AxoParse.Benchmarks;
@@ -53,13 +53,13 @@ public class ChunkBenchmarks
         _warmJsonCache = new Dictionary<Guid, CompiledTemplate?>();
         for (int i = 0; i < _chunkOffsets.Length; i++)
         {
-            EvtxChunk.Parse(_data, _chunkOffsets[i], _warmXmlCache, OutputFormat.Xml);
-            EvtxChunk.Parse(_data, _chunkOffsets[i], _warmJsonCache, OutputFormat.Json);
+            EvtxChunk.Parse(_data, _chunkOffsets[i], _chunkOffsets[i], _warmXmlCache, _xmlOptions);
+            EvtxChunk.Parse(_data, _chunkOffsets[i], _chunkOffsets[i], _warmJsonCache, _jsonOptions);
         }
     }
 
     /// <summary>
-    /// Header, template preload and record walk only — no BinXml rendering.
+    /// Header and record walk only — no BinXml rendering.
     /// </summary>
     /// <returns>Total records found, returned so the JIT cannot eliminate the work.</returns>
     [Benchmark(OperationsPerInvoke = ChunksPerInvoke)]
@@ -67,7 +67,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data.AsSpan(_chunkOffsets[i], EvtxChunk.ChunkSize), _chunkOffsets[i]).Records.Count;
+            total += EvtxChunk.Parse(_data.AsSpan(_chunkOffsets[i], EvtxChunk.ChunkSize), _chunkOffsets[i]).Events.Count;
         return total;
     }
 
@@ -81,7 +81,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data, _chunkOffsets[i], new Dictionary<Guid, CompiledTemplate?>(), OutputFormat.Xml).Records.Count;
+            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _chunkOffsets[i], new Dictionary<Guid, CompiledTemplate?>(), _xmlOptions).Events.Count;
         return total;
     }
 
@@ -94,7 +94,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _warmXmlCache, OutputFormat.Xml).Records.Count;
+            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _chunkOffsets[i], _warmXmlCache, _xmlOptions).Events.Count;
         return total;
     }
 
@@ -107,7 +107,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data, _chunkOffsets[i], new Dictionary<Guid, CompiledTemplate?>(), OutputFormat.Json).Records.Count;
+            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _chunkOffsets[i], new Dictionary<Guid, CompiledTemplate?>(), _jsonOptions).Events.Count;
         return total;
     }
 
@@ -120,7 +120,7 @@ public class ChunkBenchmarks
     {
         int total = 0;
         for (int i = 0; i < _chunkOffsets.Length; i++)
-            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _warmJsonCache, OutputFormat.Json).Records.Count;
+            total += EvtxChunk.Parse(_data, _chunkOffsets[i], _chunkOffsets[i], _warmJsonCache, _jsonOptions).Events.Count;
         return total;
     }
 
@@ -157,6 +157,16 @@ public class ChunkBenchmarks
     /// JSON template cache pre-populated from every chunk during setup.
     /// </summary>
     private Dictionary<Guid, CompiledTemplate?> _warmJsonCache = new();
+
+    /// <summary>
+    /// Options for XML rendering.
+    /// </summary>
+    private static readonly EvtxOptions _xmlOptions = new() { Format = OutputFormat.Xml };
+
+    /// <summary>
+    /// Options for JSON rendering.
+    /// </summary>
+    private static readonly EvtxOptions _jsonOptions = new() { Format = OutputFormat.JsonStructured };
 
     #endregion
 }

@@ -38,7 +38,7 @@ foreach (string line in File.ReadAllLines(goldenPath))
     golden[line[(space + 1)..]] = line[..space];
 }
 
-string[] formats = ["xml", "json"];
+string[] formats = ["xml", "json-structured"];
 int[] threadCounts = [1, 8];
 int checkedCount = 0;
 List<string> failures = new();
@@ -49,7 +49,8 @@ foreach (string file in Directory.GetFiles(dataDir, "*.evtx").Order(StringCompar
     string name = Path.GetFileName(file);
     foreach (string format in formats)
     {
-        string key = $"{format}/{name}";
+        // The CLI streams through EvtxParser.WriteTo, so it matches the framed (WriteTo) hashes
+        string key = $"framed/{format}/{name}";
         if (!golden.TryGetValue(key, out string? expected))
         {
             failures.Add($"{key}: no golden entry (re-bless GoldenOutputTests)");

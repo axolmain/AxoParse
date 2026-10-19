@@ -1,4 +1,4 @@
-namespace AxoParse.Evtx.Evtx;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Thrown when EVTX data fails structural validation (truncated headers, wrong magic signatures).

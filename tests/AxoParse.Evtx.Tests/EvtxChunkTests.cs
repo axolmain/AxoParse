@@ -1,5 +1,6 @@
 using System.Diagnostics;
-using AxoParse.Evtx.Evtx;
+using System.Runtime.InteropServices;
+using AxoParse.Evtx.BinXml;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -8,22 +9,30 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
     #region Public Methods
 
     /// <summary>
-    /// Verifies that GetEvent() returns an EvtxEvent matching the parallel array data.
+    /// Verifies that each event of a chunk reports its record's header fields, and that enumerating
+    /// <see cref="EvtxChunk.Events"/> yields the same events as indexing it.
     /// </summary>
     [Fact]
-    public void GetEventMatchesDirectIndexAccess()
+    public void EventsMatchRecords()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxLog log = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
-        EvtxChunk chunk = parser.Chunks[0];
-        for (int i = 0; i < chunk.Records.Count; i++)
+        EvtxChunk chunk = log.Chunks[0];
+        int i = 0;
+        foreach (EvtxEvent evt in chunk.Events)
         {
-            EvtxEvent evt = chunk.GetEvent(i);
-            Assert.Equal(chunk.Records[i], evt.Record);
-            Assert.Equal(chunk.ParsedXml[i], evt.Xml);
+            EvtxRecord record = chunk.Records[i];
+            Assert.Equal(record.EventRecordId, evt.RecordId);
+            Assert.Equal(DateTime.FromFileTimeUtc((long)record.WrittenTime), evt.WrittenTimeUtc);
+            Assert.Equal(record.EventDataFileOffset - EvtxRecord.HeaderSize, evt.FileOffset);
+            Assert.Equal(chunk.Events[i].GetText(), evt.GetText());
             Assert.True(evt.IsSuccess);
+            i++;
         }
+
+        Assert.Equal(chunk.Records.Count, i);
+        Assert.Throws<ArgumentOutOfRangeException>(() => chunk.Events[i]);
     }
 
     /// <summary>
@@ -42,7 +51,7 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
             EvtxChunk chunk = EvtxChunk.Parse(data.AsSpan(offset, EvtxChunk.ChunkSize), offset);
 
             Assert.True(chunk.Records.Count > 0, $"Chunk {i}: no records");
-            Assert.True(chunk.Templates.Count > 0, $"Chunk {i}: no templates");
+            Assert.True(TemplateCount(data, offset) > 0, $"Chunk {i}: no templates");
         }
     }
 
@@ -56,11 +65,11 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
         sw.Stop();
 
         Assert.True(chunk.Records.Count > 0);
-        Assert.True(chunk.Templates.Count > 0);
+        Assert.True(TemplateCount(fileData, chunkOffset) > 0);
         Assert.Equal(128u, chunk.Header.HeaderSize);
 
         testOutputHelper.WriteLine($"[security.evtx chunk 0] Parsed in {sw.Elapsed.TotalMicroseconds:F1}µs");
-        testOutputHelper.WriteLine($"  Records: {chunk.Records.Count}, Templates: {chunk.Templates.Count}");
+        testOutputHelper.WriteLine($"  Records: {chunk.Records.Count}, Templates: {TemplateCount(fileData, chunkOffset)}");
     }
 
     [Fact]
@@ -84,23 +93,35 @@ public class EvtxChunkTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
-    /// Verifies that RenderDiagnostics is empty when all records in a clean file render successfully.
+    /// Verifies that no event has a diagnostic when all records in a clean file render successfully.
     /// </summary>
     [Fact]
-    public void RenderDiagnosticsEmptyOnCleanChunks()
+    public void NoDiagnosticsOnCleanChunks()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxLog log = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
-        foreach (EvtxChunk chunk in parser.Chunks)
+        foreach (EvtxChunk chunk in log.Chunks)
         {
-            Assert.Empty(chunk.RenderDiagnostics);
+            Assert.All(chunk.Events, evt => Assert.Null(evt.Diagnostic));
         }
     }
 
     #endregion
 
     #region Non-Public Methods
+
+    /// <summary>
+    /// Counts the template definitions reachable from a chunk's 32-entry template pointer table (chunk offset 384).
+    /// </summary>
+    /// <param name="data">File bytes.</param>
+    /// <param name="chunkOffset">File offset of the chunk.</param>
+    /// <returns>Number of template definitions.</returns>
+    private static int TemplateCount(byte[] data, int chunkOffset)
+    {
+        ReadOnlySpan<byte> chunk = data.AsSpan(chunkOffset, EvtxChunk.ChunkSize);
+        return BinXmlTemplateDefinition.PreloadFromChunk(chunk, MemoryMarshal.Cast<byte, uint>(chunk.Slice(384, 128)), chunkOffset).Count;
+    }
 
     private static (byte[] fileData, int chunkFileOffset) GetChunkInfo(string filename, int chunkIndex = 0)
     {

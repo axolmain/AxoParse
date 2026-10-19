@@ -1,6 +1,5 @@
 using System.Text;
 using AxoParse.Evtx.BinXml;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -72,14 +71,14 @@ public class CompiledDecoderParityTests(ITestOutputHelper output)
             EvtxChunk chunk;
             try
             {
-                chunk = EvtxChunk.Parse(data, offset, new Dictionary<Guid, CompiledTemplate?>(), OutputFormat.Xml);
+                chunk = EvtxChunk.Parse(data.AsSpan(offset, EvtxChunk.ChunkSize), offset);
             }
             catch (EvtxParseException)
             {
                 continue;
             }
 
-            foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.Json })
+            foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.JsonStructured })
             {
                 Dictionary<Guid, CompiledTemplate?> cache = new();
                 BinXmlParser compiled = new(data, offset, cache);

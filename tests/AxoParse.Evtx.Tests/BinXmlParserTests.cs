@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text;
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
 
@@ -12,15 +11,15 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     public void AllRecordsNonEmpty()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxLog parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
         int totalRecords = 0;
         foreach (EvtxChunk chunk in parser.Chunks)
         {
-            Assert.Equal(chunk.Records.Count, chunk.ParsedXml.Count);
-            for (int i = 0; i < chunk.ParsedXml.Count; i++)
+            Assert.Equal(chunk.Records.Count, chunk.Events.Count);
+            for (int i = 0; i < chunk.Events.Count; i++)
             {
-                Assert.False(string.IsNullOrEmpty(chunk.ParsedXml[i]),
+                Assert.False(string.IsNullOrEmpty(chunk.Events[i].GetText()),
                     $"Record {chunk.Records[i].EventRecordId} produced empty XML");
                 totalRecords++;
             }
@@ -33,12 +32,12 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     public void FirstRecordStartsWithEventXmlns()
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxLog parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(parser.Chunks.Count > 0);
-        Assert.True(parser.Chunks[0].ParsedXml.Count > 0);
+        Assert.True(parser.Chunks[0].Events.Count > 0);
 
-        string xml = parser.Chunks[0].ParsedXml[0];
+        string xml = parser.Chunks[0].Events[0].GetText();
         testOutputHelper.WriteLine($"First record XML ({xml.Length} chars):");
         testOutputHelper.WriteLine(xml.Length > 500 ? xml[..500] + "..." : xml);
 
@@ -51,12 +50,12 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
 
         // Parse with 1 thread as baseline
-        EvtxParser baseline = EvtxParser.Parse(data, 1, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxLog baseline = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 }, TestContext.Current.CancellationToken);
         string[] baselineXml = FlattenXml(baseline);
 
         foreach (int threadCount in new[] { 2, 4, 8 })
         {
-            EvtxParser result = EvtxParser.Parse(data, threadCount, cancellationToken: TestContext.Current.CancellationToken);
+            EvtxLog result = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threadCount }, TestContext.Current.CancellationToken);
             string[] resultXml = FlattenXml(result);
 
             Assert.Equal(baselineXml.Length, resultXml.Length);
@@ -85,15 +84,15 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
             string name = Path.GetFileName(file);
 
             sw.Restart();
-            EvtxParser parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
+            EvtxLog parser = EvtxParser.Parse(data, cancellationToken: TestContext.Current.CancellationToken);
             sw.Stop();
 
             int xmlCount = 0;
             foreach (EvtxChunk chunk in parser.Chunks)
-                xmlCount += chunk.ParsedXml.Count;
+                xmlCount += chunk.Events.Count;
 
             testOutputHelper.WriteLine(
-                $"  [{name}] {sw.Elapsed.TotalMilliseconds,8:F2}ms | {parser.TotalRecords} records | {xmlCount} XML");
+                $"  [{name}] {sw.Elapsed.TotalMilliseconds,8:F2}ms | {parser.RecordCount} records | {xmlCount} XML");
         }
     }
 
@@ -106,16 +105,16 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     /// <param name="format">Output format.</param>
     [Theory]
     [InlineData(OutputFormat.Xml)]
-    [InlineData(OutputFormat.Json)]
+    [InlineData(OutputFormat.JsonStructured)]
     public void InlineEntityNamesAreSkipped(OutputFormat format)
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir,
             "E_ShadowCopy6_windows_system32_winevt_logs_Microsoft-Windows-CAPI2%4Operational.evtx"));
-        EvtxParser parser = EvtxParser.Parse(data, 1, format, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, Format = format }, TestContext.Current.CancellationToken);
 
-        EvtxEvent evt = parser.GetEvents().Single(e => e.Record.EventRecordId == 485);
-        string output = format == OutputFormat.Xml ? evt.Xml : Encoding.UTF8.GetString(evt.Json.Span);
-        Assert.True(evt.IsSuccess, evt.Diagnostic);
+        EvtxEvent evt = parser.Events.Single(e => e.RecordId == 485);
+        string output = format == OutputFormat.Xml ? evt.GetText() : Encoding.UTF8.GetString(evt.Utf8.Span);
+        Assert.True(evt.IsSuccess, evt.Diagnostic?.Message);
         Assert.Contains("web-proxy.shieldbase.lan", output);
         Assert.Contains("x-ms-request-id: 44210c66-701e-00db-07a5-2ae3a6000000", output);
     }
@@ -137,12 +136,13 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         foreach (string file in evtxFiles)
         {
             byte[] data = File.ReadAllBytes(file);
-            EvtxParser parser = EvtxParser.Parse(data, 1, cancellationToken: TestContext.Current.CancellationToken);
+            EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 }, TestContext.Current.CancellationToken);
 
             foreach (EvtxChunk chunk in parser.Chunks)
             {
-                foreach (string xml in chunk.ParsedXml)
+                foreach (EvtxEvent evt in chunk.Events)
                 {
+                    string xml = evt.GetText();
                     totalRecords++;
 
                     if (xml.Contains("<EventData") || xml.Contains("<UserData"))
@@ -178,14 +178,14 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
         foreach (string file in evtxFiles)
         {
             byte[] data = File.ReadAllBytes(file);
-            EvtxParser parser = EvtxParser.Parse(data, 1, cancellationToken: TestContext.Current.CancellationToken);
+            EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 }, TestContext.Current.CancellationToken);
 
             int recordCount = 0;
             foreach (EvtxChunk chunk in parser.Chunks)
             {
-                for (int i = 0; i < chunk.ParsedXml.Count; i++)
+                for (int i = 0; i < chunk.Events.Count; i++)
                 {
-                    string xml = chunk.ParsedXml[i];
+                    string xml = chunk.Events[i].GetText();
                     // Encoding to UTF-8 must not throw
                     byte[] utf8Bytes = Encoding.UTF8.GetBytes(xml);
                     Assert.True(utf8Bytes.Length > 0,
@@ -203,11 +203,11 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
 
     #region Non-Public Methods
 
-    private static string[] FlattenXml(EvtxParser parser)
+    private static string[] FlattenXml(EvtxLog parser)
     {
         List<string> all = new();
         foreach (EvtxChunk chunk in parser.Chunks)
-            all.AddRange(chunk.ParsedXml);
+            all.AddRange(chunk.Events.Select(e => e.GetText()));
         return all.ToArray();
     }
 

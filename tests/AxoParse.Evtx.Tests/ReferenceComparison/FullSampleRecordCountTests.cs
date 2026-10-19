@@ -1,4 +1,3 @@
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests.ReferenceComparison;
 
@@ -170,11 +169,11 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, "sample-with-zero-data-size-event.evtx");
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1, cancellationToken: TestContext.Current.CancellationToken);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 }, TestContext.Current.CancellationToken);
 
         int okCount = 0;
         int errCount = 0;
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
             if (evt.IsSuccess)
                 okCount++;
@@ -206,11 +205,11 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: maxThreads);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = maxThreads });
 
         int okCount = 0;
         int errCount = 0;
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
             if (evt.IsSuccess)
                 okCount++;
@@ -237,11 +236,11 @@ public class FullSampleRecordCountTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: maxThreads);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = maxThreads });
 
         int okCount = 0;
         int errCount = 0;
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
             if (evt.IsSuccess)
                 okCount++;

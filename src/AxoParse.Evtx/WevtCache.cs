@@ -1,8 +1,8 @@
 using System.Collections.Concurrent;
 using AxoParse.Evtx.BinXml;
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx.Wevt;
 
-namespace AxoParse.Evtx.Wevt;
+namespace AxoParse.Evtx;
 
 /// <summary>
 /// Template cache built from WEVT_TEMPLATE resources in Windows provider PE binaries (DLL/EXE), keyed by template GUID.
@@ -132,7 +132,7 @@ public sealed class WevtCache
     {
         if (!_templates.TryGetValue(guid, out WevtTemplateEntry? entry))
             return null;
-        CompiledTemplate? compiled = format == OutputFormat.Json ? entry.Json : entry.Xml;
+        CompiledTemplate? compiled = format == OutputFormat.JsonStructured ? entry.Json : entry.Xml;
         return compiled == CompiledTemplate.DecodeDirectly ? null : compiled;
     }
 

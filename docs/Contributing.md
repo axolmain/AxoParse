@@ -23,9 +23,11 @@ dotnet test --project tests/AxoParse.Evtx.Tests --filter-method "*ThrowsOnTrunca
 
 ### Golden output
 
-`GoldenOutputTests` locks the exact output of every sample in `tests/data`. It stores a SHA-256 of `WriteTo` output
-per sample and format (XML/JSON) in `tests/AxoParse.Evtx.Tests/Golden/output-sha256.txt`, and checks it at 1 and 8
-threads. Any byte change fails the test. The failure message lists the affected sample and format, and the path of a
+`GoldenOutputTests` locks the exact output of every sample in `tests/data`. It stores two SHA-256s per sample and format
+in `tests/AxoParse.Evtx.Tests/Golden/output-sha256.txt` and checks both at 1 and 8 threads: `<format>/<sample>` hashes
+the events' rendered bytes (`EvtxEvent.Utf8` from `Parse`, concatenated), and `framed/<format>/<sample>` hashes `WriteTo`
+output (the same bytes with a line feed after each record). A rendering change moves both; a framing change moves only
+the `framed/` lines, which is how a framing change proves it left the record bytes alone. Any byte change fails the test. The failure message lists the affected sample and format, and the path of a
 temp folder holding the new output so you can diff it against output from a known-good build.
 
 If the change is intended, re-bless and commit the updated hash file with your change:
@@ -36,8 +38,8 @@ AXOPARSE_REBLESS=1 dotnet test --project tests/AxoParse.Evtx.Tests --filter-clas
 
 On Windows PowerShell: `$env:AXOPARSE_REBLESS=1; dotnet test ...; Remove-Item Env:AXOPARSE_REBLESS`.
 
-Equality tests also check that `WriteTo` and `ParseAsync` produce exactly what `Parse` produces, for every sample,
-format and thread count, with checksum validation off and on.
+Equality tests also check that `Parse(path)`, `ReadEvents`, `ReadEventsAsync` and every `WriteTo` overload produce
+exactly what `Parse(byte[])` produces, for every sample, format and thread count, with checksum validation off and on.
 
 ### Corruption test
 

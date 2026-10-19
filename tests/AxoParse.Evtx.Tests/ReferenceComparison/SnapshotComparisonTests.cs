@@ -1,4 +1,3 @@
-using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests.ReferenceComparison;
 
@@ -221,14 +220,14 @@ public class SnapshotComparisonTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 });
 
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
-            if (evt.Record.EventRecordId == recordId)
+            if (evt.RecordId == recordId)
             {
                 Assert.True(evt.IsSuccess, $"Record {recordId} failed: {evt.Diagnostic}");
-                return evt.Xml;
+                return evt.GetText();
             }
         }
 
@@ -244,12 +243,12 @@ public class SnapshotComparisonTests(ITestOutputHelper testOutputHelper)
     {
         string path = Path.Combine(TestPaths.TestDataDir, fileName);
         byte[] data = File.ReadAllBytes(path);
-        EvtxParser parser = EvtxParser.Parse(data, maxThreads: 1);
+        EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1 });
 
-        foreach (EvtxEvent evt in parser.GetEvents())
+        foreach (EvtxEvent evt in parser.Events)
         {
             if (evt.IsSuccess)
-                return evt.Xml;
+                return evt.GetText();
         }
 
         Assert.Fail($"No successful records found in {fileName}");

@@ -1,5 +1,5 @@
 using System.Globalization;
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 
 if (args.Length == 0) return 1;
 
@@ -11,14 +11,18 @@ for (int i = 1; i < args.Length; i++)
         threads = int.Parse(args[++i], NumberStyles.Integer, NumberFormatInfo.InvariantInfo);
     else if ((args[i] == "-o") && (i + 1 < args.Length))
     {
-        // Ordinal comparison: culture-aware casing would initialise globalization and load ICU (~5 ms on Windows)
-        format = string.Equals(args[++i], "json", StringComparison.OrdinalIgnoreCase) ? OutputFormat.Json : OutputFormat.Xml;
+        // Ordinal comparison: culture-aware casing would initialise globalization and load ICU (~5 ms on Windows).
+        // "json" is the lossless structured JSON, the format the benchmark scripts compare with Rust's JSON
+        string name = args[++i];
+        bool json = string.Equals(name, "json", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, "json-structured", StringComparison.OrdinalIgnoreCase);
+        format = json ? OutputFormat.JsonStructured : OutputFormat.Xml;
     }
 }
 
 // Stream chunks straight from disk to stdout: each worker reads the 64 KB chunk it renders, so the file is never
 // loaded whole and memory stays flat (matches Rust evtx_dump, which also reads chunk by chunk)
 using Stream stdout = Console.OpenStandardOutput();
-EvtxParser.WriteTo(args[0], stdout, format, threads);
+EvtxParser.WriteTo(args[0], stdout, new EvtxOptions { Format = format, MaxThreads = threads });
 
 return 0;
