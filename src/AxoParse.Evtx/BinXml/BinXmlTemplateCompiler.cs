@@ -209,7 +209,7 @@ internal sealed partial class BinXmlParser
     private CompiledTemplate? CompileTemplate(int defDataOffset, int dataSize)
     {
         int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
-        if (tplBodyFileOffset + dataSize > _fileData.Length) return null;
+        if (tplBodyFileOffset + dataSize > _chunkEnd) return null;
 
         ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, dataSize);
         int tplChunkBase = defDataOffset + 24;

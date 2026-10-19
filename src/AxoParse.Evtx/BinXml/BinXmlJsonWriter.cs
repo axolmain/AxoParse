@@ -389,7 +389,7 @@ internal sealed partial class BinXmlParser
         if (hdr.DataSize == 0) return;
 
         int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
-        if ((uint)(tplBodyFileOffset + hdr.DataSize) > (uint)_fileData.Length) return;
+        if ((uint)(tplBodyFileOffset + hdr.DataSize) > (uint)_chunkEnd) return;
 
         ReadOnlySpan<int> offsets = valueOffsets.Slice(0, hdr.NumValues);
         ReadOnlySpan<int> sizes = valueSizes.Slice(0, hdr.NumValues);
@@ -565,7 +565,7 @@ internal sealed partial class BinXmlParser
                                 bool escaped = false)
     {
         if (size == 0) return;
-        ReadOnlySpan<byte> valueBytes = _fileData.AsSpan(fileOffset, size);
+        ReadOnlySpan<byte> valueBytes = ChunkBytes(fileOffset, size);
 
         // Array flag — render as comma-separated values
         if ((valueType & BinXmlValueType.ArrayFlag) != 0)
