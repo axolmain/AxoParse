@@ -89,6 +89,18 @@ fields: a retained program per template grows every worker's live heap, which co
 `EventFieldsTests` checks every field and pair of every sample record against the record's own XML parsed with
 System.Xml.
 
+## Compact JSON
+
+`OutputFormat.Json` is written from a per-template `JsonPlan` (built on first use from the template's program, cached
+on its `CompiledTemplate` per parent kind): keys pre-escaped, child groups and arrays decided, literal values
+pre-written, numeric System fields marked. Per record the plan writer walks it with the substitution values, deciding
+only what depends on the record: optional attributes, and embedded BinXml (nested in place through the nested
+template's plan). Templates whose shape varies more (a substituted EventData `Name`, text mixed with substitutions,
+literal text beside child elements), records without a template, embedded keys colliding with siblings and salvage
+cases go through `JsonTree` instead: the record is built into a small pooled tree (from the program, or from the
+decoder's XML) and written by the same rules. `FlatJsonTests` checks that the two writers give identical bytes for
+every sample record, and that the output matches the record's XML.
+
 ## Filtering
 
 `EvtxFilter` is compiled once per instance into a `RecordFilter` (bitsets for event IDs and levels, a case-insensitive

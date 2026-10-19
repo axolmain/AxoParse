@@ -26,6 +26,10 @@ public class EvtxParserWriteToTests
     [InlineData(OutputFormat.Xml, 8, true)]
     [InlineData(OutputFormat.JsonStructured, 1, true)]
     [InlineData(OutputFormat.JsonStructured, 8, true)]
+    [InlineData(OutputFormat.Json, 1, false)]
+    [InlineData(OutputFormat.Json, 8, false)]
+    [InlineData(OutputFormat.Json, 1, true)]
+    [InlineData(OutputFormat.Json, 8, true)]
     public void WriteToMatchesParseOutputForAllTestFiles(OutputFormat format, int threads, bool validateChecksums)
     {
         EvtxOptions options = new() { Format = format, MaxThreads = threads, ValidateChecksums = validateChecksums };
@@ -62,6 +66,10 @@ public class EvtxParserWriteToTests
     [InlineData(OutputFormat.Xml, 8, true)]
     [InlineData(OutputFormat.JsonStructured, 1, true)]
     [InlineData(OutputFormat.JsonStructured, 8, true)]
+    [InlineData(OutputFormat.Json, 1, false)]
+    [InlineData(OutputFormat.Json, 8, false)]
+    [InlineData(OutputFormat.Json, 1, true)]
+    [InlineData(OutputFormat.Json, 8, true)]
     public void WriteToFromFileMatchesInMemoryForAllTestFiles(OutputFormat format, int threads, bool validateChecksums)
     {
         CancellationToken token = TestContext.Current.CancellationToken;

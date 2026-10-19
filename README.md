@@ -53,7 +53,8 @@ I'd ever bother to, which keeps the history really clean to track. Commits with 
 
 ## Features
 
-- **XML and JSON output** — renders BinXml straight to UTF-8 XML or JSON (no xml-to-json conversion, no UTF-16 detour)
+- **XML and JSON output** — renders BinXml straight to UTF-8 (no xml-to-json conversion, no UTF-16 detour): XML,
+  compact JSON with typed values and a [stable documented shape](docs/JsonFormat.md), or lossless structured JSON
 - **Streaming** — `ReadEvents` / `ReadEventsAsync` stream events and `WriteTo` writes JSON Lines or XML to any
   `Stream`, reading the file chunk by chunk; memory stays at a few MB whatever the file size
 - **Typed fields** — `EventId`, `Provider`, `Level`, `TimeCreated`, `Channel`, … and EventData/UserData name/value
@@ -98,7 +99,13 @@ per record, and every record is written on its own line (JSON Lines for JSON) wi
 
 ```csharp
 using FileStream output = File.Create("security.jsonl");
-EvtxParser.WriteTo("security.evtx", output, new EvtxOptions { Format = OutputFormat.JsonStructured });
+EvtxParser.WriteTo("security.evtx", output, new EvtxOptions { Format = OutputFormat.Json });
+```
+
+Each line looks like this (the shape is documented in [JSON format](docs/JsonFormat.md)):
+
+```json
+{"System":{"Provider":{"Name":"Microsoft-Windows-Security-Auditing","Guid":"54849625-…"},"EventID":4624,"Level":0,"TimeCreated":{"SystemTime":"2016-07-08T18:12:51.6816408Z"},"Channel":"Security","Computer":"37L4247F27-25",…},"EventData":{"TargetUserName":"SYSTEM","LogonType":0,…}}
 ```
 
 ### Typed fields
@@ -119,7 +126,7 @@ Add `FieldsOnly = true` to skip rendering entirely when you only need fields (ab
 ```csharp
 EvtxOptions failedLogons = new() { Filter = new EvtxFilter { EventIds = [4625], From = DateTime.UtcNow.AddDays(-1) } };
 using FileStream output = File.Create("failed.jsonl");
-EvtxParser.WriteTo("security.evtx", output, failedLogons with { Format = OutputFormat.JsonStructured });
+EvtxParser.WriteTo("security.evtx", output, failedLogons with { Format = OutputFormat.Json });
 
 EvtxEvent? evt = EvtxParser.FindEvent("security.evtx", recordId: 1234);
 ```
@@ -140,7 +147,7 @@ Every entry point takes an optional `EvtxOptions` (an immutable record: `new Evt
 
 | Property            | Default | Description                                                                          |
 |---------------------|---------|--------------------------------------------------------------------------------------|
-| `Format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.JsonStructured`                                  |
+| `Format`            | `Xml`   | `Xml`, `Json` (compact, typed) or `JsonStructured` (lossless XML tree)               |
 | `MaxThreads`        | `0`     | Worker threads. `0` = all cores, `1` = single-threaded                               |
 | `ValidateChecksums` | `false` | Skip chunks that fail CRC32 validation (reported as diagnostics)                     |
 | `Salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it |
@@ -186,6 +193,7 @@ WASM builds on Node (not like-for-like, so listed separately):
 - [Getting Started](docs/GettingStarted.md) — install, usage examples, options
 - [Architecture](docs/Architecture.md) — parsing pipeline, threading model, template compilation
 - [EVTX Format](docs/EvtxFormat.md) — binary format primer (headers, chunks, records, BinXml)
+- [JSON Format](docs/JsonFormat.md) — the compact JSON shape: rules and value types
 - [Error Handling](docs/ErrorHandling.md) — `EvtxParseException`, error codes, corruption resilience
 - [Performance](docs/Performance.md) — choosing an entry point, threading, memory, benchmarks
 - [WASM Integration](docs/WasmIntegration.md) — using the WASM build in browser apps

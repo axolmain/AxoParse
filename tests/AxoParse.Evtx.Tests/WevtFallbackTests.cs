@@ -71,7 +71,7 @@ public class WevtFallbackTests
         WevtCache cache = new();
         Assert.True(cache.AddTemplate(guid, MinimalEventDataTemplate()));
 
-        foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.JsonStructured })
+        foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.JsonStructured, OutputFormat.Json })
         {
             using MemoryStream plain = new();
             using MemoryStream cached = new();

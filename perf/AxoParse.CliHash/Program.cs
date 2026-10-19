@@ -38,7 +38,7 @@ foreach (string line in File.ReadAllLines(goldenPath))
     golden[line[(space + 1)..]] = line[..space];
 }
 
-string[] formats = ["xml", "json-structured"];
+string[] formats = ["xml", "json-structured", "json"];
 int[] threadCounts = [1, 8];
 int checkedCount = 0;
 List<string> failures = new();

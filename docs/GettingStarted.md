@@ -48,14 +48,14 @@ Every entry point takes an optional `EvtxOptions`. It is an immutable record: cr
 derive variants with `with`, and share it across threads and calls.
 
 ```csharp
-EvtxOptions options = new() { Format = OutputFormat.JsonStructured, MaxThreads = 4 };
+EvtxOptions options = new() { Format = OutputFormat.Json, MaxThreads = 4 };
 EvtxLog log = EvtxParser.Parse("security.evtx", options);
 EvtxLog strict = EvtxParser.Parse("security.evtx", options with { ValidateChecksums = true });
 ```
 
 | Property            | Default | Description                                                                           |
 |---------------------|---------|---------------------------------------------------------------------------------------|
-| `Format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.JsonStructured`                                   |
+| `Format`            | `Xml`   | `OutputFormat.Xml`, `Json` (compact, typed) or `JsonStructured` (lossless tree)       |
 | `MaxThreads`        | `0`     | Worker threads. `0` (or negative) = all cores, `1` = parse on the calling thread      |
 | `ValidateChecksums` | `false` | Skip chunks that fail CRC32 validation; each one is reported in `EvtxLog.Diagnostics` |
 | `Salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it  |
@@ -153,19 +153,21 @@ instead.
 
 ## JSON output
 
-`OutputFormat.JsonStructured` renders UTF-8 JSON directly (no XML intermediate). It is a lossless rendering of the XML
-tree: each element is an object with `#name`, optional `#attrs` and optional `#content` (child elements and text, in
-order).
+`OutputFormat.Json` writes each event as compact JSON with typed values, rendered straight from BinXml (no XML
+intermediate). Attributes are plain keys, EventData items are keyed by their `Name`, repeated elements become arrays,
+numbers stay numbers, and embedded BinXml is nested in place. The rules are in [JSON format](JsonFormat.md).
 
 ```csharp
-EvtxLog log = EvtxParser.Parse("security.evtx", new EvtxOptions { Format = OutputFormat.JsonStructured });
-
-foreach (EvtxEvent evt in log.Events)
+foreach (EvtxEvent evt in EvtxParser.ReadEvents("security.evtx", new EvtxOptions { Format = OutputFormat.Json }))
 {
     using JsonDocument doc = JsonDocument.Parse(evt.Utf8);
-    // ...
+    int eventId = doc.RootElement.GetProperty("System").GetProperty("EventID").GetInt32();
 }
 ```
+
+`OutputFormat.JsonStructured` is the lossless alternative: a rendering of the XML tree in which each element is an
+object with `#name`, optional `#attrs` and optional `#content` (child elements and text, in order), every value a
+string. Use it when you need to reconstruct the exact XML.
 
 ## Stream output to a file or stdout
 
@@ -180,7 +182,7 @@ renders; a record that fails to render writes nothing.
 
 ```csharp
 using FileStream output = File.Create("security.jsonl");
-int written = EvtxParser.WriteTo("security.evtx", output, new EvtxOptions { Format = OutputFormat.JsonStructured });
+int written = EvtxParser.WriteTo("security.evtx", output, new EvtxOptions { Format = OutputFormat.Json });
 ```
 
 The input can be a path, a `byte[]`, or any readable, seekable `Stream` holding the file from position 0. A

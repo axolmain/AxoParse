@@ -65,7 +65,11 @@ neither goes through a UTF-16 `string`.
 - A chunk's records are in time order, so FILETIME formatting remembers the last calendar date and skips the
   date arithmetic when the day repeats.
 
-The two formats run at similar speeds. XML is slightly faster single-threaded on the benchmark file.
+XML and structured JSON run at similar speeds; XML is slightly faster single-threaded on the benchmark file. Compact
+JSON (`OutputFormat.Json`) decides its shape per element (optional attributes, embedded BinXml, typed values), so it
+costs more: on the 30 MB sample about 1.5x the instructions of structured JSON (912M against 599M single-threaded).
+Each template is compiled once into a JSON plan with its keys escaped and its arrays decided, and records are written
+from their values without building a tree.
 
 ## Template compilation
 

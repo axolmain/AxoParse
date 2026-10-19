@@ -17,4 +17,13 @@ public enum OutputFormat
     /// rendering.
     /// </summary>
     JsonStructured,
+
+    /// <summary>
+    /// Compact JSON with a stable, documented shape (see docs/JsonFormat.md):
+    /// <c>{"System":{"Provider":{"Name":"…"},"EventID":4624,…},"EventData":{"TargetUserName":"…",…}}</c>. Attributes are
+    /// plain keys, an element with both attributes and text keeps the text under <c>#text</c>, EventData items are
+    /// keyed by their <c>Name</c>, repeated names become arrays, and values keep their types (numbers, booleans,
+    /// arrays). Embedded BinXml is nested in place.
+    /// </summary>
+    Json,
 }
