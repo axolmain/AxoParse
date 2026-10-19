@@ -58,6 +58,8 @@ I'd ever bother to, which keeps the history really clean to track. Commits with 
   `Stream`, reading the file chunk by chunk; memory stays at a few MB whatever the file size
 - **Typed fields** — `EventId`, `Provider`, `Level`, `TimeCreated`, `Channel`, … and EventData/UserData name/value
   pairs, read straight from each template's substitution values (opt-in; `FieldsOnly` skips rendering for stats)
+- **Filtering before rendering** — by event ID, provider, level, time and record-ID range; record-ID ranges skip whole
+  chunks, so `FindEvent` and resuming from a record ID cost a fraction of a parse
 - **One options record** — `EvtxOptions` is immutable and shareable; every entry point is thread-safe
 - **Multi-threaded** — parallel chunk processing with configurable thread count
 - **Template pre-compilation** — compiles BinXml templates once for zero repeated overhead
@@ -112,6 +114,19 @@ foreach (EvtxEvent evt in EvtxParser.ReadEvents("security.evtx", options))
 
 Add `FieldsOnly = true` to skip rendering entirely when you only need fields (about 2.5x faster than rendering XML).
 
+### Filter, look up, resume
+
+```csharp
+EvtxOptions failedLogons = new() { Filter = new EvtxFilter { EventIds = [4625], From = DateTime.UtcNow.AddDays(-1) } };
+using FileStream output = File.Create("failed.jsonl");
+EvtxParser.WriteTo("security.evtx", output, failedLogons with { Format = OutputFormat.JsonStructured });
+
+EvtxEvent? evt = EvtxParser.FindEvent("security.evtx", recordId: 1234);
+```
+
+Events that don't pass the filter are never rendered. To resume after the last event you handled, set
+`Filter = new EvtxFilter { FromRecordId = last + 1 }`.
+
 ### Consume events as they're parsed
 
 ```csharp
@@ -130,6 +145,7 @@ Every entry point takes an optional `EvtxOptions` (an immutable record: `new Evt
 | `ValidateChecksums` | `false` | Skip chunks that fail CRC32 validation (reported as diagnostics)                     |
 | `Salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it |
 | `WevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt      |
+| `Filter`            | `null`  | `EvtxFilter`: event IDs, providers, levels, time range, record-ID range              |
 | `Fields`            | `None`  | Typed fields to read: `EvtxFields.System`, `EventData` or `All`                      |
 | `FieldsOnly`        | `false` | Read typed fields without rendering (`Utf8` stays empty)                             |
 | `XmlEventsRoot`     | `false` | `WriteTo` with XML: wrap the records in `<Events>` so the output is one XML document |

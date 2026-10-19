@@ -89,6 +89,15 @@ fields: a retained program per template grows every worker's live heap, which co
 `EventFieldsTests` checks every field and pair of every sample record against the record's own XML parsed with
 System.Xml.
 
+## Filtering
+
+`EvtxFilter` is compiled once per instance into a `RecordFilter` (bitsets for event IDs and levels, a case-insensitive
+provider set, UTC ticks), cached by reference. Per chunk, the header's record-ID range can skip the chunk outright
+(`SkipsChunk`; a dirty chunk's last ID isn't trusted). Per record, the record-ID range is checked from the record
+header, then, if the filter needs them, the System fields pass runs and is checked; records that fail are never
+rendered. `EvtxFilterTests` checks that a filtered parse (and `WriteTo`) equals the unfiltered parse filtered
+afterwards, for every sample and a range of filters.
+
 ## Corruption resilience
 
 - Chunks with invalid `ElfChnk\0` signatures are not discarded — pass 2 scans their 64KB region for `0x2A2A` record magic and recovers individual records

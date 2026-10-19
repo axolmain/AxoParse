@@ -88,6 +88,44 @@ public static class EvtxParser
     public static EvtxFileHeader ParseFileHeader(ReadOnlySpan<byte> data) => EvtxFileHeader.ParseEvtxFileHeader(data);
 
     /// <summary>
+    /// Finds the first event (in output order) with record ID <paramref name="recordId"/>. Chunks whose header shows
+    /// they can't hold it are skipped and only matching records are rendered, so a lookup costs a fraction of a parse.
+    /// </summary>
+    /// <param name="fileData">Complete EVTX file bytes.</param>
+    /// <param name="recordId">The event record ID.</param>
+    /// <param name="options">Parse options, or null for <see cref="EvtxOptions.Default"/>. Any filter's record-ID range is
+    /// replaced by <paramref name="recordId"/>; its other criteria still apply.</param>
+    /// <param name="cancellationToken">Token to cancel the search.</param>
+    /// <returns>The event, or null if no record has that ID.</returns>
+    /// <exception cref="EvtxParseException">The file header is missing or invalid.</exception>
+    public static EvtxEvent? FindEvent(byte[] fileData, ulong recordId, EvtxOptions? options = null,
+                                       CancellationToken cancellationToken = default)
+    {
+        foreach (EvtxEvent evt in ReadEvents(fileData, LookupOptions(options, recordId), cancellationToken))
+            return evt;
+        return null;
+    }
+
+    /// <summary>
+    /// Finds the first event (in output order) with record ID <paramref name="recordId"/> in a file on disk; see
+    /// <see cref="FindEvent(byte[], ulong, EvtxOptions?, CancellationToken)"/>.
+    /// </summary>
+    /// <param name="path">Path of the .evtx file.</param>
+    /// <param name="recordId">The event record ID.</param>
+    /// <param name="options">Parse options, or null for <see cref="EvtxOptions.Default"/>. Any filter's record-ID range is
+    /// replaced by <paramref name="recordId"/>; its other criteria still apply.</param>
+    /// <param name="cancellationToken">Token to cancel the search.</param>
+    /// <returns>The event, or null if no record has that ID.</returns>
+    /// <exception cref="EvtxParseException">The file header is missing or invalid.</exception>
+    public static EvtxEvent? FindEvent(string path, ulong recordId, EvtxOptions? options = null,
+                                       CancellationToken cancellationToken = default)
+    {
+        foreach (EvtxEvent evt in ReadEvents(path, LookupOptions(options, recordId), cancellationToken))
+            return evt;
+        return null;
+    }
+
+    /// <summary>
     /// Streams the events of an EVTX file held in memory, in output order, while later chunks are parsed in the
     /// background. Only a few chunks per worker are held at once. Stopping the enumeration early stops the workers.
     /// </summary>
@@ -282,6 +320,9 @@ public static class EvtxParser
 
         slot.Status = Classify(data.AsSpan(at, EvtxChunk.ChunkSize), options);
         slot.Chunk = slot.Status == ChunkStatus.Valid ? EvtxChunk.Parse(data, at, offset, worker.Cache, options) : null;
+        // A filter can leave a chunk without events; such chunks aren't part of the result
+        if ((options.Filter != null) && (slot.Chunk is { Count: 0 }))
+            slot.Chunk = null;
         return slot;
     }
 
@@ -394,6 +435,19 @@ public static class EvtxParser
             for (int i = 0; i < chunk.Count; i++)
                 yield return new EvtxEvent(chunk, i);
         }
+    }
+
+    /// <summary>
+    /// Options for a record-ID lookup: <paramref name="options"/> with its filter's record-ID range set to one ID.
+    /// </summary>
+    /// <param name="options">The caller's options, or null.</param>
+    /// <param name="recordId">The record ID to find.</param>
+    /// <returns>The lookup options.</returns>
+    private static EvtxOptions LookupOptions(EvtxOptions? options, ulong recordId)
+    {
+        options ??= EvtxOptions.Default;
+        EvtxFilter filter = (options.Filter ?? new EvtxFilter()) with { FromRecordId = recordId, ToRecordId = recordId };
+        return options with { Filter = filter };
     }
 
     /// <summary>
