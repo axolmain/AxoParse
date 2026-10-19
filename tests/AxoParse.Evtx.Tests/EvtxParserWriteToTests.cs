@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Win32.SafeHandles;
 using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
@@ -41,6 +42,60 @@ public class EvtxParserWriteToTests
                 $"{Path.GetFileName(file)}: WriteTo output differs from Parse output " +
                 $"({format}, {threads} threads, validateChecksums={validateChecksums})");
         }
+    }
+
+    /// <summary>
+    /// Verifies that streaming from disk (each worker reading its own 64 KB chunk) writes exactly the bytes and record
+    /// count of the in-memory overload, for every sample file, both formats, single- and multi-threaded rendering, and
+    /// with checksum validation off and on, through both the path and the file-handle overloads.
+    /// </summary>
+    /// <param name="format">Output format under test.</param>
+    /// <param name="threads">Thread count passed to both overloads.</param>
+    /// <param name="validateChecksums">Checksum validation flag passed to both overloads.</param>
+    [Theory]
+    [InlineData(OutputFormat.Xml, 1, false)]
+    [InlineData(OutputFormat.Xml, 8, false)]
+    [InlineData(OutputFormat.Json, 1, false)]
+    [InlineData(OutputFormat.Json, 8, false)]
+    [InlineData(OutputFormat.Xml, 1, true)]
+    [InlineData(OutputFormat.Xml, 8, true)]
+    [InlineData(OutputFormat.Json, 1, true)]
+    [InlineData(OutputFormat.Json, 8, true)]
+    public void WriteToFromFileMatchesInMemoryForAllTestFiles(OutputFormat format, int threads, bool validateChecksums)
+    {
+        CancellationToken token = TestContext.Current.CancellationToken;
+        foreach (string file in Directory.GetFiles(_testDataDir, "*.evtx"))
+        {
+            string where = $"{Path.GetFileName(file)} ({format}, {threads} threads, validateChecksums={validateChecksums})";
+            using MemoryStream expected = new();
+            int expectedCount = EvtxParser.WriteTo(File.ReadAllBytes(file), expected, format, threads, validateChecksums, token);
+
+            using MemoryStream fromPath = new();
+            int pathCount = EvtxParser.WriteTo(file, fromPath, format, threads, validateChecksums, token);
+            Assert.True(expectedCount == pathCount, $"{where}: path overload wrote {pathCount} records, in-memory {expectedCount}");
+            Assert.True(expected.ToArray().AsSpan().SequenceEqual(fromPath.ToArray()), $"{where}: path overload output differs");
+
+            using SafeFileHandle handle = File.OpenHandle(file);
+            using MemoryStream fromHandle = new();
+            int handleCount = EvtxParser.WriteTo(handle, fromHandle, format, threads, validateChecksums, token);
+            Assert.True(expectedCount == handleCount, $"{where}: handle overload wrote {handleCount} records, in-memory {expectedCount}");
+            Assert.True(expected.ToArray().AsSpan().SequenceEqual(fromHandle.ToArray()), $"{where}: handle overload output differs");
+        }
+    }
+
+    /// <summary>
+    /// Verifies that the path overload throws the documented <see cref="EvtxParseException"/> for a file too short to
+    /// hold an EVTX header, as the in-memory overload does.
+    /// </summary>
+    [Fact]
+    public void WriteToFromFileThrowsOnTruncatedHeader()
+    {
+        string path = Path.Combine(Directory.CreateTempSubdirectory("axoparse-writeto-").FullName, "short.evtx");
+        File.WriteAllBytes(path, File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx")).AsSpan(0, 100).ToArray());
+
+        EvtxParseException ex = Assert.Throws<EvtxParseException>(() => EvtxParser.WriteTo(path, Stream.Null, cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal(EvtxParseError.FileHeaderTooShort, ex.ErrorCode);
+        File.Delete(path);
     }
 
     /// <summary>
