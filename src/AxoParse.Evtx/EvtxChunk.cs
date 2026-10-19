@@ -241,10 +241,11 @@ public sealed class EvtxChunk
 
     /// <summary>
     /// Renders every record of the chunk at <paramref name="at"/> and appends the UTF-8 output to
-    /// <paramref name="sink"/> in record order. Produces the same bytes as concatenating the rendered output of
+    /// <paramref name="sink"/> in record order, each record followed by a line feed. Produces the rendered output of
     /// <see cref="Parse(byte[], int, long, Dictionary{Guid, CompiledTemplate?}?, EvtxOptions)"/> (or
-    /// <see cref="ParseHeaderless"/> when <paramref name="headerless"/> is true), without retaining any record output.
-    /// Records whose rendering throws contribute no bytes, matching the empty output those parses store for them.
+    /// <see cref="ParseHeaderless"/> when <paramref name="headerless"/> is true) with a line feed after each record,
+    /// without retaining any record output. Records whose rendering throws contribute no bytes (not even the line
+    /// feed), matching the empty output those parses store for them.
     /// </summary>
     /// <param name="data">Array holding the chunk (the whole file, or a 64 KB buffer).</param>
     /// <param name="at">Offset of the chunk within <paramref name="data"/>.</param>
@@ -280,7 +281,7 @@ public sealed class EvtxChunk
             int before = sink.WrittenCount;
             try
             {
-                binXml.AppendRecordUtf8(record, format, sink);
+                binXml.AppendRecordUtf8(record, format, sink, lineFeed: true);
             }
             catch (Exception)
             {

@@ -1,3 +1,7 @@
+using System.Text;
+using System.Text.Json;
+using System.Xml.Linq;
+
 namespace AxoParse.Evtx.Tests;
 
 public class EvtxParserWriteToTests
@@ -5,8 +9,8 @@ public class EvtxParserWriteToTests
     #region Public Methods
 
     /// <summary>
-    /// Verifies that streaming output is byte-identical to concatenating the UTF-8 output of the events of
-    /// <see cref="EvtxParser.Parse(byte[], EvtxOptions?, CancellationToken)"/>
+    /// Verifies that streaming output is byte-identical to the UTF-8 output of the events of
+    /// <see cref="EvtxParser.Parse(byte[], EvtxOptions?, CancellationToken)"/>, one line per event that has output
     /// (valid chunks in file order, then recovered chunks) and reports the same record count, for every sample file,
     /// both formats, single- and multi-threaded rendering, and with checksum validation off and on.
     /// </summary>
@@ -89,6 +93,46 @@ public class EvtxParserWriteToTests
     }
 
     /// <summary>
+    /// Verifies that JSON output is JSON Lines: one line per event with output, each a complete JSON value, and that
+    /// <see cref="EvtxOptions.XmlEventsRoot"/> wraps XML output in an <c>&lt;Events&gt;</c> element that parses as one
+    /// document holding every event, while being ignored for JSON.
+    /// </summary>
+    [Fact]
+    public void FramingIsJsonLinesAndOptionalXmlRoot()
+    {
+        CancellationToken token = TestContext.Current.CancellationToken;
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir, "security.evtx"));
+        int count = EvtxParser.Parse(data, cancellationToken: token).RecordCount;
+
+        using MemoryStream json = new();
+        EvtxParser.WriteTo(data, json, new EvtxOptions { Format = OutputFormat.JsonStructured, XmlEventsRoot = true }, token);
+        string[] lines = Encoding.UTF8.GetString(json.ToArray()).Split('\n');
+        Assert.Equal(count + 1, lines.Length);
+        Assert.Equal(string.Empty, lines[^1]);
+        foreach (string line in lines[..^1])
+        {
+            using JsonDocument doc = JsonDocument.Parse(line);
+            Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
+        }
+
+        using MemoryStream plain = new();
+        EvtxParser.WriteTo(data, plain, cancellationToken: token);
+        using MemoryStream rooted = new();
+        EvtxParser.WriteTo(data, rooted, new EvtxOptions { XmlEventsRoot = true }, token);
+        byte[] expected = [.. "<Events>\n"u8, .. plain.ToArray(), .. "</Events>\n"u8];
+        Assert.Equal(expected, rooted.ToArray());
+
+        // sysmon.evtx: security.evtx event text holds a raw 0x03, which XML 1.0 forbids (Windows writes it as is)
+        byte[] sysmon = File.ReadAllBytes(Path.Combine(_testDataDir, "sysmon.evtx"));
+        using MemoryStream sysmonRooted = new();
+        EvtxParser.WriteTo(sysmon, sysmonRooted, new EvtxOptions { XmlEventsRoot = true }, token);
+        sysmonRooted.Position = 0;
+        XDocument document = XDocument.Load(sysmonRooted);
+        Assert.Equal("Events", document.Root!.Name.LocalName);
+        Assert.Equal(EvtxParser.Parse(sysmon, cancellationToken: token).RecordCount, document.Root.Elements().Count());
+    }
+
+    /// <summary>
     /// Verifies that the stream overload rejects an input stream that can't seek.
     /// </summary>
     [Fact]
@@ -150,7 +194,7 @@ public class EvtxParserWriteToTests
     #region Non-Public Methods
 
     /// <summary>
-    /// Concatenates the output of every event of <paramref name="log"/>, in order.
+    /// The output of every event of <paramref name="log"/> that has output, in order, each followed by a line feed.
     /// </summary>
     /// <param name="log">Result of a full parse.</param>
     /// <returns>The bytes streaming output is expected to produce.</returns>
@@ -158,7 +202,13 @@ public class EvtxParserWriteToTests
     {
         using MemoryStream expected = new();
         foreach (EvtxEvent evt in log.Events)
+        {
+            if (evt.Utf8.IsEmpty)
+                continue;
             expected.Write(evt.Utf8.Span);
+            expected.WriteByte((byte)'\n');
+        }
+
         return expected.ToArray();
     }
 

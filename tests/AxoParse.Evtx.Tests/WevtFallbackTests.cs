@@ -54,7 +54,7 @@ public class WevtFallbackTests
         using MemoryStream stream = new();
         EvtxParser.WriteTo(corrupted, stream, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = 1, WevtCache = cache }, token);
 
-        Assert.StartsWith(expected, Encoding.UTF8.GetString(stream.ToArray()));
+        Assert.StartsWith(expected + "\n", Encoding.UTF8.GetString(stream.ToArray()));
     }
 
     /// <summary>

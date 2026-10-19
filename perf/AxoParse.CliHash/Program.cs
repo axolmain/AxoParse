@@ -49,7 +49,8 @@ foreach (string file in Directory.GetFiles(dataDir, "*.evtx").Order(StringCompar
     string name = Path.GetFileName(file);
     foreach (string format in formats)
     {
-        string key = $"{format}/{name}";
+        // The CLI streams through EvtxParser.WriteTo, so it matches the framed (WriteTo) hashes
+        string key = $"framed/{format}/{name}";
         if (!golden.TryGetValue(key, out string? expected))
         {
             failures.Add($"{key}: no golden entry (re-bless GoldenOutputTests)");

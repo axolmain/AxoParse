@@ -57,7 +57,8 @@ public class SalvageTests
 
     /// <summary>
     /// Verifies that the streaming writer follows the same rule in both modes: its output equals the concatenated
-    /// output of <see cref="EvtxParser.Parse"/>, so strict mode writes nothing for the corrupt records and salvage
+    /// output of <see cref="EvtxParser.Parse(byte[], EvtxOptions?, CancellationToken)"/> (one line per record that has
+    /// output), so strict mode writes nothing for the corrupt records and salvage
     /// mode writes their prefixes.
     /// </summary>
     /// <param name="salvage">Whether to salvage corrupt records.</param>
@@ -71,7 +72,10 @@ public class SalvageTests
 
         StringBuilder expected = new();
         foreach (EvtxEvent evt in EvtxParser.Parse(data, new EvtxOptions { MaxThreads = 1, Salvage = salvage }, token).Events)
-            expected.Append(evt.GetText());
+        {
+            if (!evt.Utf8.IsEmpty)
+                expected.Append(evt.GetText()).Append('\n');
+        }
 
         using MemoryStream stream = new();
         EvtxParser.WriteTo(data, stream, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = 1, Salvage = salvage }, token);

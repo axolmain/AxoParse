@@ -159,9 +159,12 @@ public static class EvtxParser
     /// <summary>
     /// Parses an EVTX file held in memory and writes every event's output to <paramref name="output"/> as UTF-8, in
     /// the same order and with the same bytes as the events of
-    /// <see cref="Parse(byte[], EvtxOptions?, CancellationToken)"/>. Chunks are rendered into reusable per-worker
-    /// buffers and written as soon as they are next in order, so memory stays flat and no event is retained.
-    /// Diagnostics are not reported; a record that fails to render writes nothing.
+    /// <see cref="Parse(byte[], EvtxOptions?, CancellationToken)"/>, each followed by a line feed: JSON formats give
+    /// JSON Lines, and XML gives one event after another (an event's text can itself contain line breaks). With
+    /// <see cref="EvtxOptions.XmlEventsRoot"/>, XML output is wrapped in <c>&lt;Events&gt;</c> … <c>&lt;/Events&gt;</c>
+    /// lines to form one XML document. Chunks are rendered into reusable per-worker buffers and written as soon as they
+    /// are next in order, so memory stays flat and no event is retained. Diagnostics are not reported; a record that
+    /// fails to render writes nothing, not even its line feed.
     /// </summary>
     /// <param name="fileData">Complete EVTX file bytes.</param>
     /// <param name="output">Stream that receives the output. It is written to but not flushed or closed.</param>
@@ -471,6 +474,9 @@ public static class EvtxParser
         ArgumentNullException.ThrowIfNull(output);
         EvtxFileHeader header = source.ReadHeader();
         long[] offsets = ChunkOffsets(header, source.Length);
+        bool xmlRoot = options.XmlEventsRoot && (options.Format == OutputFormat.Xml);
+        if (xmlRoot)
+            output.Write("<Events>\n"u8);
         int total = 0;
         int recoverCount = 0;
         for (int pass = 0; pass < 2; pass++)
@@ -490,6 +496,8 @@ public static class EvtxParser
             }
         }
 
+        if (xmlRoot)
+            output.Write("</Events>\n"u8);
         return total;
     }
 

@@ -74,12 +74,15 @@ internal sealed partial class BinXmlParser
     /// <param name="record">The EVTX record whose BinXml event data will be rendered.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="sink">Buffer that receives the UTF-8 output.</param>
-    internal void AppendRecordUtf8(EvtxRecord record, OutputFormat format, ArrayBufferWriter<byte> sink)
+    /// <param name="lineFeed">True to follow non-empty output with a line feed (<c>WriteTo</c> framing).</param>
+    internal void AppendRecordUtf8(EvtxRecord record, OutputFormat format, ArrayBufferWriter<byte> sink, bool lineFeed = false)
     {
         // Render straight into the sink's free space; only a record larger than it is copied from a pooled buffer
         Span<byte> free = sink.GetSpan(_recordBufferBytes);
         ValueUtf8Builder vub = new(free);
         RenderRecord(record, format, ref vub);
+        if (lineFeed && (vub.Length > 0))
+            vub.Append((byte)'\n');
         ReadOnlySpan<byte> utf8 = vub.AsSpan();
         if (vub.IsInInitialBuffer)
         {

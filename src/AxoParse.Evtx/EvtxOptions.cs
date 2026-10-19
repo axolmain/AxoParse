@@ -47,8 +47,9 @@ public sealed record EvtxOptions
 
     /// <summary>
     /// <see cref="EvtxParser.WriteTo(string, Stream, EvtxOptions?, CancellationToken)"/> with XML output only: wrap the
-    /// records in an <c>&lt;Events&gt;</c> root element so the output is a single well-formed XML document. Off by
-    /// default: the output is one record after another, each followed by a line feed.
+    /// records in an <c>&lt;Events&gt;</c> root element (on lines of their own) so the output is a single well-formed
+    /// XML document. Off by default: the output is one record after another, each followed by a line feed. Ignored for
+    /// JSON formats.
     /// </summary>
     public bool XmlEventsRoot { get; init; }
 
