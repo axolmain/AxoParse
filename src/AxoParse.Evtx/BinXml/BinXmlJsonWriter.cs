@@ -400,7 +400,7 @@ internal sealed partial class BinXmlParser
         {
             if (!_compiledJsonCache.TryGetValue(hdr.TemplateGuid, out CompiledJsonTemplate? compiled))
             {
-                compiled = CompileJsonTemplate((int)hdr.DefDataOffset, (int)hdr.DataSize);
+                compiled = CompileProgram((int)hdr.DefDataOffset, (int)hdr.DataSize)?.LowerToJson();
                 _compiledJsonCache[hdr.TemplateGuid] = compiled;
             }
 
