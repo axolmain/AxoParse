@@ -17,6 +17,25 @@
   the XML or JSON is still well-formed. `EvtxEvent.Diagnostic` says where it stopped (`BinXml salvaged …`). Off by
   default.
 
+**Performance:**
+
+- **Faster rendering, single-threaded and multi-threaded.** On the 30 MB sample (Apple M4, AOT CLI), compared with the
+  start of the 0.3.0 renderer work, instructions dropped 18% (XML) and 16% (JSON). Wall time went from 30.6 to
+  25.3 ms (XML) and 34.8 to 29.3 ms (JSON) single-threaded, and from 11.4 to 10.4 ms (XML) and 12.8 to 11.7 ms
+  (JSON) with 8 threads. Each change was kept only if it reduced instruction counts:
+  - Each template definition is resolved once per chunk and remembered by offset, instead of two dictionary lookups
+    per record (−4%).
+  - Substitution values are read in one pass, with sizes and types used in place, instead of being copied into three
+    stack arrays per record (−4.5%).
+  - Integers are formatted with `Utf8Formatter` (−3.5%).
+  - Short ASCII strings with nothing to escape take a scalar fast path (−6% XML, −5% JSON).
+  - FILETIME formatting reuses the last calendar date.
+  - `WriteTo` no longer preloads each chunk's template table, which rendering never needed.
+
+  Tried and dropped, because they didn't measurably win: a hand-written digit writer (slower than `Utf8Formatter`),
+  `SkipLocalsInit` on the per-record path (−0.3%, not worth enabling unsafe code), an inline copy for short appends
+  (slower than `memmove`), and remembering the last SID.
+
 **Fixes:**
 
 - **Entity references with inline names truncated the event.** An entity reference's name (like `quot` in
@@ -24,6 +43,9 @@
   read as tokens, and everything after the first such entity was lost. 26 records in the two CAPI2 samples and 2 in
   `Archive-ForwardedEvents-test.evtx` were cut short this way (for example, an HTTP header list ended at
   `Via: 1.1 [&quot;`). All records of those three samples now match the Rust `evtx` crate's output.
+- **A template body that ran past its own end failed every record using it.** The compiler's read past the end threw
+  instead of reporting the template as corrupt, so records couldn't fall back to a provider template and the compile
+  was retried for each one. It now counts as a corrupt template like any other.
 - **Corrupt records could render invalid JSON while reporting success.** These bugs were found by the corruption test,
   which now requires every non-empty JSON record to parse:
   - A record or template whose bytes held more than one top-level item rendered `{…}{…}` or `{…},…`. A record and a

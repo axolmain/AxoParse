@@ -24,7 +24,8 @@ public class FormatterBenchmarks
     public int FileTime()
     {
         ValueUtf8Builder vsb = new(stackalloc byte[192]);
-        BinXmlValueFormatter.AppendFileTime(_fileTime, ref vsb);
+        BinXmlValueFormatter.DateMemo lastDate = default;
+        BinXmlValueFormatter.AppendFileTime(_fileTime, ref vsb, ref lastDate);
         int len = vsb.Length;
         vsb.Dispose();
         return len;

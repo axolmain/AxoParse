@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Buffers.Text;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Unicode;
@@ -133,6 +134,165 @@ internal ref struct ValueUtf8Builder : IDisposable
     /// <param name="count">Number of bytes written.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Advance(int count) => _pos += count;
+
+    /// <summary>
+    /// Appends a <see cref="byte"/> in decimal (invariant, culture-free: at most 3 ASCII bytes).
+    /// </summary>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AppendFormatted(byte value)
+    {
+        if (_pendingHighSurrogate != '\0')
+            FlushPendingSurrogate();
+        if (!Utf8Formatter.TryFormat(value, _bytes[_pos..], out int written))
+        {
+            Grow(3);
+            Utf8Formatter.TryFormat(value, _bytes[_pos..], out written);
+        }
+        _pos += written;
+    }
+
+    /// <summary>
+    /// Appends a <see cref="sbyte"/> in decimal (invariant, culture-free: at most 4 ASCII bytes).
+    /// </summary>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AppendFormatted(sbyte value)
+    {
+        if (_pendingHighSurrogate != '\0')
+            FlushPendingSurrogate();
+        if (!Utf8Formatter.TryFormat(value, _bytes[_pos..], out int written))
+        {
+            Grow(4);
+            Utf8Formatter.TryFormat(value, _bytes[_pos..], out written);
+        }
+        _pos += written;
+    }
+
+    /// <summary>
+    /// Appends a <see cref="short"/> in decimal (invariant, culture-free: at most 6 ASCII bytes).
+    /// </summary>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AppendFormatted(short value)
+    {
+        if (_pendingHighSurrogate != '\0')
+            FlushPendingSurrogate();
+        if (!Utf8Formatter.TryFormat(value, _bytes[_pos..], out int written))
+        {
+            Grow(6);
+            Utf8Formatter.TryFormat(value, _bytes[_pos..], out written);
+        }
+        _pos += written;
+    }
+
+    /// <summary>
+    /// Appends a <see cref="ushort"/> in decimal (invariant, culture-free: at most 5 ASCII bytes).
+    /// </summary>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AppendFormatted(ushort value)
+    {
+        if (_pendingHighSurrogate != '\0')
+            FlushPendingSurrogate();
+        if (!Utf8Formatter.TryFormat(value, _bytes[_pos..], out int written))
+        {
+            Grow(5);
+            Utf8Formatter.TryFormat(value, _bytes[_pos..], out written);
+        }
+        _pos += written;
+    }
+
+    /// <summary>
+    /// Appends a <see cref="int"/> in decimal (invariant, culture-free: at most 11 ASCII bytes).
+    /// </summary>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AppendFormatted(int value)
+    {
+        if (_pendingHighSurrogate != '\0')
+            FlushPendingSurrogate();
+        if (!Utf8Formatter.TryFormat(value, _bytes[_pos..], out int written))
+        {
+            Grow(11);
+            Utf8Formatter.TryFormat(value, _bytes[_pos..], out written);
+        }
+        _pos += written;
+    }
+
+    /// <summary>
+    /// Appends a <see cref="uint"/> in decimal (invariant, culture-free: at most 10 ASCII bytes).
+    /// </summary>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AppendFormatted(uint value)
+    {
+        if (_pendingHighSurrogate != '\0')
+            FlushPendingSurrogate();
+        if (!Utf8Formatter.TryFormat(value, _bytes[_pos..], out int written))
+        {
+            Grow(10);
+            Utf8Formatter.TryFormat(value, _bytes[_pos..], out written);
+        }
+        _pos += written;
+    }
+
+    /// <summary>
+    /// Appends a <see cref="long"/> in decimal (invariant, culture-free: at most 20 ASCII bytes).
+    /// </summary>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AppendFormatted(long value)
+    {
+        if (_pendingHighSurrogate != '\0')
+            FlushPendingSurrogate();
+        if (!Utf8Formatter.TryFormat(value, _bytes[_pos..], out int written))
+        {
+            Grow(20);
+            Utf8Formatter.TryFormat(value, _bytes[_pos..], out written);
+        }
+        _pos += written;
+    }
+
+    /// <summary>
+    /// Appends a <see cref="ulong"/> in decimal (invariant, culture-free: at most 20 ASCII bytes).
+    /// </summary>
+    /// <param name="value">The value to format.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void AppendFormatted(ulong value)
+    {
+        if (_pendingHighSurrogate != '\0')
+            FlushPendingSurrogate();
+        if (!Utf8Formatter.TryFormat(value, _bytes[_pos..], out int written))
+        {
+            Grow(20);
+            Utf8Formatter.TryFormat(value, _bytes[_pos..], out written);
+        }
+        _pos += written;
+    }
+
+    /// <summary>
+    /// Appends short text that is entirely ASCII with no character flagged in <paramref name="rejects"/>, one byte
+    /// per character, and returns true; otherwise appends nothing and returns false so the caller takes its general
+    /// escaping path. A scalar loop beats the vectorised search and transcoder on the short names and values that
+    /// dominate event data.
+    /// </summary>
+    /// <param name="text">UTF-16 text, at most a few dozen characters.</param>
+    /// <param name="rejects">128 flags indexed by ASCII code: non-zero for characters the caller must escape.</param>
+    /// <returns>True if the text was appended.</returns>
+    public bool TryAppendPlainAscii(scoped ReadOnlySpan<char> text, ReadOnlySpan<byte> rejects)
+    {
+        Span<byte> d = GetSpan(text.Length);
+        for (int i = 0; i < text.Length; i++)
+        {
+            char c = text[i];
+            if ((c >= 0x80) || (rejects[c] != 0))
+                return false;
+            d[i] = (byte)c;
+        }
+        _pos += text.Length;
+        return true;
+    }
 
     /// <summary>
     /// Formats a number with the invariant culture and appends its UTF-8 (ASCII) text.

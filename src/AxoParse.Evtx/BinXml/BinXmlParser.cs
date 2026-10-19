@@ -23,7 +23,6 @@ internal sealed partial class BinXmlParser
     /// </summary>
     /// <param name="fileData">Complete EVTX file bytes.</param>
     /// <param name="chunkFileOffset">Absolute byte offset of the chunk within <paramref name="fileData"/>.</param>
-    /// <param name="templates">Preloaded template definitions for this chunk, keyed by chunk-relative offset.</param>
     /// <param name="compiledCache">Cross-chunk cache of templates compiled for the output format this parser renders, keyed by
     /// GUID, or null to decode every template body. Never share a cache between formats.</param>
     /// <param name="wevtCache">Provider templates used when a record's embedded template is missing or corrupt, or null.</param>
@@ -31,7 +30,6 @@ internal sealed partial class BinXmlParser
     public BinXmlParser(
         byte[] fileData,
         int chunkFileOffset,
-        Dictionary<uint, BinXmlTemplateDefinition> templates,
         Dictionary<Guid, CompiledTemplate?>? compiledCache,
         WevtCache? wevtCache = null,
         bool salvage = false)
@@ -41,7 +39,6 @@ internal sealed partial class BinXmlParser
         _fileData = fileData;
         _chunkFileOffset = chunkFileOffset;
         _chunkEnd = Math.Min(chunkFileOffset + EvtxChunk.ChunkSize, fileData.Length);
-        _templates = templates;
         _compiledCache = compiledCache;
 
         // Common string offset table: 64 uint32 entries at chunk offset 128. Entries are no longer decoded up front,
@@ -203,10 +200,11 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Renders a TemplateInstance token (0x0C): reads its header and substitution values, then writes the template
-    /// through its compiled form, compiling it on first use. A template that is missing, runs past its chunk or is
-    /// corrupt falls back to the provider template with the same GUID, as in the Rust evtx crate (a usable embedded
-    /// template is never replaced); a usable template that isn't compiled is decoded directly.
+    /// Renders a TemplateInstance token (0x0C): 1 token + 1 unknown + 4 template ID + 4 definition offset
+    /// [+ inline definition: 4 next-offset + 16 GUID + 4 data size + body] + 4 value count + 4-byte value descriptors
+    /// (u16 size, u8 type, u8 padding) + the values back to back. The definition is resolved once per chunk
+    /// (<see cref="ResolveTemplate{TWriter}"/>); the instance then writes its values through the compiled template, or
+    /// decodes the template body with them.
     /// </summary>
     /// <typeparam name="TWriter">Output format.</typeparam>
     /// <param name="data">BinXml byte stream.</param>
@@ -218,66 +216,45 @@ internal sealed partial class BinXmlParser
                                                 ref ValueUtf8Builder vsb, bool escaped)
         where TWriter : struct, IBinXmlWriter
     {
-        // Peek at numValues to size the stackalloc buffers.
-        // Header layout: 6 skip + 4 defDataOffset [+ optional inline] + 4 numValues.
-        // ReadTemplateInstanceData handles the full parse; we just need numValues for buffer sizing.
-        int peekPos = pos + 6;
-        uint defDataOffset = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos, 4));
-        peekPos += 4;
-        uint peekChunkRel = (uint)(binxmlChunkBase + peekPos);
-        if (defDataOffset == peekChunkRel)
-        {
-            // inline: skip 4 next-ptr + 16 GUID + 4 dataSize + dataSize body
-            uint inlineDataSize = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(peekPos + 20, 4));
-            peekPos += 24 + (int)inlineDataSize;
-        }
-        int numVals = ReadSubstitutionCount(data, peekPos);
+        int p = pos + 6; // token + unknown + template ID
+        uint defDataOffset = BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(p, 4));
+        p += 4;
+        // The definition is inline when it starts right here, i.e. this is its first use in the chunk
+        bool inline = defDataOffset == (uint)(binxmlChunkBase + p);
+        ref ResolvedTemplate resolved = ref ResolveTemplate<TWriter>(defDataOffset, inline ? data[p..] : default);
+        if (inline)
+            p += 24 + (int)resolved.DataSize;
 
+        int numVals = ReadSubstitutionCount(data, p);
+        p += 4;
+
+        // Sizes and types are read in place from the descriptors; only the values' offsets are computed.
         // stackalloc for the common case (≤ 64 substitutions); heap fallback for rare large templates
         const int StackThreshold = 64;
         Span<int> valueOffsets = numVals <= StackThreshold ? stackalloc int[StackThreshold] : new int[numVals];
-        Span<int> valueSizes = numVals <= StackThreshold ? stackalloc int[StackThreshold] : new int[numVals];
-        Span<byte> valueTypes = numVals <= StackThreshold ? stackalloc byte[StackThreshold] : new byte[numVals];
-
-        TemplateInstanceHeader hdr = ReadTemplateInstanceData(data, ref pos, binxmlChunkBase,
-            valueOffsets, valueSizes, valueTypes);
-
-        ReadOnlySpan<int> offsets = valueOffsets.Slice(0, hdr.NumValues);
-        ReadOnlySpan<int> sizes = valueSizes.Slice(0, hdr.NumValues);
-        ReadOnlySpan<byte> types = valueTypes.Slice(0, hdr.NumValues);
-
-        int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
-        bool embedded = (hdr.DataSize != 0) && ((uint)(tplBodyFileOffset + hdr.DataSize) <= (uint)_chunkEnd);
-
-        CompiledTemplate? compiled = null;
-        bool compileFailed = false;
-        if (embedded && (_compiledCache != null))
+        ReadOnlySpan<SubstitutionDescriptor> descriptors =
+            MemoryMarshal.Cast<byte, SubstitutionDescriptor>(data.Slice(p, numVals * 4));
+        p += numVals * 4;
+        int fileOffset = _chunkFileOffset + binxmlChunkBase + p;
+        for (int i = 0; i < descriptors.Length; i++)
         {
-            if (!_compiledCache.TryGetValue(hdr.TemplateGuid, out compiled))
-            {
-                compiled = CompileProgram((int)hdr.DefDataOffset, (int)hdr.DataSize) is { } program
-                    ? Lower<TWriter>(program)
-                    : null;
-                _compiledCache[hdr.TemplateGuid] = compiled;
-            }
-            compileFailed = compiled == null;
+            valueOffsets[i] = fileOffset;
+            fileOffset += descriptors[i].Size;
         }
+        pos = fileOffset - _chunkFileOffset - binxmlChunkBase;
 
-        if ((!embedded || compileFailed) && (_wevtCache?.Get(hdr.TemplateGuid, TWriter.Format) is { } provider))
-            compiled = provider;
-
-        if ((compiled != null) && (compiled != CompiledTemplate.DecodeDirectly))
+        SubstitutionValues values = new(valueOffsets[..numVals], descriptors);
+        if (resolved.Compiled != null)
         {
-            WriteCompiled<TWriter>(compiled, offsets, sizes, types, binxmlChunkBase, ref vsb, escaped);
+            WriteCompiled<TWriter>(resolved.Compiled, values, binxmlChunkBase, ref vsb, escaped);
             return;
         }
 
-        if (!embedded) return;
+        if (!resolved.DecodeBody)
+            return;
 
-        // Not compiled: decode the template body directly with this instance's substitution values
-        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize);
-        SubstitutionValues values = new(offsets, sizes, types);
-        int tplChunkBase = (int)hdr.DefDataOffset + 24;
+        ReadOnlySpan<byte> tplBody = _fileData.AsSpan(_chunkFileOffset + (int)resolved.DefDataOffset + 24, (int)resolved.DataSize);
+        int tplChunkBase = (int)resolved.DefDataOffset + 24;
         if (!escaped)
         {
             DecodeTemplateBody<TWriter>(tplBody, values, tplChunkBase, ref vsb);
@@ -290,6 +267,71 @@ internal sealed partial class BinXmlParser
         escapeVsb.Dispose();
     }
 
+    /// <summary>
+    /// Resolves the template definition at <paramref name="defDataOffset"/> for this output format, memoised per chunk.
+    /// The definition's GUID and body size come from the inline definition or the chunk bytes at that offset (the same
+    /// bytes the chunk's template table describes, so the table itself isn't needed to render). A template whose body is in the chunk is compiled on first use (cached by GUID); one that is
+    /// missing, runs past its chunk or is corrupt falls back to the provider template with the same GUID, as in the Rust
+    /// evtx crate (a usable embedded template is never replaced); a usable one that isn't compiled is decoded directly.
+    /// </summary>
+    /// <typeparam name="TWriter">Output format.</typeparam>
+    /// <param name="defDataOffset">Chunk-relative offset of the template definition.</param>
+    /// <param name="inlineDefinition">The inline definition's bytes when the instance defines the template, else empty.</param>
+    /// <returns>The memo entry for the definition.</returns>
+    private ref ResolvedTemplate ResolveTemplate<TWriter>(uint defDataOffset, ReadOnlySpan<byte> inlineDefinition)
+        where TWriter : struct, IBinXmlWriter
+    {
+        ref ResolvedTemplate entry = ref _resolvedTemplates[(int)((defDataOffset ^ (defDataOffset >> 7)) & (_resolvedTemplateSlots - 1))];
+        if (entry.IsSet && (entry.DefDataOffset == defDataOffset) && (entry.Format == TWriter.Format))
+            return ref entry;
+
+        Guid templateGuid = default;
+        uint dataSize = 0;
+        if (!inlineDefinition.IsEmpty)
+        {
+            templateGuid = new Guid(inlineDefinition.Slice(4, 16));
+            dataSize = BinaryPrimitives.ReadUInt32LittleEndian(inlineDefinition.Slice(20, 4));
+        }
+        else if (defDataOffset + 24 <= EvtxChunk.ChunkSize)
+        {
+            ReadOnlySpan<byte> chunkData = _fileData.AsSpan(_chunkFileOffset, EvtxChunk.ChunkSize);
+            int baseOffset = (int)defDataOffset;
+            templateGuid = new Guid(chunkData.Slice(baseOffset + 4, 16));
+            dataSize = BinaryPrimitives.ReadUInt32LittleEndian(chunkData.Slice(baseOffset + 20, 4));
+        }
+
+        int tplBodyFileOffset = _chunkFileOffset + (int)defDataOffset + 24;
+        bool embedded = (dataSize != 0) && ((uint)(tplBodyFileOffset + dataSize) <= (uint)_chunkEnd);
+
+        CompiledTemplate? compiled = null;
+        bool compileFailed = false;
+        if (embedded && (_compiledCache != null))
+        {
+            if (!_compiledCache.TryGetValue(templateGuid, out compiled))
+            {
+                compiled = CompileProgram((int)defDataOffset, (int)dataSize) is { } program ? Lower<TWriter>(program) : null;
+                _compiledCache[templateGuid] = compiled;
+            }
+            compileFailed = compiled == null;
+        }
+
+        if ((!embedded || compileFailed) && (_wevtCache?.Get(templateGuid, TWriter.Format) is { } provider))
+            compiled = provider;
+
+        if (compiled == CompiledTemplate.DecodeDirectly)
+            compiled = null;
+
+        entry = new ResolvedTemplate
+        {
+            DefDataOffset = defDataOffset,
+            DataSize = dataSize,
+            IsSet = true,
+            Format = TWriter.Format,
+            DecodeBody = embedded && (compiled == null),
+            Compiled = compiled
+        };
+        return ref entry;
+    }
     /// <summary>
     /// Resolves a name from the per-chunk cache, reading from chunk data on cache miss.
     /// </summary>
@@ -324,122 +366,24 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Reads the format-agnostic data from a TemplateInstance token (0x0C): template definition
-    /// identity, substitution descriptors, and value metadata. Shared by both XML and JSON paths.
-    /// Layout: 1 token + 1 unknown + 4 unknown + 4 defDataOffset [+ 24-byte inline header + body]
-    /// + 4 numValues + descriptors + values.
-    /// Writes substitution metadata into caller-provided spans to avoid per-record heap allocations.
-    /// </summary>
-    /// <param name="data">BinXml byte stream.</param>
-    /// <param name="pos">Current read position; advanced past the entire template instance data.</param>
-    /// <param name="binxmlChunkBase">Chunk-relative base offset of <paramref name="data"/>.</param>
-    /// <param name="valueOffsets">Caller-provided buffer; filled with absolute file offsets of each substitution value.</param>
-    /// <param name="valueSizes">Caller-provided buffer; filled with byte sizes of each substitution value.</param>
-    /// <param name="valueTypes">Caller-provided buffer; filled with BinXml value type codes.</param>
-    /// <returns>Parsed template instance header (guid, sizes, value count) for downstream rendering.</returns>
-    private TemplateInstanceHeader ReadTemplateInstanceData(
-        ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
-        Span<int> valueOffsets, Span<int> valueSizes, Span<byte> valueTypes)
-    {
-        int p = pos;
-
-        // token + unknown1 + unknown2
-        p += 6;
-
-        // defDataOffset
-        uint defDataOffset =
-            BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(p, 4));
-        p += 4;
-
-        uint currentChunkRelOffset = (uint)(binxmlChunkBase + p);
-
-        Guid templateGuid = default;
-        uint dataSize = 0;
-
-        if (defDataOffset == currentChunkRelOffset)
-        {
-            // inline
-            p += 4; // next def offset
-
-            templateGuid = new Guid(data.Slice(p, 16));
-            p += 16;
-
-            dataSize =
-                BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(p, 4));
-            p += 4;
-
-            p += (int)dataSize;
-        }
-        else if (_templates.TryGetValue(defDataOffset, out BinXmlTemplateDefinition def))
-        {
-            templateGuid = def.Guid;
-            dataSize = def.DataSize;
-        }
-        else if (defDataOffset + 24 <= EvtxChunk.ChunkSize)
-        {
-            // fallback read
-            ReadOnlySpan<byte> chunkData =
-                _fileData.AsSpan(_chunkFileOffset, EvtxChunk.ChunkSize);
-
-            int baseOffset = (int)defDataOffset;
-
-            templateGuid = new Guid(chunkData.Slice(baseOffset + 4, 16));
-
-            dataSize = BinaryPrimitives.ReadUInt32LittleEndian(
-                chunkData.Slice(baseOffset + 20, 4));
-        }
-
-        // numValues
-        uint numValues =
-            BinaryPrimitives.ReadUInt32LittleEndian(data.Slice(p, 4));
-        p += 4;
-
-        int numVals = (int)numValues;
-
-        // Descriptor block: numVals × 4-byte descriptors (u16 size + u8 type + u8 padding)
-        ReadOnlySpan<SubstitutionDescriptor> descriptors =
-            MemoryMarshal.Cast<byte, SubstitutionDescriptor>(data.Slice(p, numVals * 4));
-        p += numVals * 4;
-
-        int dataBaseFileOffset = _chunkFileOffset + binxmlChunkBase;
-
-        for (int i = 0; i < numVals; i++)
-        {
-            SubstitutionDescriptor desc = descriptors[i];
-
-            valueOffsets[i] = dataBaseFileOffset + p;
-            valueSizes[i] = desc.Size;
-            valueTypes[i] = desc.Type;
-
-            p += desc.Size;
-        }
-
-        pos = p;
-
-        return new TemplateInstanceHeader(templateGuid, dataSize, defDataOffset, numVals);
-    }
-
-    /// <summary>
     /// Writes a compiled template: its static parts interleaved with this instance's formatted substitution values.
     /// A slot whose value is missing (index past the instance's values) or optional and empty writes nothing,
     /// including its conditional markup.
     /// </summary>
     /// <typeparam name="TWriter">Output format the template was compiled for.</typeparam>
     /// <param name="compiled">Compiled template.</param>
-    /// <param name="valueOffsets">File offsets of each substitution value.</param>
-    /// <param name="valueSizes">Byte sizes of each substitution value.</param>
-    /// <param name="valueTypes">BinXml value type codes for each substitution.</param>
+    /// <param name="values">The instance's substitution values.</param>
     /// <param name="binxmlChunkBase">Chunk-relative base offset used for embedded BinXml resolution.</param>
     /// <param name="vsb">Output builder.</param>
     /// <param name="escaped">JSON only: write the escaped parts and escape values twice (embedded BinXml context).</param>
-    private void WriteCompiled<TWriter>(CompiledTemplate compiled,
-                                        scoped ReadOnlySpan<int> valueOffsets, scoped ReadOnlySpan<int> valueSizes,
-                                        scoped ReadOnlySpan<byte> valueTypes,
-                                        int binxmlChunkBase, ref ValueUtf8Builder vsb, bool escaped)
+    private void WriteCompiled<TWriter>(CompiledTemplate compiled, scoped SubstitutionValues values, int binxmlChunkBase,
+                                        ref ValueUtf8Builder vsb, bool escaped)
         where TWriter : struct, IBinXmlWriter
     {
         byte[][] parts = escaped ? compiled.EscapedParts : compiled.Parts;
         SubSlot[] slots = compiled.Slots;
+        ReadOnlySpan<int> valueOffsets = values.Offsets;
+        ReadOnlySpan<SubstitutionDescriptor> descriptors = values.Descriptors;
         int valCount = valueOffsets.Length;
 
         vsb.Append(parts[0]);
@@ -449,8 +393,8 @@ internal sealed partial class BinXmlParser
             int subId = slot.SubId;
             if (subId < valCount)
             {
-                byte valType = valueTypes[subId];
-                int valSize = valueSizes[subId];
+                byte valType = descriptors[subId].Type;
+                int valSize = descriptors[subId].Size;
                 if (!slot.IsOptional || ((valType != BinXmlValueType.Null) && (valSize > 0)))
                 {
                     if (slot.Prefix != null)
@@ -478,6 +422,22 @@ internal sealed partial class BinXmlParser
     /// First corruption salvaged while rendering the current record, or null if it decoded cleanly.
     /// </summary>
     private string? _salvageDiagnostic;
+
+    /// <summary>
+    /// Number of <see cref="ResolvedTemplateMemo"/> slots (a power of two).
+    /// </summary>
+    private const int _resolvedTemplateSlots = 16;
+
+    /// <summary>
+    /// Template definitions resolved so far in this chunk, by definition offset.
+    /// </summary>
+    private ResolvedTemplateMemo _resolvedTemplates;
+
+    /// <summary>
+    /// Calendar date of the last FILETIME this parser formatted: a chunk's records are in time order, so consecutive
+    /// timestamps nearly always fall on the same day.
+    /// </summary>
+    private BinXmlValueFormatter.DateMemo _lastDate;
 
     /// <summary>
     /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.
@@ -526,30 +486,61 @@ internal sealed partial class BinXmlParser
     /// </summary>
     private Dictionary<uint, string>? _nameCache;
 
-    /// <summary>
-    /// Preloaded template definitions keyed by chunk-relative offset.
-    /// Populated by following the chained hash table at chunk offset 384.
-    /// </summary>
-    private readonly Dictionary<uint, BinXmlTemplateDefinition> _templates;
 
     #endregion
 
     #region Nested Types
 
     /// <summary>
-    /// Lightweight header from a TemplateInstance token (0x0C). Contains only the template
-    /// identity and value count; substitution data is written into caller-provided spans
-    /// by <see cref="ReadTemplateInstanceData"/> to avoid per-record heap allocations.
+    /// A template definition resolved for this chunk and output format: what every template instance pointing at the
+    /// definition renders through. Built on the first instance at <see cref="DefDataOffset"/> and reused after.
     /// </summary>
-    /// <param name="TemplateGuid">Template GUID (compiled cache key).</param>
-    /// <param name="DataSize">Template body size in bytes (after the 24-byte definition header).</param>
-    /// <param name="DefDataOffset">Chunk-relative offset of the template definition.</param>
-    /// <param name="NumValues">Number of substitution values in this instance.</param>
-    private readonly record struct TemplateInstanceHeader(
-        Guid TemplateGuid,
-        uint DataSize,
-        uint DefDataOffset,
-        int NumValues);
+    private struct ResolvedTemplate
+    {
+        /// <summary>
+        /// Chunk-relative offset of the template definition (4 next-offset + 16 GUID + 4 data size, then the body).
+        /// </summary>
+        public uint DefDataOffset;
+
+        /// <summary>
+        /// Template body size in bytes; an inline definition's body is skipped by this much.
+        /// </summary>
+        public uint DataSize;
+
+        /// <summary>
+        /// True once this entry holds a resolved definition.
+        /// </summary>
+        public bool IsSet;
+
+        /// <summary>
+        /// Output format <see cref="Compiled"/> was compiled for.
+        /// </summary>
+        public OutputFormat Format;
+
+        /// <summary>
+        /// True to decode the definition's body directly (it is usable but not compiled).
+        /// </summary>
+        public bool DecodeBody;
+
+        /// <summary>
+        /// The compiled template to write (the embedded one or a provider fallback), or null.
+        /// </summary>
+        public CompiledTemplate? Compiled;
+    }
+
+    /// <summary>
+    /// Direct-mapped memo of <see cref="ResolvedTemplate"/>s by definition offset. A chunk typically references a
+    /// handful of templates, so instances almost always hit and skip both the definition lookup by offset and the
+    /// compiled-template lookup by GUID.
+    /// </summary>
+    [InlineArray(_resolvedTemplateSlots)]
+    private struct ResolvedTemplateMemo
+    {
+        /// <summary>
+        /// First element of the inline array.
+        /// </summary>
+        private ResolvedTemplate _element;
+    }
 
     #endregion
 }

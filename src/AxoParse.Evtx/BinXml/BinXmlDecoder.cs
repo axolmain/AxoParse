@@ -221,8 +221,8 @@ internal sealed partial class BinXmlParser
                     writer.BeginValue(ref vub);
                     if (subId < values.Offsets.Length)
                     {
-                        byte valueType = values.Types[subId];
-                        int valueSize = values.Sizes[subId];
+                        byte valueType = values.Descriptors[subId].Type;
+                        int valueSize = values.Descriptors[subId].Size;
                         if (!optional || ((valueType != BinXmlValueType.Null) && (valueSize > 0)))
                             WriteValue<TWriter>(valueSize, valueType, values.Offsets[subId], binxmlChunkBase, ref vub,
                                 escaped: false);
@@ -402,7 +402,7 @@ internal sealed partial class BinXmlParser
                          (next == BinXmlToken.Attribute);
         ushort subId = MemoryMarshal.Read<ushort>(data[(pos + 1)..]);
         return onlyToken && ((subId >= values.Offsets.Length) ||
-                             (values.Types[subId] == BinXmlValueType.Null) || (values.Sizes[subId] == 0));
+                             (values.Descriptors[subId].Type == BinXmlValueType.Null) || (values.Descriptors[subId].Size == 0));
     }
 
     /// <summary>
@@ -596,14 +596,14 @@ internal sealed partial class BinXmlParser
     #region Nested Types
 
     /// <summary>
-    /// The substitution values of a template instance, as spans over the stack buffers filled by
-    /// <see cref="ReadTemplateInstanceData"/>. <see cref="Present"/> is false outside a template (record-level content
-    /// and embedded fragments), where substitution tokens are corrupt.
+    /// The substitution values of a template instance: each value's file offset (computed by
+    /// <see cref="WriteTemplateInstance{TWriter}"/>) and its descriptor (size and type, read in place from the record).
+    /// <see cref="Present"/> is false outside a template (record-level content and embedded fragments), where
+    /// substitution tokens are corrupt.
     /// </summary>
     /// <param name="offsets">File offset of each value.</param>
-    /// <param name="sizes">Byte size of each value.</param>
-    /// <param name="types">BinXml value type of each value.</param>
-    private readonly ref struct SubstitutionValues(ReadOnlySpan<int> offsets, ReadOnlySpan<int> sizes, ReadOnlySpan<byte> types)
+    /// <param name="descriptors">Size and type of each value.</param>
+    private readonly ref struct SubstitutionValues(ReadOnlySpan<int> offsets, ReadOnlySpan<SubstitutionDescriptor> descriptors)
     {
         /// <summary>
         /// True inside a template instance.
@@ -616,14 +616,9 @@ internal sealed partial class BinXmlParser
         public ReadOnlySpan<int> Offsets { get; } = offsets;
 
         /// <summary>
-        /// Byte size of each value.
+        /// Size and BinXml value type of each value.
         /// </summary>
-        public ReadOnlySpan<int> Sizes { get; } = sizes;
-
-        /// <summary>
-        /// BinXml value type of each value.
-        /// </summary>
-        public ReadOnlySpan<byte> Types { get; } = types;
+        public ReadOnlySpan<SubstitutionDescriptor> Descriptors { get; } = descriptors;
     }
 
     /// <summary>

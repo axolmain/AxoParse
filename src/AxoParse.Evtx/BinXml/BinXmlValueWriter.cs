@@ -126,7 +126,7 @@ internal sealed partial class BinXmlParser
             case BinXmlValueType.FileTime:
             {
                 if (size < 8) break;
-                BinXmlValueFormatter.AppendFileTime(valueBytes, ref vsb);
+                BinXmlValueFormatter.AppendFileTime(valueBytes, ref vsb, ref _lastDate);
                 break;
             }
 

@@ -25,8 +25,9 @@ internal static class BinXmlValueFormatter
     /// </summary>
     /// <param name="valueBytes">8-byte FILETIME value (little-endian 100-ns ticks since 1601-01-01).</param>
     /// <param name="vub">UTF-8 builder that receives the formatted timestamp.</param>
+    /// <param name="lastDate">The caller's memo of the last date formatted, reused when the day repeats.</param>
     /// <returns>True if a timestamp was appended; false if the FILETIME was zero.</returns>
-    internal static bool AppendFileTime(ReadOnlySpan<byte> valueBytes, ref ValueUtf8Builder vub)
+    internal static bool AppendFileTime(ReadOnlySpan<byte> valueBytes, ref ValueUtf8Builder vub, ref DateMemo lastDate)
     {
         long ft = MemoryMarshal.Read<long>(valueBytes);
         if (ft == 0) return false;
@@ -35,7 +36,17 @@ internal static class BinXmlValueFormatter
         int totalDays = (int)(totalTicks / TicksPerDay);
         long remainingTicks = totalTicks - (long)totalDays * TicksPerDay;
 
-        DecomposeDays(totalDays, out int year, out int month, out int day);
+        // Records arrive in time order, so consecutive timestamps nearly always fall on the same day
+        DateMemo memo = lastDate;
+        if (memo.Days != totalDays + 1)
+        {
+            DecomposeDays(totalDays, out int y, out int m, out int dd);
+            memo = new DateMemo(totalDays + 1, (ushort)y, (byte)m, (byte)dd);
+            lastDate = memo;
+        }
+        int year = memo.Year;
+        int month = memo.Month;
+        int day = memo.Day;
 
         int totalSeconds = (int)(remainingTicks / TicksPerSecond);
         int hour = totalSeconds / 3600;
@@ -82,6 +93,9 @@ internal static class BinXmlValueFormatter
     /// <param name="text">UTF-16 text to escape.</param>
     internal static void AppendJsonEscaped(ref ValueUtf8Builder vub, scoped ReadOnlySpan<char> text)
     {
+        if ((text.Length <= ShortTextLength) && vub.TryAppendPlainAscii(text, JsonEscapeFlags))
+            return;
+
         int idx = text.IndexOfAny(JsonEscapeChars);
         while (idx >= 0)
         {
@@ -104,6 +118,10 @@ internal static class BinXmlValueFormatter
     /// <param name="text">UTF-16 text to escape.</param>
     internal static void AppendJsonEscapedTwice(ref ValueUtf8Builder vub, scoped ReadOnlySpan<char> text)
     {
+        // Text with nothing to escape comes out of both escape levels unchanged
+        if ((text.Length <= ShortTextLength) && vub.TryAppendPlainAscii(text, JsonEscapeFlags))
+            return;
+
         int idx = text.IndexOfAny(JsonEscapeChars);
         while (idx >= 0)
         {
@@ -316,6 +334,9 @@ internal static class BinXmlValueFormatter
     /// <param name="text">UTF-16 text to escape.</param>
     internal static void AppendXmlEscaped(ref ValueUtf8Builder vub, scoped ReadOnlySpan<char> text)
     {
+        if ((text.Length <= ShortTextLength) && vub.TryAppendPlainAscii(text, XmlEscapeFlags))
+            return;
+
         int idx = text.IndexOfAny(XmlEscapeChars);
         if (idx < 0)
         {
@@ -664,6 +685,35 @@ internal static class BinXmlValueFormatter
     ];
 
     /// <summary>
+    /// Text up to this many characters is first tried on <see cref="ValueUtf8Builder.TryAppendPlainAscii"/>'s scalar
+    /// fast path before the vectorised escape search.
+    /// </summary>
+    private const int ShortTextLength = 16;
+
+    /// <summary>
+    /// Per-ASCII-code flags for characters XML escapes (&amp; &lt; &gt; &quot; &apos;), for the short-text fast path.
+    /// </summary>
+    private static ReadOnlySpan<byte> XmlEscapeFlags =>
+    [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    /// <summary>
+    /// Per-ASCII-code flags for characters JSON escapes (U+0000..U+001F, &quot;, backslash), for the short-text fast
+    /// path.
+    /// </summary>
+    private static ReadOnlySpan<byte> JsonEscapeFlags =>
+    [
+        1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+        0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+
+    /// <summary>
     /// Vectorised search set for XML characters needing entity escaping: &amp; &lt; &gt; &quot; &apos;.
     /// </summary>
     private static readonly SearchValues<char> XmlEscapeChars = SearchValues.Create("&<>\"'");
@@ -696,4 +746,14 @@ internal static class BinXmlValueFormatter
         "\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001A\u001B\u001C\u001D\u001E\u001F"u8);
 
     #endregion
+
+    /// <summary>
+    /// A day number and its calendar date: the last date <see cref="AppendFileTime"/> formatted for a caller, keyed by
+    /// its day number plus one so the default value matches no day.
+    /// </summary>
+    /// <param name="Days">Days since 0001-01-01, plus one (0 = empty).</param>
+    /// <param name="Year">Year.</param>
+    /// <param name="Month">Month, 1..12.</param>
+    /// <param name="Day">Day of the month.</param>
+    internal readonly record struct DateMemo(int Days, ushort Year, byte Month, byte Day);
 }

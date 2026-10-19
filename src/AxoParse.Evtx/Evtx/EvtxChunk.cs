@@ -230,7 +230,7 @@ public class EvtxChunk
         int expectedRecords = ExpectedRecordCount(header);
         List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, header.FreeSpaceOffset, expectedRecords);
 
-        BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, wevtCache, salvage);
+        BinXmlParser binXml = new(fileData, chunkFileOffset, compiledCache, wevtCache, salvage);
         return RenderRecords(header, templates, records, binXml, format, headerless: false)!;
     }
 
@@ -279,7 +279,7 @@ public class EvtxChunk
             return null;
 
         Dictionary<uint, BinXmlTemplateDefinition> templates = new();
-        BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, wevtCache, salvage);
+        BinXmlParser binXml = new(fileData, chunkFileOffset, compiledCache, wevtCache, salvage);
         return RenderRecords(default, templates, records, binXml, format, headerless: true);
     }
 
@@ -309,20 +309,10 @@ public class EvtxChunk
                                  bool salvage = false)
     {
         ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, ChunkSize);
-        Dictionary<uint, BinXmlTemplateDefinition> templates;
-        uint dataEnd;
-        if (headerless)
-        {
-            templates = new Dictionary<uint, BinXmlTemplateDefinition>();
-            dataEnd = (uint)chunkData.Length;
-        }
-        else
-        {
-            EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
-            templates = BinXmlTemplateDefinition.PreloadFromChunk(chunkData,
-                MemoryMarshal.Cast<byte, uint>(chunkData.Slice(384, 128)), chunkFileOffset);
-            dataEnd = header.FreeSpaceOffset;
-        }
+        // Rendering reads template definitions straight from the chunk, so the template table isn't preloaded here
+        uint dataEnd = headerless
+            ? (uint)chunkData.Length
+            : EvtxChunkHeader.ParseEvtxChunkHeader(chunkData).FreeSpaceOffset;
 
         // Render each record as soon as the walk finds it, while its bytes are still in cache. The parser is created
         // on the first record, as Parse/ParseHeaderless only construct it once records exist (its constructor
@@ -333,7 +323,7 @@ public class EvtxChunk
         int offset = _chunkHeaderSize;
         while (TryReadNextRecord(chunkData, chunkFileOffset, scanEnd, ref offset, out EvtxRecord record))
         {
-            binXml ??= new BinXmlParser(fileData, chunkFileOffset, templates, compiledCache, wevtCache,
+            binXml ??= new BinXmlParser(fileData, chunkFileOffset, compiledCache, wevtCache,
                 salvage);
             int before = sink.WrittenCount;
             try

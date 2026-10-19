@@ -389,8 +389,9 @@ internal sealed partial class BinXmlParser
     #region Non-Public Methods
 
     /// <summary>
-    /// Compiles an EVTX chunk template body into a <see cref="TemplateProgram"/>, which the XML and JSON writers lower
-    /// into their compiled forms. Returns null if the body runs past the chunk or can't be compiled statically.
+    /// Compiles an EVTX chunk template body into a <see cref="TemplateProgram"/>, which the XML and JSON writers turn
+    /// into their compiled forms. Returns null if the body runs past the chunk, is corrupt, or can't be compiled
+    /// statically.
     /// </summary>
     /// <param name="defDataOffset">Chunk-relative offset of the template definition (before the 24-byte header).</param>
     /// <param name="dataSize">Size in bytes of the template body (after the 24-byte header).</param>
@@ -400,8 +401,17 @@ internal sealed partial class BinXmlParser
         int tplBodyFileOffset = _chunkFileOffset + defDataOffset + 24;
         if (tplBodyFileOffset + dataSize > _chunkEnd) return null;
 
-        return TemplateProgramCompiler.Compile(_fileData.AsSpan(tplBodyFileOffset, dataSize),
-            new ChunkNameReader(this, defDataOffset + 24));
+        try
+        {
+            return TemplateProgramCompiler.Compile(_fileData.AsSpan(tplBodyFileOffset, dataSize),
+                new ChunkNameReader(this, defDataOffset + 24));
+        }
+        catch (ArgumentOutOfRangeException)
+        {
+            // A corrupt body whose tokens run past its end doesn't compile, like any other corrupt template: it falls
+            // back to the provider template or the decoder, instead of failing every record that uses it
+            return null;
+        }
     }
 
     #endregion
