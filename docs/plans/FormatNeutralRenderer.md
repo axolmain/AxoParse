@@ -1,8 +1,9 @@
 # Plan: format-neutral renderer ("decode once, write many")
 
-Branch: `features/format-neutral-renderer` (rebased onto `master` @ `09f130e`, v0.2.0).
-Status: **plan only — no code changes yet.** Revised 2026-10-15. Start after PRs #11–#14 (golden output test,
-checksum/robustness fixes, pipelined `WriteTo`, corruption test) are merged, and rebase onto that.
+Branch: `features/format-neutral-renderer` (rebased onto `master` @ `a019756`, v0.2.1).
+Status: **plan only — no code changes yet.** Revised 2026-10-18. Prerequisites shipped in v0.2.1 (#15): golden output
+test, checksum/robustness fixes, pipelined `WriteTo`, corruption test. Streaming input (see Out of scope) is being done
+first, also for 0.3.0.
 Release: **0.3.0** (minor: adds `WriteTo(..., wevtCache)` and makes `WevtCache` do something).
 
 ## Goal
@@ -24,7 +25,7 @@ embedded template is missing or corrupt, and only when a `WevtCache` is passed.
 ## Where we are
 
 Hyperfine, AOT CLI, 30 MB `security_big_sample.evtx`, 2025 MacBook Air (M4: 4 P + 6 E cores). These numbers include
-the pipelined `WriteTo` and bench CLI changes from #13:
+the pipelined `WriteTo` and bench CLI changes from #15:
 
 | Case | AxoParse | Rust `evtx` (same runs) |
 |---|---|---|
@@ -139,7 +140,7 @@ quoting (writer callbacks). Phase 7 then tries per-gap type caching and a small 
 with `tools/bench/bdn-run.ps1` + `bdn-compare.ps1` (>3% and non-overlapping 99.9% CIs) for internals, and hyperfine
 (alternating base/candidate/base) end to end.
 
-0. **Safety net — done** (#11, #14). The original phase-0 scripts only ever existed in a temp folder on the Windows
+0. **Safety net — done** (#15, v0.2.1). The original phase-0 scripts only ever existed in a temp folder on the Windows
    laptop and were rebuilt portably instead of recovered:
    - `GoldenOutputTests`: SHA-256 per (sample, format) of `WriteTo` output at 1 and 8 threads, re-bless with
      `AXOPARSE_REBLESS=1`, dumps mismatching output for diffing.
@@ -200,7 +201,8 @@ Expected: BinXml rendering code roughly halves (≈2,700 → ≈1,300 lines); re
 - **Streaming input** (`WriteTo(path or SafeFileHandle, …)`): the biggest remaining 8-thread lever. Workers would read
   their own 64 KB chunk (as `ParseStandalone` already does), overlapping the read with rendering and keeping memory
   flat. Rust peaks at 3–10 MB vs our 39–49 MB, because we hold the whole file. My estimate is ~10–11 ms at 8 threads.
-  It's an API addition, so it ships in a minor release, and it's independent of this refactor.
-- ~~8-thread path~~: done in #13 (pipelined `WriteTo` plus bench CLI changes, −17%).
-- ~~Unchecked sizes from file data~~: done in #12 (record ID range, substitution count) and #14 (record size, template
-  pointer/size overflows found by the corruption test).
+  It's an API addition, so it ships in a minor release, and it's independent of this refactor. **In progress, ahead of
+  this refactor (0.3.0).**
+- ~~8-thread path~~: done in #15 (pipelined `WriteTo` plus bench CLI changes, −17%).
+- ~~Unchecked sizes from file data~~: done in #15 (record ID range, substitution count, and the record size and
+  template pointer/size overflows found by the corruption test).
