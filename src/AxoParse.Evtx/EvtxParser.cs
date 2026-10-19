@@ -472,6 +472,8 @@ public static class EvtxParser
     private static int WriteAll(ChunkSource source, Stream output, EvtxOptions options, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(output);
+        if (options.FieldsOnly)
+            throw new ArgumentException("WriteTo writes rendered output; EvtxOptions.FieldsOnly is not supported.", nameof(options));
         EvtxFileHeader header = source.ReadHeader();
         long[] offsets = ChunkOffsets(header, source.Length);
         bool xmlRoot = options.XmlEventsRoot && (options.Format == OutputFormat.Xml);

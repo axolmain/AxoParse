@@ -1,6 +1,35 @@
 namespace AxoParse.Evtx;
 
 /// <summary>
+/// Typed fields an <see cref="EvtxParser"/> operation reads for each event (<see cref="EvtxOptions.Fields"/>).
+/// </summary>
+[Flags]
+public enum EvtxFields
+{
+    /// <summary>
+    /// No typed fields; only the rendered output.
+    /// </summary>
+    None = 0,
+
+    /// <summary>
+    /// The <c>System</c> fields: <see cref="EvtxEvent.EventId"/>, <see cref="EvtxEvent.Provider"/>,
+    /// <see cref="EvtxEvent.Level"/>, <see cref="EvtxEvent.TimeCreated"/>, <see cref="EvtxEvent.Channel"/>, ….
+    /// </summary>
+    System = 0x1,
+
+    /// <summary>
+    /// The EventData/UserData name/value pairs (<see cref="EvtxEvent.EventData"/>), which cost a formatted value per
+    /// data item. Implies <see cref="System"/>.
+    /// </summary>
+    EventData = 0x2,
+
+    /// <summary>
+    /// Every typed field.
+    /// </summary>
+    All = System | EventData,
+}
+
+/// <summary>
 /// Settings for every <see cref="EvtxParser"/> operation. Immutable: create one with an object initializer
 /// (<c>new EvtxOptions { Format = OutputFormat.JsonStructured, MaxThreads = 4 }</c>) or derive one with <c>with</c>, and share it
 /// freely across threads and calls.
@@ -44,6 +73,21 @@ public sealed record EvtxOptions
     /// won't compile; a usable embedded template is never replaced. Null (the default) for none.
     /// </summary>
     public WevtCache? WevtCache { get; init; }
+
+    /// <summary>
+    /// Typed fields to read for each event (<see cref="EvtxEvent.EventId"/>, <see cref="EvtxEvent.Provider"/>, …
+    /// and <see cref="EvtxEvent.EventData"/>). None by default, so parses that only need the rendered output don't pay
+    /// for them; reading a field that wasn't requested throws. Not used by <c>WriteTo</c>.
+    /// </summary>
+    public EvtxFields Fields { get; init; }
+
+    /// <summary>
+    /// When true, events are not rendered: <see cref="EvtxEvent.Utf8"/> is empty and only the typed fields are read
+    /// (System fields always, plus EventData when <see cref="Fields"/> asks for it), which is much faster for counting
+    /// and statistics. <see cref="Format"/> is ignored, and a record's diagnostic only reports a failure to read its
+    /// fields. Not allowed with <c>WriteTo</c>.
+    /// </summary>
+    public bool FieldsOnly { get; init; }
 
     /// <summary>
     /// <see cref="EvtxParser.WriteTo(string, Stream, EvtxOptions?, CancellationToken)"/> with XML output only: wrap the

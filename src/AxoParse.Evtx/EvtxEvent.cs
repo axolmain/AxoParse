@@ -3,9 +3,16 @@ using System.Text;
 namespace AxoParse.Evtx;
 
 /// <summary>
-/// One event record: its header fields, its rendered output and any decoding diagnostic. A small view over the
-/// <see cref="EvtxChunk"/> that holds the data, so copying it is cheap and reading it allocates nothing (except
-/// <see cref="GetText"/>). Immutable and safe to read from any thread.
+/// One event record: its header fields, its typed <c>System</c> fields, its rendered output and any decoding
+/// diagnostic. A small view over the <see cref="EvtxChunk"/> that holds the data, so copying it is cheap and reading it
+/// allocates nothing (except <see cref="GetText"/> and EventData values). Immutable and safe to read from any thread.
+/// <para>
+/// The typed fields (<see cref="EventId"/>, <see cref="Provider"/>, …) are read only when requested with
+/// <see cref="EvtxOptions.Fields"/> (or <see cref="EvtxOptions.FieldsOnly"/>); reading one otherwise throws
+/// <see cref="InvalidOperationException"/>. They come from the event template's substitution values as the record is
+/// parsed, not from the rendered text, and are the same in every output format. A field the event doesn't have keeps
+/// its default (0, or null).
+/// </para>
 /// </summary>
 public readonly struct EvtxEvent
 {
@@ -25,6 +32,100 @@ public readonly struct EvtxEvent
     #endregion
 
     #region Properties
+
+    /// <summary>
+    /// <c>System/Correlation@ActivityID</c>, or null.
+    /// </summary>
+    public Guid? ActivityId =>
+        (System.Present & SystemPresence.ActivityId) != 0 ? System.ActivityId : null;
+
+    /// <summary>
+    /// <c>System/Channel</c> (e.g. <c>Security</c>), or null.
+    /// </summary>
+    public string? Channel => System.Channel;
+
+    /// <summary>
+    /// <c>System/Computer</c>, or null.
+    /// </summary>
+    public string? Computer => System.Computer;
+
+    /// <summary>
+    /// The event's EventData or UserData name/value pairs. Read only with <see cref="EvtxFields.EventData"/>.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The log was parsed without <see cref="EvtxFields.EventData"/>.</exception>
+    public EvtxEventData EventData
+    {
+        get
+        {
+            if (_chunk.Fields?.PairEnds is not { } ends)
+                throw new InvalidOperationException("EventData was not read: parse with EvtxOptions.Fields = EvtxFields.EventData.");
+            return new EvtxEventData(_chunk.Fields, _index == 0 ? 0 : ends[_index - 1], ends[_index]);
+        }
+    }
+
+    /// <summary>
+    /// <c>System/EventID</c>.
+    /// </summary>
+    public ushort EventId => System.EventId;
+
+    /// <summary>
+    /// <c>System/Keywords</c>.
+    /// </summary>
+    public ulong Keywords => System.Keywords;
+
+    /// <summary>
+    /// <c>System/Level</c> (1 critical, 2 error, 3 warning, 4 information, 5 verbose; 0 for log-always events).
+    /// </summary>
+    public byte Level => System.Level;
+
+    /// <summary>
+    /// <c>System/Opcode</c>.
+    /// </summary>
+    public byte Opcode => System.Opcode;
+
+    /// <summary>
+    /// <c>System/Execution@ProcessID</c>.
+    /// </summary>
+    public uint ProcessId => System.ProcessId;
+
+    /// <summary>
+    /// <c>System/Provider@Name</c> (e.g. <c>Microsoft-Windows-Security-Auditing</c>), or null.
+    /// </summary>
+    public string? Provider => System.Provider;
+
+    /// <summary>
+    /// <c>System/Provider@Guid</c>, or null.
+    /// </summary>
+    public Guid? ProviderGuid =>
+        (System.Present & SystemPresence.ProviderGuid) != 0 ? System.ProviderGuid : null;
+
+    /// <summary>
+    /// <c>System/Task</c>.
+    /// </summary>
+    public ushort Task => System.Task;
+
+    /// <summary>
+    /// <c>System/Execution@ThreadID</c>.
+    /// </summary>
+    public uint ThreadId => System.ThreadId;
+
+    /// <summary>
+    /// <c>System/TimeCreated@SystemTime</c> in UTC; <see cref="WrittenTimeUtc"/> when the event has none.
+    /// </summary>
+    public DateTime TimeCreated =>
+        (System.Present & SystemPresence.TimeCreated) != 0
+            ? new DateTime(System.TimeCreatedTicks, DateTimeKind.Utc)
+            : WrittenTimeUtc;
+
+    /// <summary>
+    /// <c>System/Security@UserID</c> in SDDL form (e.g. <c>S-1-5-18</c>), or null.
+    /// </summary>
+    public string? UserId => System.UserId;
+
+    /// <summary>
+    /// <c>System/Version</c>.
+    /// </summary>
+    public byte Version => System.Version;
 
     /// <summary>
     /// Decoding problem for this record, or null if it rendered cleanly.
@@ -70,6 +171,15 @@ public readonly struct EvtxEvent
             return fileTime <= _maxFileTime ? DateTime.FromFileTimeUtc((long)fileTime) : DateTime.MinValue;
         }
     }
+
+    #endregion
+
+    #region Non-Public Properties
+
+    /// <summary>
+    /// The record's System fields.
+    /// </summary>
+    private ref readonly SystemFields System => ref _chunk.SystemFieldsOf(_index);
 
     #endregion
 

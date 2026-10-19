@@ -40,6 +40,14 @@ next in order (writes it, or yields its events) and hands the slot back. Reading
 finish. Streaming from a path, the benchmark CLI peaks at about 8 MiB on the 30 MB sample single-threaded and 18 MiB
 with 8 threads (39 and 49 MiB when it loaded the file first).
 
+## Typed fields
+
+Typed fields are opt-in (`EvtxOptions.Fields`), so parses that don't use them pay nothing. On the 30 MB sample
+(single-threaded, AOT), reading System fields adds about a third to `Parse`'s instructions, mostly for the per-record
+values and strings; `EvtxFields.EventData` adds a formatted value per data item. With `FieldsOnly` nothing is rendered
+and a parse takes about 40% of the instructions of an XML parse (2.5x faster), which is the mode to use for counting,
+grouping and statistics.
+
 ## XML vs JSON
 
 Both formats are rendered directly from the BinXml token stream to UTF-8 — JSON is **not** converted from XML, and

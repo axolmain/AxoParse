@@ -408,15 +408,15 @@ internal sealed partial class BinXmlParser
     /// Compiles a template program for XML output (see <see cref="Lower{TWriter}"/>).
     /// </summary>
     /// <param name="program">The template's program.</param>
-    /// <returns>The compiled template, or <see cref="CompiledTemplate.DecodeDirectly"/>.</returns>
-    internal static CompiledTemplate CompileXml(TemplateProgram program) => Lower<XmlWriter>(program);
+    /// <returns>The compiled template (possibly one that <see cref="CompiledTemplate.DecodesBody"/>).</returns>
+    internal static CompiledTemplate CompileXml(TemplateProgram program) => Lower<XmlWriter>(program, keepProgram: true);
 
     /// <summary>
     /// Compiles a template program for JSON output (see <see cref="Lower{TWriter}"/>).
     /// </summary>
     /// <param name="program">The template's program.</param>
-    /// <returns>The compiled template, or <see cref="CompiledTemplate.DecodeDirectly"/>.</returns>
-    internal static CompiledTemplate CompileJson(TemplateProgram program) => Lower<JsonWriter>(program);
+    /// <returns>The compiled template (possibly one that <see cref="CompiledTemplate.DecodesBody"/>).</returns>
+    internal static CompiledTemplate CompileJson(TemplateProgram program) => Lower<JsonWriter>(program, keepProgram: true);
 
     /// <summary>
     /// Turns a template program into a compiled template by replaying it through the format's writer: the writer
@@ -424,18 +424,21 @@ internal sealed partial class BinXmlParser
     /// between values becomes the static parts. Compiled and decoded rendering therefore follow one set of rules. In
     /// XML, an attribute whose whole value is one optional substitution has its markup moved into the slot, so it is
     /// omitted when the value is empty, as the decoder does. A program whose names or text contain surrogate code units
-    /// isn't split into parts, since a surrogate at a part's edge may pair with a neighbouring value; it returns
-    /// <see cref="CompiledTemplate.DecodeDirectly"/>.
+    /// isn't split into parts, since a surrogate at a part's edge may pair with a neighbouring value; it returns a
+    /// template that <see cref="CompiledTemplate.DecodesBody"/>. Either way the template carries its
+    /// <see cref="TemplateFields"/>.
     /// </summary>
     /// <typeparam name="TWriter">Output format.</typeparam>
     /// <param name="program">The template's program.</param>
-    /// <returns>The compiled template, or <see cref="CompiledTemplate.DecodeDirectly"/>.</returns>
-    private static CompiledTemplate Lower<TWriter>(TemplateProgram program)
+    /// <param name="keepProgram">True to keep the program for <see cref="CompiledTemplate.Fields"/>.</param>
+    /// <returns>The compiled template.</returns>
+    private static CompiledTemplate Lower<TWriter>(TemplateProgram program, bool keepProgram)
         where TWriter : struct, IBinXmlWriter
     {
         TemplateOp[] ops = program.Ops;
+        TemplateProgram? kept = keepProgram ? program : null;
         if (ContainsSurrogates(ops))
-            return CompiledTemplate.DecodeDirectly;
+            return new CompiledTemplate([[]], [], kept, decodesBody: true);
 
         ValueUtf8Builder vub = new(stackalloc byte[1024]);
         // Per slot: where the preceding part ends, where its conditional prefix ends, and where its suffix ends (the
@@ -542,7 +545,7 @@ internal sealed partial class BinXmlParser
         }
         parts[^1] = output[partStart..].ToArray();
         vub.Dispose();
-        return new CompiledTemplate(parts, compiled);
+        return new CompiledTemplate(parts, compiled, kept);
     }
 
     /// <summary>

@@ -71,6 +71,24 @@ Substitution values are formatted by one type switch (`BinXmlValueWriter.cs`); t
 
 `WevtCache` holds templates extracted from Windows PE binaries (WEVT_TEMPLATE resources), keyed by GUID. It's a fallback: the writers use a provider template only when a record's embedded template is missing (size 0), runs past its chunk, or doesn't compile. A usable embedded template is never replaced.
 
+## Typed fields
+
+`TemplateFields` (built from a template's `TemplateProgram` the first time a parse reads its fields) records every
+attribute value and leaf-element content with the element path leading to it, and interprets it per position in the
+event: `Event/System/EventID` content is the EventID, `Event/System/Provider@Name` the provider, a leaf under
+`Event/EventData` a pair named by its `Name` attribute, a leaf under `Event/UserData` a pair named by the element.
+Content holding an embedded BinXml value (type 0x21; Security logs keep EventData in its own template) is followed into
+that value's template instance with the position of the element holding it. Values that are literal template text
+(providers, channels, often levels) are parsed once per template; substitutions are read by type per record. A BinXml
+stream without a template instance (CAPI2 stores UserData this way) has no substitution values, so it is decoded to
+XML with the shared decoder and its fields are read from that.
+
+Fields are read as their own pass before a record is rendered (or instead of rendering, with `FieldsOnly`), so the
+rendering code is the same whether or not fields are read. Templates keep their program only in parses that read
+fields: a retained program per template grows every worker's live heap, which costs parallel parses wall time.
+`EventFieldsTests` checks every field and pair of every sample record against the record's own XML parsed with
+System.Xml.
+
 ## Corruption resilience
 
 - Chunks with invalid `ElfChnk\0` signatures are not discarded — pass 2 scans their 64KB region for `0x2A2A` record magic and recovers individual records
@@ -88,6 +106,8 @@ Substitution values are formatted by one type switch (`BinXmlValueWriter.cs`); t
 | `EvtxEvent` | 16-byte view of one record of a chunk: record ID, written time, file offset, output, diagnostic. |
 | `ChunkSource` | Where chunk bytes come from: a `byte[]`, positional reads of a file handle, or a locked seekable stream. |
 | `ChunkPipeline` | Runs per-chunk work on workers and hands results to one consumer in order (bounded ring). |
+| `TemplateFields` | A template's field positions, interpreted into typed System fields and EventData/UserData pairs. |
+| `FieldSink` / `ChunkFields` | Collect a chunk's fields per record, then hold them in exact-size arrays. |
 | `BinXmlParser` | Converts BinXml token streams to UTF-8 XML or JSON. One instance per chunk. |
 | `CompiledTemplate` | A template compiled for one format: UTF-8 static parts + substitution slots (one type and one executor for XML and JSON). |
 | `ValueUtf8Builder` | Stack-first, `ArrayPool`-backed UTF-8 builder all rendering goes through. Transcodes UTF-16 text from the file as it's appended, and gives the same bytes as encoding the whole record once (unpaired surrogates become U+FFFD). |
