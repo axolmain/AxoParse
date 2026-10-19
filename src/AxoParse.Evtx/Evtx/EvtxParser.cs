@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using AxoParse.Evtx.BinXml;
@@ -74,8 +73,8 @@ public class EvtxParser
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
-    /// <param name="wevtCache">Optional template cache built from provider PE binaries. Currently has no effect on output: its templates are
-    /// not consulted during parsing (a fallback for missing or corrupt embedded templates is planned).</param>
+    /// <param name="wevtCache">Optional provider (WEVT) templates, used only for records whose embedded template is missing, runs
+    /// past its chunk or won't compile; a usable embedded template is never replaced.</param>
     /// <param name="cancellationToken">Token to cancel the parse operation.</param>
     /// <returns>A fully parsed <see cref="EvtxParser"/> containing the file header, chunks, and aggregate record count.</returns>
     public static EvtxParser Parse(byte[] fileData, int maxThreads = 0, OutputFormat format = OutputFormat.Xml,
@@ -118,15 +117,7 @@ public class EvtxParser
             validOffsets[validCount++] = offset;
         }
 
-        // Phase 2 (parallel): parse all valid chunks
-        // Create format-specific caches to avoid overhead for the unused format
-        ConcurrentDictionary<Guid, CompiledTemplate?>? compiledCache =
-            format == OutputFormat.Xml ? new ConcurrentDictionary<Guid, CompiledTemplate?>() : null;
-        ConcurrentDictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache =
-            format == OutputFormat.Json ? new ConcurrentDictionary<Guid, CompiledJsonTemplate?>() : null;
-
-        if (compiledCache != null)
-            wevtCache?.PopulateCache(compiledCache);
+        // Phase 2 (parallel): parse all valid chunks. Each worker keeps its own compiled-template cache.
 
         EvtxChunk[] results = new EvtxChunk[validCount];
 
@@ -143,16 +134,12 @@ public class EvtxParser
                         validOffsets[i],
                         compiledCache: null,
                         compiledJsonCache: localJsonCache,
-                        format);
+                        format,
+                        wevtCache);
 
                     return localJsonCache;
                 },
-                localJsonCache =>
-                {
-                    // merge into global cache once per thread
-                    foreach (KeyValuePair<Guid, CompiledJsonTemplate?> kv in localJsonCache)
-                        compiledJsonCache!.TryAdd(kv.Key, kv.Value);
-                });
+                _ => { });
         }
         else
         {
@@ -166,16 +153,12 @@ public class EvtxParser
                         validOffsets[i],
                         compiledCache: localCache,
                         compiledJsonCache: null,
-                        format);
+                        format,
+                        wevtCache);
 
                     return localCache;
                 },
-                localCache =>
-                {
-                    // merge into global cache once per thread
-                    foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
-                        compiledCache!.TryAdd(kv.Key, kv.Value);
-                });
+                _ => { });
         }
 
         // Phase 3 (sequential): collect results from valid chunks
@@ -212,14 +195,10 @@ public class EvtxParser
                     (i, state, localJsonCache) =>
                     {
                         recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                            compiledCache: null, compiledJsonCache: localJsonCache, format);
+                            compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache);
                         return localJsonCache;
                     },
-                    localJsonCache =>
-                    {
-                        foreach (KeyValuePair<Guid, CompiledJsonTemplate?> kv in localJsonCache)
-                            compiledJsonCache!.TryAdd(kv.Key, kv.Value);
-                    });
+                    _ => { });
             }
             else
             {
@@ -229,14 +208,10 @@ public class EvtxParser
                     (i, state, localCache) =>
                     {
                         recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                            compiledCache: localCache, compiledJsonCache: null, format);
+                            compiledCache: localCache, compiledJsonCache: null, format, wevtCache);
                         return localCache;
                     },
-                    localCache =>
-                    {
-                        foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
-                            compiledCache!.TryAdd(kv.Key, kv.Value);
-                    });
+                    _ => { });
             }
 
             for (int i = 0; i < invalidCount; i++)
@@ -265,21 +240,23 @@ public class EvtxParser
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <param name="wevtCache">Optional provider (WEVT) templates for records whose embedded template is missing, runs past its
+    /// chunk or won't compile; a usable embedded template is never replaced. Last so existing positional calls still compile.</param>
     /// <returns>Number of records written, counted as <see cref="TotalRecords"/> counts them for the same input.</returns>
     public static int WriteTo(byte[] fileData, Stream output, OutputFormat format = OutputFormat.Xml,
                               int maxThreads = 0, bool validateChecksums = false,
-                              CancellationToken cancellationToken = default)
+                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null)
     {
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(fileData);
         return WriteAll(new ChunkSource(fileData, null), fileHeader.HeaderBlockSize, fileData.Length, output, format,
-            maxThreads, validateChecksums, cancellationToken);
+            maxThreads, validateChecksums, wevtCache, cancellationToken);
     }
 
     /// <summary>
     /// Streams an EVTX file from disk and writes every record's rendered output to <paramref name="output"/> as UTF-8,
     /// without loading the file into memory. Each worker reads the 64 KB chunk it is about to render, so reading
     /// overlaps rendering and memory stays at a few buffers per worker whatever the file size (files over 2 GB work).
-    /// Output and return value are identical to <see cref="WriteTo(byte[], Stream, OutputFormat, int, bool, CancellationToken)"/>
+    /// Output and return value are identical to <see cref="WriteTo(byte[], Stream, OutputFormat, int, bool, CancellationToken, WevtCache?)"/>
     /// for the same bytes. The file is opened for reading with <see cref="FileShare.ReadWrite"/>, so a log another
     /// process still has open can be read.
     /// </summary>
@@ -289,17 +266,19 @@ public class EvtxParser
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <param name="wevtCache">Optional provider (WEVT) templates for records whose embedded template is missing, runs past its
+    /// chunk or won't compile; a usable embedded template is never replaced. Last so existing positional calls still compile.</param>
     /// <returns>Number of records written, counted as <see cref="TotalRecords"/> counts them for the same input.</returns>
     public static int WriteTo(string path, Stream output, OutputFormat format = OutputFormat.Xml,
                               int maxThreads = 0, bool validateChecksums = false,
-                              CancellationToken cancellationToken = default)
+                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null)
     {
         using SafeFileHandle file = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        return WriteTo(file, output, format, maxThreads, validateChecksums, cancellationToken);
+        return WriteTo(file, output, format, maxThreads, validateChecksums, cancellationToken, wevtCache);
     }
 
     /// <summary>
-    /// Streams an EVTX file from an open handle; see <see cref="WriteTo(string, Stream, OutputFormat, int, bool, CancellationToken)"/>.
+    /// Streams an EVTX file from an open handle; see <see cref="WriteTo(string, Stream, OutputFormat, int, bool, CancellationToken, WevtCache?)"/>.
     /// Chunks are read with positional reads (<see cref="RandomAccess"/>), so the handle's file position is not used
     /// or changed and the handle stays open.
     /// </summary>
@@ -309,17 +288,19 @@ public class EvtxParser
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <param name="wevtCache">Optional provider (WEVT) templates for records whose embedded template is missing, runs past its
+    /// chunk or won't compile; a usable embedded template is never replaced. Last so existing positional calls still compile.</param>
     /// <returns>Number of records written, counted as <see cref="TotalRecords"/> counts them for the same input.</returns>
     public static int WriteTo(SafeFileHandle file, Stream output, OutputFormat format = OutputFormat.Xml,
                               int maxThreads = 0, bool validateChecksums = false,
-                              CancellationToken cancellationToken = default)
+                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null)
     {
         long length = RandomAccess.GetLength(file);
         Span<byte> headerBytes = stackalloc byte[_fileHeaderReadBytes];
         int headerLength = ChunkSource.ReadFully(file, headerBytes[..(int)Math.Min(length, _fileHeaderReadBytes)], 0);
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(headerBytes[..headerLength]);
         return WriteAll(new ChunkSource(null, file), fileHeader.HeaderBlockSize, length, output, format, maxThreads,
-            validateChecksums, cancellationToken);
+            validateChecksums, wevtCache, cancellationToken);
     }
 
     /// <summary>
@@ -331,7 +312,7 @@ public class EvtxParser
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
-    /// <param name="wevtCache">Optional template cache built from provider PE binaries. Currently has no effect on output (see
+    /// <param name="wevtCache">Optional provider (WEVT) templates for records whose embedded template is missing or corrupt (see
     /// <see cref="Parse"/>).</param>
     /// <param name="cancellationToken">Token to cancel the parse operation.</param>
     /// <returns>Events streamed in file order as chunks finish parsing.</returns>
@@ -377,15 +358,6 @@ public class EvtxParser
             validOffsets[validCount++] = offset;
         }
 
-        // Setup format-specific caches
-        ConcurrentDictionary<Guid, CompiledTemplate?>? compiledCache =
-            format == OutputFormat.Xml ? new ConcurrentDictionary<Guid, CompiledTemplate?>() : null;
-        ConcurrentDictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache =
-            format == OutputFormat.Json ? new ConcurrentDictionary<Guid, CompiledJsonTemplate?>() : null;
-
-        if (compiledCache != null)
-            wevtCache?.PopulateCache(compiledCache);
-
         int parallelism = maxThreads > 0 ? maxThreads : -1;
         // Unbounded channel: chunk count is finite (file size / 64KB) so memory is bounded by the file itself
         Channel<(int Index, EvtxChunk Chunk)> channel = Channel.CreateUnbounded<(int, EvtxChunk)>(
@@ -408,15 +380,11 @@ public class EvtxParser
                         (i, state, localJsonCache) =>
                         {
                             EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
-                                compiledCache: null, compiledJsonCache: localJsonCache, format);
+                                compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache);
                             channel.Writer.TryWrite((i, chunk));
                             return localJsonCache;
                         },
-                        localJsonCache =>
-                        {
-                            foreach (KeyValuePair<Guid, CompiledJsonTemplate?> kv in localJsonCache)
-                                compiledJsonCache!.TryAdd(kv.Key, kv.Value);
-                        });
+                        _ => { });
                 }
                 else
                 {
@@ -426,15 +394,11 @@ public class EvtxParser
                         (i, state, localCache) =>
                         {
                             EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
-                                compiledCache: localCache, compiledJsonCache: null, format);
+                                compiledCache: localCache, compiledJsonCache: null, format, wevtCache);
                             channel.Writer.TryWrite((i, chunk));
                             return localCache;
                         },
-                        localCache =>
-                        {
-                            foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
-                                compiledCache!.TryAdd(kv.Key, kv.Value);
-                        });
+                        _ => { });
                 }
 
                 // Phase 4: parallel recovery of headerless chunks (indices offset by validCount)
@@ -448,16 +412,12 @@ public class EvtxParser
                             (i, state, localJsonCache) =>
                             {
                                 EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                                    compiledCache: null, compiledJsonCache: localJsonCache, format);
+                                    compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache);
                                 if (recovered != null)
                                     channel.Writer.TryWrite((validCountCopy + i, recovered));
                                 return localJsonCache;
                             },
-                            localJsonCache =>
-                            {
-                                foreach (KeyValuePair<Guid, CompiledJsonTemplate?> kv in localJsonCache)
-                                    compiledJsonCache!.TryAdd(kv.Key, kv.Value);
-                            });
+                            _ => { });
                     }
                     else
                     {
@@ -467,16 +427,12 @@ public class EvtxParser
                             (i, state, localCache) =>
                             {
                                 EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                                    compiledCache: localCache, compiledJsonCache: null, format);
+                                    compiledCache: localCache, compiledJsonCache: null, format, wevtCache);
                                 if (recovered != null)
                                     channel.Writer.TryWrite((validCountCopy + i, recovered));
                                 return localCache;
                             },
-                            localCache =>
-                            {
-                                foreach (KeyValuePair<Guid, CompiledTemplate?> kv in localCache)
-                                    compiledCache!.TryAdd(kv.Key, kv.Value);
-                            });
+                            _ => { });
                     }
                 }
             }
@@ -550,10 +506,12 @@ public class EvtxParser
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
+    /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <returns>Number of records written.</returns>
     private static int WriteAll(ChunkSource source, int chunkStart, long length, Stream output, OutputFormat format,
-                                int maxThreads, bool validateChecksums, CancellationToken cancellationToken)
+                                int maxThreads, bool validateChecksums, WevtCache? wevtCache,
+                                CancellationToken cancellationToken)
     {
         int chunkCount = (int)Math.Max(0, (length - chunkStart) / EvtxChunk.ChunkSize);
         long[] offsets = new long[chunkCount];
@@ -563,7 +521,7 @@ public class EvtxParser
         int workers = maxThreads > 0 ? maxThreads : Environment.ProcessorCount;
         bool[] needsRecovery = new bool[chunkCount];
         int total = WriteChunks(source, offsets, chunkCount, ChunkPass.Classify, validateChecksums, needsRecovery,
-            format, workers, output, cancellationToken);
+            format, wevtCache, workers, output, cancellationToken);
 
         int recoverCount = 0;
         for (int i = 0; i < chunkCount; i++)
@@ -573,7 +531,7 @@ public class EvtxParser
         }
 
         total += WriteChunks(source, offsets, recoverCount, ChunkPass.Recover, validateChecksums: false, null,
-            format, workers, output, cancellationToken);
+            format, wevtCache, workers, output, cancellationToken);
         return total;
     }
 
@@ -593,13 +551,14 @@ public class EvtxParser
     /// <param name="validateChecksums">Classify pass only: skip chunks failing CRC32 validation.</param>
     /// <param name="needsRecovery">Classify pass only: set for each index whose region lacks the chunk magic.</param>
     /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
     /// <param name="workers">Number of rendering threads (1 = render on the calling thread).</param>
     /// <param name="output">Stream that receives the UTF-8 output.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <returns>Number of records written, counted as <see cref="EvtxChunk.RenderTo"/> counts them.</returns>
     private static int WriteChunks(ChunkSource source, long[] offsets, int count, ChunkPass pass,
                                    bool validateChecksums, bool[]? needsRecovery, OutputFormat format,
-                                   int workers, Stream output, CancellationToken cancellationToken)
+                                   WevtCache? wevtCache, int workers, Stream output, CancellationToken cancellationToken)
     {
         if (count == 0)
             return 0;
@@ -617,7 +576,7 @@ public class EvtxParser
                 cancellationToken.ThrowIfCancellationRequested();
                 sink.ResetWrittenCount();
                 total += RenderChunk(source, offsets[i], i, pass, validateChecksums, needsRecovery, chunkBuffer,
-                    xmlCache, jsonCache, format, sink);
+                    xmlCache, jsonCache, format, wevtCache, sink);
                 output.Write(sink.WrittenSpan);
             }
 
@@ -658,7 +617,7 @@ public class EvtxParser
                     ArrayBufferWriter<byte> sink = sinks[slot] ??= new ArrayBufferWriter<byte>(_initialSinkBytes);
                     sink.ResetWrittenCount();
                     kept[slot] = RenderChunk(source, offsets[i], i, pass, validateChecksums, needsRecovery,
-                        chunkBuffer, xmlCache, jsonCache, format, sink);
+                        chunkBuffer, xmlCache, jsonCache, format, wevtCache, sink);
                     ready[slot].Release();
                 }
             }
@@ -721,17 +680,18 @@ public class EvtxParser
     /// <param name="xmlCache">The worker's compiled XML template cache. Null when using JSON output.</param>
     /// <param name="jsonCache">The worker's compiled JSON template cache. Null when using XML output.</param>
     /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
     /// <param name="sink">Buffer that receives the chunk's UTF-8 output.</param>
     /// <returns>Number of records rendered from the chunk.</returns>
     private static int RenderChunk(ChunkSource source, long offset, int index, ChunkPass pass, bool validateChecksums,
                                    bool[]? needsRecovery, byte[]? chunkBuffer,
                                    Dictionary<Guid, CompiledTemplate?>? xmlCache,
                                    Dictionary<Guid, CompiledJsonTemplate?>? jsonCache,
-                                   OutputFormat format, ArrayBufferWriter<byte> sink)
+                                   OutputFormat format, WevtCache? wevtCache, ArrayBufferWriter<byte> sink)
     {
         int at = source.Load(offset, chunkBuffer, out byte[] data);
         if (pass == ChunkPass.Recover)
-            return EvtxChunk.RenderTo(data, at, headerless: true, xmlCache, jsonCache, format, sink);
+            return EvtxChunk.RenderTo(data, at, headerless: true, xmlCache, jsonCache, format, sink, wevtCache);
 
         ReadOnlySpan<byte> chunkData = data.AsSpan(at, EvtxChunk.ChunkSize);
         if (!chunkData[..8].SequenceEqual("ElfChnk\0"u8))
@@ -747,7 +707,7 @@ public class EvtxParser
                 return 0;
         }
 
-        return EvtxChunk.RenderTo(data, at, headerless: false, xmlCache, jsonCache, format, sink);
+        return EvtxChunk.RenderTo(data, at, headerless: false, xmlCache, jsonCache, format, sink, wevtCache);
     }
 
     #endregion

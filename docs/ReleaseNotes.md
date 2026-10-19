@@ -20,6 +20,16 @@
   fails (with a diagnostic), as in the Rust `evtx` crate, which parses each chunk from its own buffer. This only
   affects corrupt files: output for every test sample is unchanged.
 - `WriteTo` checks chunk magic and checksums on its worker threads, so `validateChecksums: true` costs less wall time.
+- **`WevtCache` now works, as a fallback.** When a record's embedded template is missing (size 0), runs past its chunk,
+  or won't compile, the record is rendered with the provider template of the same GUID, in XML and JSON, as in the
+  Rust `evtx` crate. A usable embedded template is never replaced (tested: same-GUID provider templates leave an intact
+  log's output byte-identical). Provider templates now compile with the same compiler as embedded ones, so a
+  recovered record renders exactly as it would have with its own template. The old WEVT compiler wrote empty elements
+  as `/>` and kept empty optional attributes.
+- **API:** the three `WriteTo` overloads take `WevtCache? wevtCache = null` as their **last** parameter, after the
+  cancellation token, so existing calls still compile. Compiled callers need a rebuild (the method signatures changed).
+- Template compilation now goes through one format-neutral compiler (phases 1–3 of the renderer refactor). It removes
+  the separate XML, JSON and WEVT template compilers (~880 lines). Output is unchanged.
 
 ---
 
@@ -115,7 +125,7 @@ High-performance .NET library for parsing Windows Event Log (.evtx) files.
 - BinXml decompilation — converts binary XML token streams to standard XML or UTF-8 JSON
 - Template pre-compilation — compiles BinXml templates once for zero overhead on repeated renders
 - WEVT template extraction — extracts and caches templates from Windows PE binaries (DLLs/EXEs). *(Not consulted
-  during parsing; see v0.2.1.)*
+  during parsing until v0.3.0, where it became a fallback for damaged templates.)*
 - Parallel chunk processing — configurable thread count for multi-core throughput
 - CRC32 validation — optional checksum verification on chunk headers and chunk data *(broken until v0.2.1)*
 - Resilient parsing — gracefully handles corrupted records, bad checksums, and malformed chunks
@@ -206,9 +216,10 @@ foreach (string diag in parser.Diagnostics)
 
 ### WEVT template cache
 
-> **Note:** `WevtCache` currently has no effect on output. `EvtxParser` never consults its templates; the
-> templates embedded in the EVTX file are always used. Making it a fallback for chunks whose embedded templates are
-> missing or corrupt (as the Rust `evtx` crate does) is planned for 0.3.0.
+`WevtCache` is a **fallback** for damaged logs, as in the Rust `evtx` crate. When a record's embedded template is
+missing (size 0), runs past its chunk, or won't compile, the record is rendered with the provider template of the
+same GUID instead. A usable embedded template is never replaced, so passing a cache doesn't change output for an
+intact log.
 
 ```csharp
 using AxoParse.Evtx.Wevt;
@@ -265,7 +276,7 @@ public static EvtxParser Parse(
 | `maxThreads`        | `0`       | Thread count. `0` or `-1` = all cores, `1` = single-threaded, `N` = N threads |
 | `format`            | `Xml`     | Output format. Chosen at parse time — compiled templates are format-specific  |
 | `validateChecksums` | `false`   | When `true`, chunks failing CRC32 validation are skipped                      |
-| `wevtCache`         | `null`    | Currently has no effect (fallback for damaged templates planned for 0.3.0)    |
+| `wevtCache`         | `null`    | Provider templates used when a record's embedded template is missing or corrupt |
 | `cancellationToken` | `default` | Cancellation token (throws `OperationCanceledException` if cancelled)         |
 
 **Returns:** Fully parsed `EvtxParser` instance.
@@ -298,8 +309,8 @@ Workers render chunks into a bounded ring of reusable buffers while the calling 
 per-record output is retained and rendering overlaps with writing.
 The stream is written to but not flushed or closed.
 
-Per-record render diagnostics aren't reported. A record that fails to render writes nothing. `WriteTo` doesn't take a
-`WevtCache`.
+Per-record render diagnostics aren't reported. A record that fails to render writes nothing. The optional `wevtCache`
+(the last parameter) works as in `Parse`.
 
 **Returns:** Number of records written, counted the same way as `TotalRecords` for the same input.
 
@@ -637,11 +648,12 @@ catch (EvtxParseException ex) when (ex.ErrorCode == EvtxParseError.InvalidFileSi
 
 **Namespace:** `AxoParse.Evtx.Wevt`
 
-Templates extracted and compiled from WEVT_TEMPLATE resources in Windows provider PE binaries.
+Templates extracted and compiled from WEVT_TEMPLATE resources in Windows provider PE binaries, keyed by GUID.
 
-> **Note:** `WevtCache` currently has no effect on output. `EvtxParser` never consults its templates; the
-> templates embedded in the EVTX file are always used. Making it a fallback for chunks whose embedded templates are
-> missing or corrupt (as the Rust `evtx` crate does) is planned for 0.3.0.
+`WevtCache` is a **fallback** for damaged logs, as in the Rust `evtx` crate. When a record's embedded template is
+missing (size 0), runs past its chunk, or won't compile, the record is rendered with the provider template of the
+same GUID instead. A usable embedded template is never replaced, so passing a cache doesn't change output for an
+intact log.
 
 #### Properties
 

@@ -51,9 +51,11 @@ BinXml templates appear once per chunk but are referenced by many records. On fi
   copying bytes
 - **Substitution metadata** — slot IDs, optional flags
 
-Compiled templates are cached by GUID in a per-thread dictionary, so each worker compiles a template the first time it meets it and reuses it for every later chunk on that thread. Subsequent records skip all template parsing and just interleave static parts with formatted substitution values. (The per-thread caches are merged into a shared dictionary afterwards, but nothing reads it.)
+Compiled templates are cached by GUID in a per-thread dictionary, so each worker compiles a template the first time it meets it and reuses it for every later chunk on that thread. Subsequent records skip all template parsing and just interleave static parts with formatted substitution values.
 
-`WevtCache` extracts templates from Windows PE binaries (WEVT_TEMPLATE resources), but parsing doesn't use them yet: it fills the shared dictionary that nothing reads. A fallback for missing or corrupt embedded templates is planned for 0.3.0.
+Every template, whether embedded in a chunk or a provider template from `WevtCache`, goes through one compiler (`TemplateProgramCompiler`). It produces a format-neutral `TemplateProgram`, a flat list of element, attribute, text and substitution ops, which the XML and JSON writers lower into their compiled forms. The two template sources differ only in how names are stored: name-table offsets versus WEVT inline names.
+
+`WevtCache` holds templates extracted from Windows PE binaries (WEVT_TEMPLATE resources), keyed by GUID. It's a fallback: the writers use a provider template only when a record's embedded template is missing (size 0), runs past its chunk, or doesn't compile. A usable embedded template is never replaced.
 
 ## Corruption resilience
 
@@ -71,7 +73,8 @@ Compiled templates are cached by GUID in a per-thread dictionary, so each worker
 | `CompiledTemplate` / `CompiledJsonTemplate` | Pre-compiled template: UTF-8 static parts + substitution slots. |
 | `ValueUtf8Builder` | Stack-first, `ArrayPool`-backed UTF-8 builder all rendering goes through. Transcodes UTF-16 text from the file as it's appended, and gives the same bytes as encoding the whole record once (unpaired surrogates become U+FFFD). |
 | `BinXmlValueFormatter` | Formats substitution values (FILETIME, GUID, SID, hex, numbers) straight to UTF-8 with the invariant culture. |
-| `WevtCache` | Templates extracted from Windows PE binaries (not yet used during parsing). |
+| `TemplateProgram` | Format-neutral compiled template (ops), lowered once per format into `CompiledTemplate` / `CompiledJsonTemplate`. |
+| `WevtCache` | Provider templates from Windows PE binaries, used as a fallback for missing or corrupt embedded templates. |
 
 ## References
 
