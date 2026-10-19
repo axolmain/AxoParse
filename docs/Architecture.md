@@ -55,12 +55,14 @@ Compiled templates are cached by GUID in a per-thread dictionary, so each worker
 
 Every template, whether embedded in a chunk or a provider template from `WevtCache`, goes through one compiler (`TemplateProgramCompiler`). It produces a format-neutral `TemplateProgram`, a flat list of element, attribute, text and substitution ops, which the XML and JSON writers lower into their compiled forms. The two template sources differ only in how names are stored: name-table offsets versus WEVT inline names.
 
+Anything that isn't a compiled template goes through one decoder (`BinXmlDecoder.cs`): a record's own token stream, embedded BinXml values (type 0x21) and templates that don't compile. It walks the tokens once and calls a format writer (`XmlWriter`, `JsonWriter`; value types, so each format gets its own specialised copy), which follows the same output rules as the compiled templates. The decoder is strict: corrupt structure fails the record (see below).
+
 `WevtCache` holds templates extracted from Windows PE binaries (WEVT_TEMPLATE resources), keyed by GUID. It's a fallback: the writers use a provider template only when a record's embedded template is missing (size 0), runs past its chunk, or doesn't compile. A usable embedded template is never replaced.
 
 ## Corruption resilience
 
 - Chunks with invalid `ElfChnk\0` signatures are not discarded — Phase 4 scans their 64KB region for `0x2A2A` record magic and recovers individual records
-- Records that fail BinXml parsing (`ArgumentOutOfRangeException`) produce empty output rather than crashing the parser
+- Records whose BinXml is corrupt fail on their own with a diagnostic and empty output, rather than crashing the parser or rendering junk. With `salvage: true` they keep their well-formed prefix instead (decoding stops at the corruption and the writers close every open element)
 - CRC32 validation is opt-in (`validateChecksums: true`) — when enabled, chunks failing header or data checksums are skipped entirely
 
 ## Key types

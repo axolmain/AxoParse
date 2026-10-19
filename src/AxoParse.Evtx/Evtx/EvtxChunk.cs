@@ -213,12 +213,14 @@ public class EvtxChunk
     /// <param name="compiledJsonCache">Thread-safe cache of compiled JSON templates shared across chunks. Null when using XML output.</param>
     /// <param name="format">Output format for rendered event records.</param>
     /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
+    /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt (with a diagnostic) instead of failing it.</param>
     /// <returns>A fully parsed <see cref="EvtxChunk"/> with rendered output.</returns>
     internal static EvtxChunk Parse(ReadOnlySpan<byte> chunkData, int chunkFileOffset,
                                     byte[] fileData,
                                     Dictionary<Guid, CompiledTemplate?>? compiledCache,
                                     Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache,
-                                    OutputFormat format = OutputFormat.Xml, WevtCache? wevtCache = null)
+                                    OutputFormat format = OutputFormat.Xml, WevtCache? wevtCache = null,
+                                    bool salvage = false)
     {
         EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
 
@@ -230,7 +232,7 @@ public class EvtxChunk
         int expectedRecords = ExpectedRecordCount(header);
         List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, header.FreeSpaceOffset, expectedRecords);
 
-        BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache, wevtCache);
+        BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache, wevtCache, salvage);
         return RenderRecords(header, templates, records, binXml, format, headerless: false)!;
     }
 
@@ -244,15 +246,16 @@ public class EvtxChunk
     /// <param name="compiledJsonCache">Thread-local cache of compiled JSON templates. Null when using XML output.</param>
     /// <param name="format">Output format for rendered event records.</param>
     /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
+    /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt (with a diagnostic) instead of failing it.</param>
     /// <returns>A fully parsed <see cref="EvtxChunk"/> with rendered output.</returns>
     internal static EvtxChunk Parse(byte[] fileData,
                                     int chunkFileOffset,
                                     Dictionary<Guid, CompiledTemplate?>? compiledCache,
                                     Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache,
-                                    OutputFormat format, WevtCache? wevtCache = null)
+                                    OutputFormat format, WevtCache? wevtCache = null, bool salvage = false)
     {
         ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, ChunkSize);
-        return Parse(chunkData, chunkFileOffset, fileData, compiledCache, compiledJsonCache, format, wevtCache);
+        return Parse(chunkData, chunkFileOffset, fileData, compiledCache, compiledJsonCache, format, wevtCache, salvage);
     }
 
     /// <summary>
@@ -266,11 +269,13 @@ public class EvtxChunk
     /// <param name="compiledJsonCache">Thread-safe cache of compiled JSON templates shared across chunks. Null when using XML output.</param>
     /// <param name="format">Output format for rendered event records.</param>
     /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
+    /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt (with a diagnostic) instead of failing it.</param>
     /// <returns>A recovered <see cref="EvtxChunk"/> with rendered output, or null if no records found.</returns>
     internal static EvtxChunk? ParseHeaderless(byte[] fileData, int chunkFileOffset,
                                                Dictionary<Guid, CompiledTemplate?>? compiledCache,
                                                Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache,
-                                               OutputFormat format = OutputFormat.Xml, WevtCache? wevtCache = null)
+                                               OutputFormat format = OutputFormat.Xml, WevtCache? wevtCache = null,
+                                               bool salvage = false)
     {
         ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, ChunkSize);
         List<EvtxRecord> records = ReadRecords(chunkData, chunkFileOffset, (uint)chunkData.Length);
@@ -278,14 +283,14 @@ public class EvtxChunk
             return null;
 
         Dictionary<uint, BinXmlTemplateDefinition> templates = new();
-        BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache, wevtCache);
+        BinXmlParser binXml = new(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache, wevtCache, salvage);
         return RenderRecords(default, templates, records, binXml, format, headerless: true);
     }
 
     /// <summary>
     /// Renders every record of the chunk at <paramref name="chunkFileOffset"/> and appends the UTF-8 output to
     /// <paramref name="sink"/> in record order. Produces the same bytes as concatenating the rendered output of
-    /// <see cref="Parse(byte[], int, Dictionary{Guid, CompiledTemplate?}?, Dictionary{Guid, CompiledJsonTemplate?}?, OutputFormat, WevtCache?)"/>
+    /// <see cref="Parse(byte[], int, Dictionary{Guid, CompiledTemplate?}?, Dictionary{Guid, CompiledJsonTemplate?}?, OutputFormat, WevtCache?, bool)"/>
     /// (or <see cref="ParseHeaderless"/> when <paramref name="headerless"/> is true), without retaining any record output.
     /// Records whose rendering throws contribute no bytes, matching the empty output those parses store for them.
     /// </summary>
@@ -297,6 +302,7 @@ public class EvtxChunk
     /// <param name="format">Output format for rendered event records.</param>
     /// <param name="sink">Buffer that receives the UTF-8 output.</param>
     /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
+    /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt (with a diagnostic) instead of failing it.</param>
     /// <returns>
     /// Records the equivalent parse would keep: every record of a normal chunk; for a headerless region,
     /// only records that rendered non-empty output.
@@ -304,7 +310,8 @@ public class EvtxChunk
     internal static int RenderTo(byte[] fileData, int chunkFileOffset, bool headerless,
                                  Dictionary<Guid, CompiledTemplate?>? compiledCache,
                                  Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache,
-                                 OutputFormat format, ArrayBufferWriter<byte> sink, WevtCache? wevtCache = null)
+                                 OutputFormat format, ArrayBufferWriter<byte> sink, WevtCache? wevtCache = null,
+                                 bool salvage = false)
     {
         ReadOnlySpan<byte> chunkData = fileData.AsSpan(chunkFileOffset, ChunkSize);
         Dictionary<uint, BinXmlTemplateDefinition> templates;
@@ -331,7 +338,8 @@ public class EvtxChunk
         int offset = _chunkHeaderSize;
         while (TryReadNextRecord(chunkData, chunkFileOffset, scanEnd, ref offset, out EvtxRecord record))
         {
-            binXml ??= new BinXmlParser(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache, wevtCache);
+            binXml ??= new BinXmlParser(fileData, chunkFileOffset, templates, compiledCache, compiledJsonCache, wevtCache,
+                salvage);
             int before = sink.WrittenCount;
             try
             {
@@ -418,7 +426,7 @@ public class EvtxChunk
 
     /// <summary>
     /// Renders every record into one UTF-8 buffer for the chunk, capturing diagnostics for records that fail
-    /// (a failed record keeps empty output). Records are rendered into a reusable per-thread scratch buffer and then
+    /// (a failed record keeps empty output) or, in salvage mode, were cut short (a salvaged record keeps its prefix). Records are rendered into a reusable per-thread scratch buffer and then
     /// copied once into an exact-size array, so a chunk costs one allocation instead of one per record.
     /// </summary>
     /// <param name="header">Chunk header (default for a headerless recovery region).</param>
@@ -446,6 +454,8 @@ public class EvtxChunk
             try
             {
                 binXml.AppendRecordUtf8(records[i], format, scratch);
+                if (binXml.SalvageDiagnostic is { } salvaged)
+                    diagnostic = $"BinXml salvaged (output ends at the corruption): {salvaged}";
             }
             catch (Exception ex)
             {

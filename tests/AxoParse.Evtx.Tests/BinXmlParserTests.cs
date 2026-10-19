@@ -98,6 +98,29 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     }
 
     /// <summary>
+    /// Verifies that an entity reference whose name is defined inline (the name structure follows the name offset, as
+    /// for element names) is skipped correctly. CAPI2 record 485 carries an embedded BinXml fragment with
+    /// <c>Via: 1.1 [&amp;quot;web-proxy.shieldbase.lan&amp;quot;]</c>; reading the inline name bytes as tokens used to
+    /// truncate the event after the first <c>&amp;quot;</c>, which the Rust evtx crate renders in full.
+    /// </summary>
+    /// <param name="format">Output format.</param>
+    [Theory]
+    [InlineData(OutputFormat.Xml)]
+    [InlineData(OutputFormat.Json)]
+    public void InlineEntityNamesAreSkipped(OutputFormat format)
+    {
+        byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir,
+            "E_ShadowCopy6_windows_system32_winevt_logs_Microsoft-Windows-CAPI2%4Operational.evtx"));
+        EvtxParser parser = EvtxParser.Parse(data, 1, format, cancellationToken: TestContext.Current.CancellationToken);
+
+        EvtxEvent evt = parser.GetEvents().Single(e => e.Record.EventRecordId == 485);
+        string output = format == OutputFormat.Xml ? evt.Xml : Encoding.UTF8.GetString(evt.Json.Span);
+        Assert.True(evt.IsSuccess, evt.Diagnostic);
+        Assert.Contains("web-proxy.shieldbase.lan", output);
+        Assert.Contains("x-ms-request-id: 44210c66-701e-00db-07a5-2ae3a6000000", output);
+    }
+
+    /// <summary>
     /// Verifies that substitution values (EventID, Level, EventData, etc.) render correctly
     /// in the XML output. Regression test for a bug where substitution value offsets were
     /// span-relative instead of absolute file offsets, causing all numeric fields to read as 0

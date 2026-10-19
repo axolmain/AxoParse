@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.Text.Json;
 using AxoParse.Evtx.Evtx;
 
 namespace AxoParse.Evtx.Tests;
@@ -72,12 +73,13 @@ public class CorruptionFuzzTests
     #region Non-Public Methods
 
     /// <summary>
-    /// Parses and streams one mutated input, both XML and JSON.
+    /// Parses and streams one mutated input, both XML and JSON, then parses it again in salvage mode and checks that
+    /// every non-empty JSON record, salvaged or not, is well-formed JSON.
     /// </summary>
     /// <param name="data">Mutated file bytes.</param>
     /// <param name="threads">Thread count for both entry points.</param>
     /// <param name="token">Test cancellation token.</param>
-    /// <returns>Null if nothing undocumented was thrown; otherwise a description of the exception.</returns>
+    /// <returns>Null if nothing undocumented was thrown and all JSON is valid; otherwise a description of the problem.</returns>
     private static string? Exercise(byte[] data, int threads, CancellationToken token)
     {
         try
@@ -86,6 +88,22 @@ public class CorruptionFuzzTests
             foreach (EvtxEvent _ in parser.GetEvents()) { }
             EvtxParser.WriteTo(data, Stream.Null, OutputFormat.Json, threads, cancellationToken: token);
             EvtxParser.WriteTo(data, Stream.Null, OutputFormat.Xml, threads, validateChecksums: true, token);
+
+            EvtxParser salvaged = EvtxParser.Parse(data, threads, OutputFormat.Json, cancellationToken: token, salvage: true);
+            foreach (EvtxEvent evt in salvaged.GetEvents())
+            {
+                if (evt.Json.IsEmpty)
+                    continue;
+                try
+                {
+                    using JsonDocument _ = JsonDocument.Parse(evt.Json);
+                }
+                catch (JsonException ex)
+                {
+                    return $"record {evt.Record.EventRecordId} ({evt.Diagnostic ?? "rendered"}) is not valid JSON: {ex.Message}";
+                }
+            }
+
             return null;
         }
         catch (EvtxParseException)
