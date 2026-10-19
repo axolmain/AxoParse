@@ -114,10 +114,12 @@ internal sealed partial class BinXmlParser
         int binxmlChunkBase = record.EventDataFileOffset - _chunkFileOffset;
         int pos = 0;
         _salvageDiagnostic = null;
-        if (format == OutputFormat.JsonStructured)
+        if (format == OutputFormat.Xml)
+            DecodeTopLevel<XmlWriter>(eventData, ref pos, binxmlChunkBase, ref vub, recordLevel: true, escaped: false);
+        else if (format == OutputFormat.JsonStructured)
             DecodeTopLevel<JsonWriter>(eventData, ref pos, binxmlChunkBase, ref vub, recordLevel: true, escaped: false);
         else
-            DecodeTopLevel<XmlWriter>(eventData, ref pos, binxmlChunkBase, ref vub, recordLevel: true, escaped: false);
+            RenderFlatJson(record, ref vub);
     }
 
     #endregion

@@ -372,6 +372,16 @@ internal ref struct ValueUtf8Builder : IDisposable
     }
 
     /// <summary>
+    /// Discards everything written after the first <paramref name="length"/> bytes (and any held-back surrogate).
+    /// </summary>
+    /// <param name="length">Bytes to keep; at most <see cref="Length"/>.</param>
+    public void Truncate(int length)
+    {
+        _pos = length;
+        _pendingHighSurrogate = '\0';
+    }
+
+    /// <summary>
     /// Flushes any held-back high surrogate and returns the complete UTF-8 output.
     /// </summary>
     /// <returns>A span over all bytes written.</returns>

@@ -48,6 +48,7 @@ public class MalformedInputTests
     [Theory]
     [InlineData(OutputFormat.Xml)]
     [InlineData(OutputFormat.JsonStructured)]
+    [InlineData(OutputFormat.Json)]
     public void HugeSubstitutionCountFailsRecordWithoutLargeAllocation(OutputFormat format)
     {
         CancellationToken token = TestContext.Current.CancellationToken;

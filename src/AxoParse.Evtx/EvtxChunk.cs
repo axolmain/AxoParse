@@ -242,7 +242,7 @@ public sealed class EvtxChunk
         int expectedRecords = ExpectedRecordCount(header);
         List<EvtxRecord> records = ReadRecords(chunkData, at, header.FreeSpaceOffset, expectedRecords);
 
-        BinXmlParser binXml = new(data, at, compiledCache, options.WevtCache, options.Salvage, ReadsFields(options));
+        BinXmlParser binXml = new(data, at, compiledCache, options.WevtCache, options.Salvage, KeepsPrograms(options));
         return RenderRecords(header, fileOffset, at, records, binXml, options, headerless: false)!;
     }
 
@@ -266,7 +266,7 @@ public sealed class EvtxChunk
         if (records.Count == 0)
             return null;
 
-        BinXmlParser binXml = new(data, at, compiledCache, options.WevtCache, options.Salvage, ReadsFields(options));
+        BinXmlParser binXml = new(data, at, compiledCache, options.WevtCache, options.Salvage, KeepsPrograms(options));
         return RenderRecords(default, fileOffset, at, records, binXml, options, headerless: true);
     }
 
@@ -324,7 +324,8 @@ public sealed class EvtxChunk
             if ((filter != null) && !filter.MatchesRecordId(record.EventRecordId))
                 continue;
 
-            binXml ??= new BinXmlParser(data, at, compiledCache, options.WevtCache, options.Salvage, fields != null);
+            binXml ??= new BinXmlParser(data, at, compiledCache, options.WevtCache, options.Salvage,
+                (fields != null) || (format == OutputFormat.Json));
             if ((fields != null) && !MatchesFields(binXml, record, format, fields, filter!, out _))
                 continue;
 
@@ -549,6 +550,14 @@ public sealed class EvtxChunk
     /// the filter checks fields.</returns>
     private static bool ReadsFields(EvtxOptions options) =>
         (options.Fields != EvtxFields.None) || options.FieldsOnly || (RecordFilter.For(options.Filter)?.NeedsFields == true);
+
+    /// <summary>
+    /// True if templates compiled for a parse with <paramref name="options"/> must keep their programs: fields are read
+    /// from them, and compact JSON is built from them.
+    /// </summary>
+    /// <param name="options">Parse options.</param>
+    /// <returns>True when fields are read or the format is <see cref="OutputFormat.Json"/>.</returns>
+    private static bool KeepsPrograms(EvtxOptions options) => ReadsFields(options) || (options.Format == OutputFormat.Json);
 
     /// <summary>
     /// Reads a record's fields into <paramref name="fields"/> (a new record) and checks them against the filter.

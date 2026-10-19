@@ -31,12 +31,20 @@ Every other rendering change affects corrupt input only. `WriteTo` now writes a 
   `EvtxFileHeader.ParseEvtxFileHeader`.
 - **Typed diagnostics:** `EvtxDiagnostic` (`Kind`, `RecordId`, `FileOffset`, `Message`) replaces diagnostic strings
   (messages keep their text). `EvtxLog.Diagnostics` now lists record diagnostics as well as skipped chunks.
-- **`OutputFormat.Json` is renamed `OutputFormat.JsonStructured`** (same bytes).
+- **`OutputFormat.Json` is renamed `OutputFormat.JsonStructured`** (same bytes), and **`OutputFormat.Json` is now the
+  new compact format** (see New). Code that asked for `Json` gets the compact shape; ask for `JsonStructured` to keep
+  the old one.
 - Internal now: `EvtxRecord`, `BinXmlTemplateDefinition`, `Crc32`, and the header `Parse*` / `Validate*Checksum`
   methods.
 
 **New:**
 
+- **Compact JSON** (`OutputFormat.Json`): `{"System":{"EventID":4624,…},"EventData":{"TargetUserName":"…",…}}` with
+  attributes as plain keys, EventData keyed by `Name`, repeated elements as arrays, typed values (numbers, booleans,
+  arrays) and embedded BinXml nested in place; documented in `docs/JsonFormat.md`. Every record of every sample matches
+  its own XML under those rules. Templates are compiled into JSON plans, so a record is written straight from its
+  values (templates whose shape varies more use a tree; both give identical bytes). About 1.5x the instructions of
+  structured JSON on the 30 MB sample.
 - **Typed fields** (opt-in with `EvtxOptions.Fields`): `EvtxEvent.EventId`, `Version`, `Level`, `Task`, `Opcode`,
   `Keywords`, `TimeCreated`, `Provider`, `ProviderGuid`, `Channel`, `Computer`, `ProcessId`, `ThreadId`, `UserId`,
   `ActivityId`, and `EventData` (EventData/UserData name/value pairs, `TryGetValue`). Read from each template's
@@ -427,7 +435,8 @@ public readonly record struct EvtxDiagnostic(EvtxDiagnosticKind Kind, ulong? Rec
 public enum OutputFormat
 {
     Xml,            // The event's XML, as Event Viewer shows it
-    JsonStructured  // Lossless JSON of the XML tree: {"#name", "#attrs", "#content"} per element
+    JsonStructured, // Lossless JSON of the XML tree: {"#name", "#attrs", "#content"} per element
+    Json            // Compact JSON with typed values (docs/JsonFormat.md)
 }
 ```
 

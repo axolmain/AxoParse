@@ -87,6 +87,36 @@ internal sealed class CompiledTemplate
     public bool DecodesBody { get; }
 
     /// <summary>
+    /// The program the template was compiled from, or null when it wasn't kept (see the constructor).
+    /// </summary>
+    public TemplateProgram? Program => _program;
+
+    /// <summary>
+    /// The template's compact JSON plan with its root under <paramref name="parentName"/>, built on first use (one per
+    /// parent kind: EventData keys items by Name, System marks numeric fields), or null if the template's shape can't
+    /// be planned or its program wasn't kept. Unsynchronised publish: racing threads build identical plans.
+    /// </summary>
+    /// <param name="parentName">Name of the element the root sits in, or null at the document level.</param>
+    /// <returns>The plan, or null.</returns>
+    public JsonPlan? JsonPlanFor(string? parentName)
+    {
+        int variant = parentName switch
+        {
+            "EventData" => 1,
+            "System" => 2,
+            _ => 0,
+        };
+        object? cached = (_jsonPlans ??= new object?[3])[variant];
+        if (cached == null)
+        {
+            cached = (_program is { } program ? JsonPlan.Compile(program, parentName) : null) ?? (object)_noPlan;
+            _jsonPlans[variant] = cached;
+        }
+
+        return cached as JsonPlan;
+    }
+
+    /// <summary>
     /// The template's typed fields and EventData/UserData pairs (format-neutral, built from the same program on first
     /// use, so parses that don't read fields never pay for them). Unsynchronised publish: racing threads build
     /// identical results.
@@ -130,6 +160,17 @@ internal sealed class CompiledTemplate
     /// Backing field of <see cref="Fields"/>.
     /// </summary>
     private TemplateFields? _fields;
+
+    /// <summary>
+    /// Compact JSON plans by parent kind: a <see cref="JsonPlan"/>, <see cref="_noPlan"/> if the template can't be
+    /// planned, or null before first use.
+    /// </summary>
+    private object?[]? _jsonPlans;
+
+    /// <summary>
+    /// Marks a template that has no compact JSON plan.
+    /// </summary>
+    private static readonly object _noPlan = new();
 
     /// <summary>
     /// The program the template was compiled from, or null when fields are never read from this template.

@@ -112,7 +112,7 @@ public class GoldenOutputTests
     /// </summary>
     /// <param name="format">Rendered format.</param>
     /// <returns><c>xml</c> or <c>json</c>.</returns>
-    private static string Extension(OutputFormat format) => format == OutputFormat.JsonStructured ? "json" : "xml";
+    private static string Extension(OutputFormat format) => format == OutputFormat.Xml ? "xml" : "json";
 
     /// <summary>
     /// Builds the golden-file key for a sample rendered in a format.
@@ -121,7 +121,7 @@ public class GoldenOutputTests
     /// <param name="fileName">Sample file name (no directory).</param>
     /// <returns>Key of the form <c>xml/security.evtx</c> or <c>json-structured/security.evtx</c>.</returns>
     private static string Key(OutputFormat format, string fileName) =>
-        $"{(format == OutputFormat.JsonStructured ? "json-structured" : "xml")}/{fileName}";
+        $"{format switch { OutputFormat.JsonStructured => "json-structured", OutputFormat.Json => "json", _ => "xml" }}/{fileName}";
 
     /// <summary>
     /// Reads the golden hash file. Each non-comment line is <c>&lt;sha256&gt; &lt;format&gt;/&lt;file&gt;</c>.
@@ -170,7 +170,7 @@ public class GoldenOutputTests
     /// </summary>
     private const string _reblessVariable = "AXOPARSE_REBLESS";
 
-    private static readonly OutputFormat[] _formats = [OutputFormat.Xml, OutputFormat.JsonStructured];
+    private static readonly OutputFormat[] _formats = [OutputFormat.Xml, OutputFormat.JsonStructured, OutputFormat.Json];
 
     /// <summary>
     /// Golden hash file in the test project's source tree (read and written in place, not copied to bin).
