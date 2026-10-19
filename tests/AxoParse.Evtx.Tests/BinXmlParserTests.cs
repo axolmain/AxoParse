@@ -105,7 +105,7 @@ public class BinXmlParserTests(ITestOutputHelper testOutputHelper)
     /// <param name="format">Output format.</param>
     [Theory]
     [InlineData(OutputFormat.Xml)]
-    [InlineData(OutputFormat.Json)]
+    [InlineData(OutputFormat.JsonStructured)]
     public void InlineEntityNamesAreSkipped(OutputFormat format)
     {
         byte[] data = File.ReadAllBytes(Path.Combine(_testDataDir,

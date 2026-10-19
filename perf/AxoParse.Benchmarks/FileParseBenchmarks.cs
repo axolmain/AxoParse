@@ -23,7 +23,7 @@ public class FileParseBenchmarks
     /// <summary>
     /// Output format rendered for each record.
     /// </summary>
-    [Params(OutputFormat.Xml, OutputFormat.Json)]
+    [Params(OutputFormat.Xml, OutputFormat.JsonStructured)]
     public OutputFormat Format { get; set; }
 
     /// <summary>

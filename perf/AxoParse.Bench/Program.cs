@@ -11,8 +11,12 @@ for (int i = 1; i < args.Length; i++)
         threads = int.Parse(args[++i], NumberStyles.Integer, NumberFormatInfo.InvariantInfo);
     else if ((args[i] == "-o") && (i + 1 < args.Length))
     {
-        // Ordinal comparison: culture-aware casing would initialise globalization and load ICU (~5 ms on Windows)
-        format = string.Equals(args[++i], "json", StringComparison.OrdinalIgnoreCase) ? OutputFormat.Json : OutputFormat.Xml;
+        // Ordinal comparison: culture-aware casing would initialise globalization and load ICU (~5 ms on Windows).
+        // "json" is the lossless structured JSON, the format the benchmark scripts compare with Rust's JSON
+        string name = args[++i];
+        bool json = string.Equals(name, "json", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(name, "json-structured", StringComparison.OrdinalIgnoreCase);
+        format = json ? OutputFormat.JsonStructured : OutputFormat.Xml;
     }
 }
 

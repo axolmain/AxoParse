@@ -85,10 +85,10 @@ public class CorruptionFuzzTests
         {
             EvtxLog parser = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = OutputFormat.Xml }, token);
             foreach (EvtxEvent _ in parser.Events) { }
-            EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.Json, MaxThreads = threads }, token);
+            EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.JsonStructured, MaxThreads = threads }, token);
             EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = threads, ValidateChecksums = true }, token);
 
-            EvtxLog salvaged = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = OutputFormat.Json, Salvage = true }, token);
+            EvtxLog salvaged = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = OutputFormat.JsonStructured, Salvage = true }, token);
             foreach (EvtxEvent evt in salvaged.Events)
             {
                 if (evt.Utf8.IsEmpty)

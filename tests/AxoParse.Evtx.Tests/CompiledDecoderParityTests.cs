@@ -78,7 +78,7 @@ public class CompiledDecoderParityTests(ITestOutputHelper output)
                 continue;
             }
 
-            foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.Json })
+            foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.JsonStructured })
             {
                 Dictionary<Guid, CompiledTemplate?> cache = new();
                 BinXmlParser compiled = new(data, offset, cache);

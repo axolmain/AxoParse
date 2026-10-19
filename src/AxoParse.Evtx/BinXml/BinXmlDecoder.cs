@@ -879,7 +879,7 @@ internal sealed partial class BinXmlParser
         public static bool ConsumesProcessingInstructions => true;
 
         /// <inheritdoc/>
-        public static OutputFormat Format => OutputFormat.Json;
+        public static OutputFormat Format => OutputFormat.JsonStructured;
 
         /// <inheritdoc/>
         public static bool PadsHexIntegers => true;

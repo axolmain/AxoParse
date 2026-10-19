@@ -33,7 +33,7 @@ public class WevtFallbackTests
         Assert.StartsWith("<Event><Data>", xml.GetText());
         Assert.EndsWith("</Data></Event>", xml.GetText());
 
-        EvtxEvent json = EvtxParser.Parse(corrupted, new EvtxOptions { MaxThreads = 1, Format = OutputFormat.Json, WevtCache = cache }, token)
+        EvtxEvent json = EvtxParser.Parse(corrupted, new EvtxOptions { MaxThreads = 1, Format = OutputFormat.JsonStructured, WevtCache = cache }, token)
             .Events.First();
         Assert.True(json.IsSuccess, json.Diagnostic?.Message);
         string jsonText = Encoding.UTF8.GetString(json.Utf8.Span);
@@ -71,7 +71,7 @@ public class WevtFallbackTests
         WevtCache cache = new();
         Assert.True(cache.AddTemplate(guid, MinimalEventDataTemplate()));
 
-        foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.Json })
+        foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.JsonStructured })
         {
             using MemoryStream plain = new();
             using MemoryStream cached = new();

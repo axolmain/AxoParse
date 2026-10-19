@@ -166,7 +166,7 @@ public class ChunkBenchmarks
     /// <summary>
     /// Options for JSON rendering.
     /// </summary>
-    private static readonly EvtxOptions _jsonOptions = new() { Format = OutputFormat.Json };
+    private static readonly EvtxOptions _jsonOptions = new() { Format = OutputFormat.JsonStructured };
 
     #endregion
 }

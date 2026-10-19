@@ -25,7 +25,7 @@ public class CultureInvarianceTests
             foreach (string file in Directory.GetFiles(_testDataDir, "*.evtx"))
             {
                 byte[] data = File.ReadAllBytes(file);
-                foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.Json })
+                foreach (OutputFormat format in new[] { OutputFormat.Xml, OutputFormat.JsonStructured })
                 {
                     CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
                     CultureInfo.CurrentUICulture = CultureInfo.InvariantCulture;

@@ -132,7 +132,7 @@ public sealed class WevtCache
     {
         if (!_templates.TryGetValue(guid, out WevtTemplateEntry? entry))
             return null;
-        CompiledTemplate? compiled = format == OutputFormat.Json ? entry.Json : entry.Xml;
+        CompiledTemplate? compiled = format == OutputFormat.JsonStructured ? entry.Json : entry.Xml;
         return compiled == CompiledTemplate.DecodeDirectly ? null : compiled;
     }
 

@@ -32,7 +32,7 @@ long[] RunTest(int threads, OutputFormat format)
 }
 
 int[] threadCounts = [1, 8]; // , 8
-OutputFormat[] formats = [OutputFormat.Json, OutputFormat.Xml]; // , OutputFormat.Json
+OutputFormat[] formats = [OutputFormat.JsonStructured, OutputFormat.Xml]; // , OutputFormat.JsonStructured
 
 // results[format][threadIdx][run]
 long[][][] results = new long[formats.Length][][];

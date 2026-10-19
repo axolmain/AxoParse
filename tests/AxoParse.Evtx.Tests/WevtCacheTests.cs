@@ -147,7 +147,7 @@ public class WevtCacheTests
         foreach (Guid guid in guids)
         {
             CompiledTemplate? xml = cache.Get(guid, OutputFormat.Xml);
-            CompiledTemplate? json = cache.Get(guid, OutputFormat.Json);
+            CompiledTemplate? json = cache.Get(guid, OutputFormat.JsonStructured);
             Assert.Equal(xml == null, json == null);
             if (xml != null)
                 lowered++;

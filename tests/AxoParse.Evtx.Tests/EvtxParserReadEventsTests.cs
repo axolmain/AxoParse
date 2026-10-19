@@ -17,12 +17,12 @@ public class EvtxParserReadEventsTests
     [Theory]
     [InlineData(OutputFormat.Xml, 1, false)]
     [InlineData(OutputFormat.Xml, 8, false)]
-    [InlineData(OutputFormat.Json, 1, false)]
-    [InlineData(OutputFormat.Json, 8, false)]
+    [InlineData(OutputFormat.JsonStructured, 1, false)]
+    [InlineData(OutputFormat.JsonStructured, 8, false)]
     [InlineData(OutputFormat.Xml, 1, true)]
     [InlineData(OutputFormat.Xml, 8, true)]
-    [InlineData(OutputFormat.Json, 1, true)]
-    [InlineData(OutputFormat.Json, 8, true)]
+    [InlineData(OutputFormat.JsonStructured, 1, true)]
+    [InlineData(OutputFormat.JsonStructured, 8, true)]
     public async Task EveryReadPathMatchesParseForAllTestFiles(OutputFormat format, int threads, bool validateChecksums)
     {
         CancellationToken token = TestContext.Current.CancellationToken;

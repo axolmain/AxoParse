@@ -47,7 +47,7 @@ public class MalformedInputTests
     /// <param name="format">Output format under test (XML and JSON have separate template-instance readers).</param>
     [Theory]
     [InlineData(OutputFormat.Xml)]
-    [InlineData(OutputFormat.Json)]
+    [InlineData(OutputFormat.JsonStructured)]
     public void HugeSubstitutionCountFailsRecordWithoutLargeAllocation(OutputFormat format)
     {
         CancellationToken token = TestContext.Current.CancellationToken;

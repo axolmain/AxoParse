@@ -315,7 +315,7 @@ public class EvtxParserTests(ITestOutputHelper testOutputHelper)
 
     private static readonly string _testDataDir = TestPaths.TestDataDir;
 
-    private static readonly EvtxOptions _json = new() { Format = OutputFormat.Json };
+    private static readonly EvtxOptions _json = new() { Format = OutputFormat.JsonStructured };
 
     private static readonly EvtxOptions _oneThread = new() { MaxThreads = 1 };
 

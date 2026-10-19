@@ -2,7 +2,7 @@ namespace AxoParse.Evtx;
 
 /// <summary>
 /// Settings for every <see cref="EvtxParser"/> operation. Immutable: create one with an object initializer
-/// (<c>new EvtxOptions { Format = OutputFormat.Json, MaxThreads = 4 }</c>) or derive one with <c>with</c>, and share it
+/// (<c>new EvtxOptions { Format = OutputFormat.JsonStructured, MaxThreads = 4 }</c>) or derive one with <c>with</c>, and share it
 /// freely across threads and calls.
 /// </summary>
 public sealed record EvtxOptions

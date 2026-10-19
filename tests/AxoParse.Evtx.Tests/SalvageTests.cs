@@ -21,7 +21,7 @@ public class SalvageTests
     /// <param name="format">Output format.</param>
     [Theory]
     [InlineData(OutputFormat.Xml)]
-    [InlineData(OutputFormat.Json)]
+    [InlineData(OutputFormat.JsonStructured)]
     public void CorruptTemplateFailsRecordByDefaultAndKeepsWellFormedPrefixWhenSalvaging(OutputFormat format)
     {
         CancellationToken token = TestContext.Current.CancellationToken;
