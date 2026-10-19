@@ -27,14 +27,17 @@ internal sealed partial class BinXmlParser
     /// <param name="compiledCache">Shared cross-chunk cache of compiled XML templates keyed by GUID. Null when using JSON output.</param>
     /// <param name="compiledJsonCache">Shared cross-chunk cache of compiled JSON templates keyed by GUID. Null when using XML output.</param>
     /// <param name="wevtCache">Provider templates used when a record's embedded template is missing or corrupt, or null.</param>
+    /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt instead of failing it.</param>
     public BinXmlParser(
         byte[] fileData,
         int chunkFileOffset,
         Dictionary<uint, BinXmlTemplateDefinition> templates,
         Dictionary<Guid, CompiledTemplate?>? compiledCache,
         Dictionary<Guid, CompiledJsonTemplate?>? compiledJsonCache = null,
-        WevtCache? wevtCache = null)
+        WevtCache? wevtCache = null,
+        bool salvage = false)
     {
+        _salvage = salvage;
         _wevtCache = wevtCache;
         _fileData = fileData;
         _chunkFileOffset = chunkFileOffset;
@@ -57,6 +60,15 @@ internal sealed partial class BinXmlParser
             }
         }
     }
+
+    #endregion
+
+    #region Properties
+
+    /// <summary>
+    /// Salvage mode only: the first corruption that cut the last rendered record short, or null if it rendered in full.
+    /// </summary>
+    internal string? SalvageDiagnostic => _salvageDiagnostic;
 
     #endregion
 
@@ -100,6 +112,7 @@ internal sealed partial class BinXmlParser
         ReadOnlySpan<byte> eventData = record.GetEventData(_fileData);
         int binxmlChunkBase = record.EventDataFileOffset - _chunkFileOffset;
         int pos = 0;
+        _salvageDiagnostic = null;
         if (format == OutputFormat.Json)
             DecodeTopLevel<JsonWriter>(eventData, ref pos, binxmlChunkBase, ref vub, recordLevel: true, escaped: false);
         else
@@ -265,17 +278,8 @@ internal sealed partial class BinXmlParser
         else
         {
             // Not compilable: decode the template body directly with this instance's substitution values
-            ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize);
-            int tplPos = 0;
-            int tplChunkBase = (int)hdr.DefDataOffset + 24;
-
-            // Skip fragment header
-            if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
-                tplPos += 4;
-
-            XmlWriter writer = default;
-            DecodeContent(tplBody, ref tplPos, new SubstitutionValues(offsets, sizes, types), tplChunkBase, ref vsb,
-                ref writer, hasDepId: true, depth: 0, inAttr: false);
+            DecodeTemplateBody<XmlWriter>(_fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize),
+                new SubstitutionValues(offsets, sizes, types), (int)hdr.DefDataOffset + 24, ref vsb);
         }
     }
 
@@ -678,6 +682,16 @@ internal sealed partial class BinXmlParser
     #endregion
 
     #region Non-Public Fields
+
+    /// <summary>
+    /// True to end a corrupt BinXml stream and keep the record's well-formed prefix instead of throwing.
+    /// </summary>
+    private readonly bool _salvage;
+
+    /// <summary>
+    /// First corruption salvaged while rendering the current record, or null if it decoded cleanly.
+    /// </summary>
+    private string? _salvageDiagnostic;
 
     /// <summary>
     /// Maximum nesting depth for recursive element parsing to prevent stack overflow on crafted input.

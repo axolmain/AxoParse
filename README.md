@@ -112,6 +112,7 @@ await foreach (EvtxEvent evt in EvtxParser.ParseAsync(fileData))
 | `format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.Json`                 |
 | `validateChecksums` | `false` | Skip chunks that fail CRC32 validation                    |
 | `wevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt |
+| `salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it |
 
 ## Benchmark Results
 

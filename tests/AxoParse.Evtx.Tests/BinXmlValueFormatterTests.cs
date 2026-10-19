@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text;
 using AxoParse.Evtx.BinXml;
 
@@ -85,6 +86,30 @@ public class BinXmlValueFormatterTests
             viaUtf8.Dispose();
             viaUtf16.Dispose();
         }
+    }
+
+    /// <summary>
+    /// Verifies SYSTEMTIME formatting (16 bytes: year, month, day of week, day, hour, minute, second, milliseconds, each
+    /// a u16): in-range fields use the fixed-width layout, and a field too wide for its digits (corrupt data) is
+    /// written in full instead of as non-digit bytes.
+    /// </summary>
+    /// <param name="fields">The eight SYSTEMTIME fields.</param>
+    /// <param name="expected">Expected timestamp.</param>
+    [Theory]
+    [InlineData(new ushort[] { 2019, 2, 1, 25, 18, 27, 0, 970 }, "2019-02-25T18:27:00.970Z")]
+    [InlineData(new ushort[] { 7, 1, 0, 2, 3, 4, 5, 6 }, "0007-01-02T03:04:05.006Z")]
+    [InlineData(new ushort[] { 7372, 300, 0, 0, 0, 0, 65535, 1000 }, "7372-300-00T00:00:65535.1000Z")]
+    public void SystemTimeFormatsEveryFieldAsDigits(ushort[] fields, string expected)
+    {
+        byte[] bytes = new byte[16];
+        for (int i = 0; i < fields.Length; i++)
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(i * 2), fields[i]);
+
+        ValueUtf8Builder vub = new(stackalloc byte[64]);
+        BinXmlValueFormatter.AppendSystemTime(bytes, ref vub);
+        string actual = Encoding.UTF8.GetString(vub.AsSpan());
+        vub.Dispose();
+        Assert.Equal(expected, actual);
     }
 
     #endregion

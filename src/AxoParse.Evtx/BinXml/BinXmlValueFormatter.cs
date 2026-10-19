@@ -227,6 +227,26 @@ internal static class BinXmlValueFormatter
         ushort mn = MemoryMarshal.Read<ushort>(valueBytes[10..]);
         ushort sc = MemoryMarshal.Read<ushort>(valueBytes[12..]);
         ushort ms = MemoryMarshal.Read<ushort>(valueBytes[14..]);
+        if ((yr > 9999) || (mo > 99) || (dy > 99) || (hr > 99) || (mn > 99) || (sc > 99) || (ms > 999))
+        {
+            // Corrupt fields too wide for the fixed-width layout are written in full, never as non-digit bytes
+            vub.AppendFormatted(yr, "D4");
+            vub.Append((byte)'-');
+            vub.AppendFormatted(mo, "D2");
+            vub.Append((byte)'-');
+            vub.AppendFormatted(dy, "D2");
+            vub.Append((byte)'T');
+            vub.AppendFormatted(hr, "D2");
+            vub.Append((byte)':');
+            vub.AppendFormatted(mn, "D2");
+            vub.Append((byte)':');
+            vub.AppendFormatted(sc, "D2");
+            vub.Append((byte)'.');
+            vub.AppendFormatted(ms, "D3");
+            vub.Append((byte)'Z');
+            return;
+        }
+
         // yyyy-MM-ddTHH:mm:ss.mmmZ = 24 bytes
         Span<byte> d = vub.AppendSpan(24);
         d[23] = (byte)'Z';

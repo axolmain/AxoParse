@@ -15,6 +15,12 @@ namespace AxoParse.Evtx.BinXml;
 /// throw <see cref="InvalidDataException"/>, which fails only the current record (the chunk render loop reports it as
 /// a diagnostic), as in the Rust evtx crate, instead of skipping bytes and rendering partial output.
 /// </para>
+/// <para>
+/// In salvage mode the same corruption ends the enclosing BinXml stream instead (the record's own data, an embedded
+/// fragment, or a template body): decoding stops there and unwinds normally, so every open element, attribute and
+/// JSON container is closed and the record keeps a well-formed prefix. The first error is kept in
+/// <see cref="SalvageDiagnostic"/>.
+/// </para>
 /// </summary>
 internal sealed partial class BinXmlParser
 {
@@ -23,14 +29,17 @@ internal sealed partial class BinXmlParser
     /// <summary>
     /// Decodes a top-level BinXml stream: a record's event data, or an embedded fragment (value type 0x21). Loops
     /// over fragment headers, template instances, bare elements and processing instructions until EOF or another
-    /// token, which ends the stream (trailing bytes after a record's content are not an error).
+    /// token, which ends the stream (trailing bytes after a record's content are not an error). A record holds one
+    /// event, so its stream also ends after the first template instance or element: anything after the root would
+    /// make a second XML root or a second JSON value.
     /// </summary>
     /// <typeparam name="TWriter">Output format.</typeparam>
     /// <param name="data">BinXml bytes.</param>
     /// <param name="pos">Read position; advanced past consumed tokens.</param>
     /// <param name="binxmlChunkBase">Chunk-relative offset of <paramref name="data"/>.</param>
     /// <param name="vub">Output builder.</param>
-    /// <param name="recordLevel">True for a record's event data, where processing instructions are rendered.</param>
+    /// <param name="recordLevel">True for a record's event data: processing instructions are rendered and the stream
+    /// ends after its root.</param>
     /// <param name="escaped">JSON only: emit the stream JSON-string-escaped (an embedded fragment's JSON is a string).</param>
     private void DecodeTopLevel<TWriter>(ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase, ref ValueUtf8Builder vub,
                                          bool recordLevel, bool escaped)
@@ -50,6 +59,8 @@ internal sealed partial class BinXmlParser
 
                 case BinXmlToken.TemplateInstance:
                     TWriter.WriteTemplateInstance(this, data, ref pos, binxmlChunkBase, ref vub, escaped);
+                    if (recordLevel)
+                        return;
                     break;
 
                 case BinXmlToken.OpenStartElement:
@@ -61,6 +72,8 @@ internal sealed partial class BinXmlParser
                         DecodeElement(data, ref pos, default, binxmlChunkBase, ref vub, ref writer, hasDepId: false,
                             depth: 0, contentItem: false);
                     }
+                    if (recordLevel)
+                        return;
                     break;
 
                 case BinXmlToken.PiTarget when recordLevel || TWriter.ConsumesProcessingInstructions:
@@ -70,7 +83,11 @@ internal sealed partial class BinXmlParser
                     uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
                     pos += 4;
                     if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase))
-                        ThrowCorrupt("processing instruction name runs past the data", start);
+                    {
+                        Corrupt("processing instruction name runs past the data", start);
+                        pos = data.Length;
+                        return;
+                    }
                     scoped ReadOnlySpan<char> text = default;
                     if ((pos < data.Length) && (data[pos] == BinXmlToken.PiData))
                     {
@@ -109,6 +126,36 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
+    /// Decodes a template body that can't be compiled: an optional fragment header, then its root element, whose
+    /// elements carry dependency IDs and whose substitutions take <paramref name="values"/>. A template describes one
+    /// event, so anything after the root is ignored, as the compiler does; a body that doesn't start with an element is
+    /// corrupt.
+    /// </summary>
+    /// <typeparam name="TWriter">Output format.</typeparam>
+    /// <param name="body">Template body bytes.</param>
+    /// <param name="values">Substitution values of the template instance.</param>
+    /// <param name="binxmlChunkBase">Chunk-relative offset of <paramref name="body"/>.</param>
+    /// <param name="vub">Output builder.</param>
+    private void DecodeTemplateBody<TWriter>(ReadOnlySpan<byte> body, scoped SubstitutionValues values, int binxmlChunkBase,
+                                             ref ValueUtf8Builder vub)
+        where TWriter : struct, IBinXmlWriter
+    {
+        int pos = (body.Length >= 4) && (body[0] == BinXmlToken.FragmentHeader) ? 4 : 0;
+        if ((pos >= body.Length) || (body[pos] == BinXmlToken.Eof))
+            return;
+
+        if ((byte)(body[pos] & ~BinXmlToken.HasMoreDataFlag) != BinXmlToken.OpenStartElement)
+        {
+            Corrupt($"template body starts with token 0x{body[pos]:X2}, not an element", pos);
+            return;
+        }
+
+        TWriter writer = default;
+        DecodeElement(body, ref pos, values, binxmlChunkBase, ref vub, ref writer, hasDepId: true, depth: 1,
+            contentItem: false);
+    }
+
+    /// <summary>
     /// Decodes BinXml content tokens (child elements, text, substitutions, character and entity references, CDATA,
     /// nested template instances) until a token that ends the enclosing construct: EOF, close/end element, or the next
     /// attribute.
@@ -142,7 +189,11 @@ internal sealed partial class BinXmlParser
             {
                 case BinXmlToken.OpenStartElement:
                     if (inAttr)
-                        ThrowCorrupt("element inside an attribute value", pos);
+                    {
+                        Corrupt("element inside an attribute value", pos);
+                        pos = data.Length;
+                        break;
+                    }
                     DecodeElement(data, ref pos, values, binxmlChunkBase, ref vub, ref writer, hasDepId, depth + 1,
                         contentItem: true);
                     break;
@@ -156,7 +207,11 @@ internal sealed partial class BinXmlParser
                 case BinXmlToken.OptionalSubstitution:
                 {
                     if (!values.Present)
-                        ThrowCorrupt("substitution outside a template", pos);
+                    {
+                        Corrupt("substitution outside a template", pos);
+                        pos = data.Length;
+                        break;
+                    }
                     bool optional = baseTok == BinXmlToken.OptionalSubstitution;
                     ushort subId = MemoryMarshal.Read<ushort>(data[(pos + 1)..]);
                     pos += 4; // token + id + value type
@@ -187,7 +242,11 @@ internal sealed partial class BinXmlParser
                     pos += 5;
                     // Entity names use the same name structure as element names, so they can be defined inline too
                     if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase))
-                        ThrowCorrupt("entity name runs past the data", start);
+                    {
+                        Corrupt("entity name runs past the data", start);
+                        pos = data.Length;
+                        break;
+                    }
                     writer.EntityRef(ref vub, ReadName(nameOffset));
                     break;
                 }
@@ -199,9 +258,12 @@ internal sealed partial class BinXmlParser
 
                 case BinXmlToken.TemplateInstance:
                     if (inAttr)
-                        ThrowCorrupt("template instance inside an attribute value", pos);
-                    writer.BeginContentItem(ref vub);
-                    TWriter.WriteTemplateInstance(this, data, ref pos, binxmlChunkBase, ref vub, escaped: false);
+                    {
+                        Corrupt("template instance inside an attribute value", pos);
+                        pos = data.Length;
+                        break;
+                    }
+                    writer.TemplateInstanceItem(this, data, ref pos, binxmlChunkBase, ref vub);
                     break;
 
                 case BinXmlToken.FragmentHeader:
@@ -209,7 +271,8 @@ internal sealed partial class BinXmlParser
                     break;
 
                 default:
-                    ThrowCorrupt($"unexpected token 0x{data[pos]:X2}", pos);
+                    Corrupt($"unexpected token 0x{data[pos]:X2}", pos);
+                    pos = data.Length;
                     break;
             }
         }
@@ -236,7 +299,11 @@ internal sealed partial class BinXmlParser
         where TWriter : struct, IBinXmlWriter
     {
         if (depth >= _maxRecursionDepth)
-            ThrowCorrupt("elements nested too deeply", pos);
+        {
+            Corrupt("elements nested too deeply", pos);
+            pos = data.Length;
+            return;
+        }
 
         bool hasAttrs = (data[pos] & BinXmlToken.HasMoreDataFlag) != 0;
         int start = pos;
@@ -247,7 +314,11 @@ internal sealed partial class BinXmlParser
         uint nameOffset = MemoryMarshal.Read<uint>(data[pos..]);
         pos += 4;
         if (!TrySkipInlineName(data, ref pos, nameOffset, binxmlChunkBase))
-            ThrowCorrupt("element name runs past the data", start);
+        {
+            Corrupt("element name runs past the data", start);
+            pos = data.Length;
+            return;
+        }
 
         string name = ReadName(nameOffset);
         if (contentItem)
@@ -271,7 +342,12 @@ internal sealed partial class BinXmlParser
                 uint attrNameOffset = MemoryMarshal.Read<uint>(data[pos..]);
                 pos += 4;
                 if (!TrySkipInlineName(data, ref pos, attrNameOffset, binxmlChunkBase))
-                    ThrowCorrupt("attribute name runs past the data", attrStart);
+                {
+                    // The element is already open; ending the stream here still closes it below
+                    Corrupt("attribute name runs past the data", attrStart);
+                    pos = data.Length;
+                    break;
+                }
 
                 if (TWriter.OmitsEmptyOptionalAttributes && IsEmptyOptionalAttribute(data, pos, values, out int afterValue))
                 {
@@ -329,13 +405,33 @@ internal sealed partial class BinXmlParser
     }
 
     /// <summary>
-    /// Throws for corrupt BinXml (kept out of line so the checks stay small). Fails only the current record.
+    /// Reports corrupt BinXml. Strict mode throws, failing only the current record; salvage mode keeps the first
+    /// error in <see cref="_salvageDiagnostic"/> and returns, and the caller then ends the enclosing stream.
+    /// </summary>
+    /// <param name="what">What was wrong.</param>
+    /// <param name="pos">Position in the BinXml stream.</param>
+    private void Corrupt(string what, int pos)
+    {
+        if (!_salvage)
+            ThrowCorrupt(what, pos);
+        _salvageDiagnostic ??= CorruptMessage(what, pos);
+    }
+
+    /// <summary>
+    /// Throws for corrupt BinXml (kept out of line so the checks stay small).
     /// </summary>
     /// <param name="what">What was wrong.</param>
     /// <param name="pos">Position in the BinXml stream.</param>
     [DoesNotReturn]
-    private static void ThrowCorrupt(string what, int pos) =>
-        throw new InvalidDataException($"Corrupt BinXml at +0x{pos:X}: {what}");
+    private static void ThrowCorrupt(string what, int pos) => throw new InvalidDataException(CorruptMessage(what, pos));
+
+    /// <summary>
+    /// Formats a corrupt-BinXml message.
+    /// </summary>
+    /// <param name="what">What was wrong.</param>
+    /// <param name="pos">Position in the BinXml stream.</param>
+    /// <returns>The message.</returns>
+    private static string CorruptMessage(string what, int pos) => $"Corrupt BinXml at +0x{pos:X}: {what}";
 
     #endregion
 
@@ -403,6 +499,10 @@ internal sealed partial class BinXmlParser
 
         /// <summary>Called before an item of element content (JSON writes the separating comma).</summary>
         void BeginContentItem(ref ValueUtf8Builder vub);
+
+        /// <summary>A template instance (0x0C) as an item of element content.</summary>
+        void TemplateInstanceItem(BinXmlParser parser, ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+                                  ref ValueUtf8Builder vub);
 
         /// <summary>Element start.</summary>
         void StartElement(ref ValueUtf8Builder vub, string name);
@@ -480,6 +580,11 @@ internal sealed partial class BinXmlParser
 
         /// <inheritdoc/>
         public void BeginContentItem(ref ValueUtf8Builder vub) { }
+
+        /// <inheritdoc/>
+        public void TemplateInstanceItem(BinXmlParser parser, ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+                                         ref ValueUtf8Builder vub) =>
+            parser.ParseTemplateInstance(data, ref pos, binxmlChunkBase, ref vub);
 
         /// <inheritdoc/>
         public void StartElement(ref ValueUtf8Builder vub, string name)
@@ -588,6 +693,18 @@ internal sealed partial class BinXmlParser
             if (_needsComma[_level])
                 vub.Append((byte)',');
             _needsComma[_level] = true;
+        }
+
+        /// <inheritdoc/>
+        public void TemplateInstanceItem(BinXmlParser parser, ReadOnlySpan<byte> data, ref int pos, int binxmlChunkBase,
+                                         ref ValueUtf8Builder vub)
+        {
+            BeginContentItem(ref vub);
+            int before = vub.AsSpan().Length;
+            parser.ParseTemplateInstanceJson(data, ref pos, binxmlChunkBase, ref vub);
+            // A template that renders nothing (unavailable, empty) still fills the item its comma opened
+            if (vub.AsSpan().Length == before)
+                vub.Append("\"\""u8);
         }
 
         /// <inheritdoc/>

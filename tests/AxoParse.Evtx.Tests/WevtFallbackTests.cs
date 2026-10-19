@@ -15,7 +15,7 @@ public class WevtFallbackTests
     #region Public Methods
 
     /// <summary>
-    /// Verifies that corrupting the first record's embedded template loses its markup without a cache, and that a
+    /// Verifies that corrupting the first record's embedded template fails it without a cache, and that a
     /// cache holding a provider template with the template's GUID renders the record through it, in XML and JSON.
     /// </summary>
     [Fact]
@@ -24,10 +24,10 @@ public class WevtFallbackTests
         CancellationToken token = TestContext.Current.CancellationToken;
         (byte[] corrupted, WevtCache cache) = CorruptFirstTemplate();
 
-        // Without a cache the token-by-token interpreter renders the corrupt body as junk (currently "<></>"); the
-        // template's real markup is lost
+        // Without a cache the corrupt body is decoded directly, and its first token is invalid: the record fails
         EvtxEvent withoutCache = EvtxParser.Parse(corrupted, 1, cancellationToken: token).GetEvents().First();
-        Assert.DoesNotContain("<Event", withoutCache.Xml);
+        Assert.False(withoutCache.IsSuccess);
+        Assert.Empty(withoutCache.Xml);
 
         EvtxEvent xml = EvtxParser.Parse(corrupted, 1, wevtCache: cache, cancellationToken: token).GetEvents().First();
         Assert.True(xml.IsSuccess, xml.Diagnostic);

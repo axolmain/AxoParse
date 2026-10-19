@@ -384,7 +384,7 @@ internal static class TemplateProgramCompiler
 
     /// <summary>
     /// Compiles a template body into a program. Returns null if the template contains nested template instances or
-    /// other constructs that prevent static compilation; the writers then interpret the body token by token.
+    /// other constructs that prevent static compilation; the shared decoder then decodes the body directly.
     /// </summary>
     /// <typeparam name="TNames">How names are stored in this body.</typeparam>
     /// <param name="body">Template body (BinXml fragment).</param>
@@ -401,7 +401,15 @@ internal static class TemplateProgramCompiler
         if ((body.Length >= 4) && (body[0] == BinXmlToken.FragmentHeader))
             pos += 4;
 
-        CompileContent(body, ref pos, names, ops, ref bail, 0, inAttr: false);
+        // A template describes one event: its root element, with anything after it ignored. A body that starts with
+        // anything else isn't compiled, and the decoder rejects it.
+        if ((pos < body.Length) && (body[pos] != BinXmlToken.Eof))
+        {
+            if ((byte)(body[pos] & ~BinXmlToken.HasMoreDataFlag) != BinXmlToken.OpenStartElement)
+                return null;
+            CompileElement(body, ref pos, names, ops, ref bail, 1);
+        }
+
         return bail ? null : new TemplateProgram(ops.ToArray());
     }
 

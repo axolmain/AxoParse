@@ -87,8 +87,10 @@ foreach (EvtxChunk chunk in parser.Chunks)
 | `format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.Json`                 |
 | `validateChecksums` | `false` | Skip chunks that fail CRC32 validation                    |
 | `wevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt |
+| `salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it |
 
-`WriteTo` takes the same options (`wevtCache` is its last parameter, after the cancellation token).
+`WriteTo` takes the same options (`wevtCache` and then `salvage` come last, after the cancellation token). On `Parse`
+and `ParseAsync`, `salvage` comes after the cancellation token.
 
 ## WEVT template cache
 

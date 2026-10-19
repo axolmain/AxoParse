@@ -76,10 +76,13 @@ public class EvtxParser
     /// <param name="wevtCache">Optional provider (WEVT) templates, used only for records whose embedded template is missing, runs
     /// past its chunk or won't compile; a usable embedded template is never replaced.</param>
     /// <param name="cancellationToken">Token to cancel the parse operation.</param>
+    /// <param name="salvage">When true, a record whose BinXml is corrupt keeps the well-formed output decoded before the
+    /// corruption (open elements are closed) instead of failing with empty output; its <see cref="EvtxEvent.Diagnostic"/>
+    /// still says where decoding stopped. Off by default: corrupt records fail, as in the Rust evtx crate.</param>
     /// <returns>A fully parsed <see cref="EvtxParser"/> containing the file header, chunks, and aggregate record count.</returns>
     public static EvtxParser Parse(byte[] fileData, int maxThreads = 0, OutputFormat format = OutputFormat.Xml,
                                    bool validateChecksums = false, WevtCache? wevtCache = null,
-                                   CancellationToken cancellationToken = default)
+                                   CancellationToken cancellationToken = default, bool salvage = false)
     {
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(fileData);
         int chunkStart = fileHeader.HeaderBlockSize;
@@ -135,7 +138,8 @@ public class EvtxParser
                         compiledCache: null,
                         compiledJsonCache: localJsonCache,
                         format,
-                        wevtCache);
+                        wevtCache,
+                        salvage);
 
                     return localJsonCache;
                 },
@@ -154,7 +158,8 @@ public class EvtxParser
                         compiledCache: localCache,
                         compiledJsonCache: null,
                         format,
-                        wevtCache);
+                        wevtCache,
+                        salvage);
 
                     return localCache;
                 },
@@ -195,7 +200,7 @@ public class EvtxParser
                     (i, state, localJsonCache) =>
                     {
                         recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                            compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache);
+                            compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache, salvage);
                         return localJsonCache;
                     },
                     _ => { });
@@ -208,7 +213,7 @@ public class EvtxParser
                     (i, state, localCache) =>
                     {
                         recovered[i] = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                            compiledCache: localCache, compiledJsonCache: null, format, wevtCache);
+                            compiledCache: localCache, compiledJsonCache: null, format, wevtCache, salvage);
                         return localCache;
                     },
                     _ => { });
@@ -242,21 +247,24 @@ public class EvtxParser
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <param name="wevtCache">Optional provider (WEVT) templates for records whose embedded template is missing, runs past its
     /// chunk or won't compile; a usable embedded template is never replaced. Last so existing positional calls still compile.</param>
+    /// <param name="salvage">When true, a record whose BinXml is corrupt writes the well-formed output decoded before the
+    /// corruption (open elements are closed) instead of nothing. Off by default.</param>
     /// <returns>Number of records written, counted as <see cref="TotalRecords"/> counts them for the same input.</returns>
     public static int WriteTo(byte[] fileData, Stream output, OutputFormat format = OutputFormat.Xml,
                               int maxThreads = 0, bool validateChecksums = false,
-                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null)
+                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null,
+                              bool salvage = false)
     {
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(fileData);
         return WriteAll(new ChunkSource(fileData, null), fileHeader.HeaderBlockSize, fileData.Length, output, format,
-            maxThreads, validateChecksums, wevtCache, cancellationToken);
+            maxThreads, validateChecksums, wevtCache, salvage, cancellationToken);
     }
 
     /// <summary>
     /// Streams an EVTX file from disk and writes every record's rendered output to <paramref name="output"/> as UTF-8,
     /// without loading the file into memory. Each worker reads the 64 KB chunk it is about to render, so reading
     /// overlaps rendering and memory stays at a few buffers per worker whatever the file size (files over 2 GB work).
-    /// Output and return value are identical to <see cref="WriteTo(byte[], Stream, OutputFormat, int, bool, CancellationToken, WevtCache?)"/>
+    /// Output and return value are identical to <see cref="WriteTo(byte[], Stream, OutputFormat, int, bool, CancellationToken, WevtCache?, bool)"/>
     /// for the same bytes. The file is opened for reading with <see cref="FileShare.ReadWrite"/>, so a log another
     /// process still has open can be read.
     /// </summary>
@@ -268,17 +276,20 @@ public class EvtxParser
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <param name="wevtCache">Optional provider (WEVT) templates for records whose embedded template is missing, runs past its
     /// chunk or won't compile; a usable embedded template is never replaced. Last so existing positional calls still compile.</param>
+    /// <param name="salvage">When true, a record whose BinXml is corrupt writes the well-formed output decoded before the
+    /// corruption (open elements are closed) instead of nothing. Off by default.</param>
     /// <returns>Number of records written, counted as <see cref="TotalRecords"/> counts them for the same input.</returns>
     public static int WriteTo(string path, Stream output, OutputFormat format = OutputFormat.Xml,
                               int maxThreads = 0, bool validateChecksums = false,
-                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null)
+                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null,
+                              bool salvage = false)
     {
         using SafeFileHandle file = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        return WriteTo(file, output, format, maxThreads, validateChecksums, cancellationToken, wevtCache);
+        return WriteTo(file, output, format, maxThreads, validateChecksums, cancellationToken, wevtCache, salvage);
     }
 
     /// <summary>
-    /// Streams an EVTX file from an open handle; see <see cref="WriteTo(string, Stream, OutputFormat, int, bool, CancellationToken, WevtCache?)"/>.
+    /// Streams an EVTX file from an open handle; see <see cref="WriteTo(string, Stream, OutputFormat, int, bool, CancellationToken, WevtCache?, bool)"/>.
     /// Chunks are read with positional reads (<see cref="RandomAccess"/>), so the handle's file position is not used
     /// or changed and the handle stays open.
     /// </summary>
@@ -290,17 +301,20 @@ public class EvtxParser
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <param name="wevtCache">Optional provider (WEVT) templates for records whose embedded template is missing, runs past its
     /// chunk or won't compile; a usable embedded template is never replaced. Last so existing positional calls still compile.</param>
+    /// <param name="salvage">When true, a record whose BinXml is corrupt writes the well-formed output decoded before the
+    /// corruption (open elements are closed) instead of nothing. Off by default.</param>
     /// <returns>Number of records written, counted as <see cref="TotalRecords"/> counts them for the same input.</returns>
     public static int WriteTo(SafeFileHandle file, Stream output, OutputFormat format = OutputFormat.Xml,
                               int maxThreads = 0, bool validateChecksums = false,
-                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null)
+                              CancellationToken cancellationToken = default, WevtCache? wevtCache = null,
+                              bool salvage = false)
     {
         long length = RandomAccess.GetLength(file);
         Span<byte> headerBytes = stackalloc byte[_fileHeaderReadBytes];
         int headerLength = ChunkSource.ReadFully(file, headerBytes[..(int)Math.Min(length, _fileHeaderReadBytes)], 0);
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(headerBytes[..headerLength]);
         return WriteAll(new ChunkSource(null, file), fileHeader.HeaderBlockSize, length, output, format, maxThreads,
-            validateChecksums, wevtCache, cancellationToken);
+            validateChecksums, wevtCache, salvage, cancellationToken);
     }
 
     /// <summary>
@@ -315,11 +329,14 @@ public class EvtxParser
     /// <param name="wevtCache">Optional provider (WEVT) templates for records whose embedded template is missing or corrupt (see
     /// <see cref="Parse"/>).</param>
     /// <param name="cancellationToken">Token to cancel the parse operation.</param>
+    /// <param name="salvage">When true, a record whose BinXml is corrupt keeps the well-formed output decoded before the
+    /// corruption (open elements are closed) instead of failing with empty output; its <see cref="EvtxEvent.Diagnostic"/>
+    /// still says where decoding stopped. Off by default: corrupt records fail, as in the Rust evtx crate.</param>
     /// <returns>Events streamed in file order as chunks finish parsing.</returns>
     public static async IAsyncEnumerable<EvtxEvent> ParseAsync(
         byte[] fileData, int maxThreads = 0, OutputFormat format = OutputFormat.Xml,
         bool validateChecksums = false, WevtCache? wevtCache = null,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default, bool salvage = false)
     {
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(fileData);
         int chunkStart = fileHeader.HeaderBlockSize;
@@ -380,7 +397,7 @@ public class EvtxParser
                         (i, state, localJsonCache) =>
                         {
                             EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
-                                compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache);
+                                compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache, salvage);
                             channel.Writer.TryWrite((i, chunk));
                             return localJsonCache;
                         },
@@ -394,7 +411,7 @@ public class EvtxParser
                         (i, state, localCache) =>
                         {
                             EvtxChunk chunk = EvtxChunk.Parse(fileData, validOffsets[i],
-                                compiledCache: localCache, compiledJsonCache: null, format, wevtCache);
+                                compiledCache: localCache, compiledJsonCache: null, format, wevtCache, salvage);
                             channel.Writer.TryWrite((i, chunk));
                             return localCache;
                         },
@@ -412,7 +429,7 @@ public class EvtxParser
                             (i, state, localJsonCache) =>
                             {
                                 EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                                    compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache);
+                                    compiledCache: null, compiledJsonCache: localJsonCache, format, wevtCache, salvage);
                                 if (recovered != null)
                                     channel.Writer.TryWrite((validCountCopy + i, recovered));
                                 return localJsonCache;
@@ -427,7 +444,7 @@ public class EvtxParser
                             (i, state, localCache) =>
                             {
                                 EvtxChunk? recovered = EvtxChunk.ParseHeaderless(fileData, invalidOffsets[i],
-                                    compiledCache: localCache, compiledJsonCache: null, format, wevtCache);
+                                    compiledCache: localCache, compiledJsonCache: null, format, wevtCache, salvage);
                                 if (recovered != null)
                                     channel.Writer.TryWrite((validCountCopy + i, recovered));
                                 return localCache;
@@ -507,10 +524,11 @@ public class EvtxParser
     /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
     /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
     /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
+    /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt instead of dropping it.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <returns>Number of records written.</returns>
     private static int WriteAll(ChunkSource source, int chunkStart, long length, Stream output, OutputFormat format,
-                                int maxThreads, bool validateChecksums, WevtCache? wevtCache,
+                                int maxThreads, bool validateChecksums, WevtCache? wevtCache, bool salvage,
                                 CancellationToken cancellationToken)
     {
         int chunkCount = (int)Math.Max(0, (length - chunkStart) / EvtxChunk.ChunkSize);
@@ -521,7 +539,7 @@ public class EvtxParser
         int workers = maxThreads > 0 ? maxThreads : Environment.ProcessorCount;
         bool[] needsRecovery = new bool[chunkCount];
         int total = WriteChunks(source, offsets, chunkCount, ChunkPass.Classify, validateChecksums, needsRecovery,
-            format, wevtCache, workers, output, cancellationToken);
+            format, wevtCache, salvage, workers, output, cancellationToken);
 
         int recoverCount = 0;
         for (int i = 0; i < chunkCount; i++)
@@ -531,7 +549,7 @@ public class EvtxParser
         }
 
         total += WriteChunks(source, offsets, recoverCount, ChunkPass.Recover, validateChecksums: false, null,
-            format, wevtCache, workers, output, cancellationToken);
+            format, wevtCache, salvage, workers, output, cancellationToken);
         return total;
     }
 
@@ -552,13 +570,15 @@ public class EvtxParser
     /// <param name="needsRecovery">Classify pass only: set for each index whose region lacks the chunk magic.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
+    /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt instead of dropping it.</param>
     /// <param name="workers">Number of rendering threads (1 = render on the calling thread).</param>
     /// <param name="output">Stream that receives the UTF-8 output.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <returns>Number of records written, counted as <see cref="EvtxChunk.RenderTo"/> counts them.</returns>
     private static int WriteChunks(ChunkSource source, long[] offsets, int count, ChunkPass pass,
                                    bool validateChecksums, bool[]? needsRecovery, OutputFormat format,
-                                   WevtCache? wevtCache, int workers, Stream output, CancellationToken cancellationToken)
+                                   WevtCache? wevtCache, bool salvage, int workers, Stream output,
+                                   CancellationToken cancellationToken)
     {
         if (count == 0)
             return 0;
@@ -576,7 +596,7 @@ public class EvtxParser
                 cancellationToken.ThrowIfCancellationRequested();
                 sink.ResetWrittenCount();
                 total += RenderChunk(source, offsets[i], i, pass, validateChecksums, needsRecovery, chunkBuffer,
-                    xmlCache, jsonCache, format, wevtCache, sink);
+                    xmlCache, jsonCache, format, wevtCache, salvage, sink);
                 output.Write(sink.WrittenSpan);
             }
 
@@ -617,7 +637,7 @@ public class EvtxParser
                     ArrayBufferWriter<byte> sink = sinks[slot] ??= new ArrayBufferWriter<byte>(_initialSinkBytes);
                     sink.ResetWrittenCount();
                     kept[slot] = RenderChunk(source, offsets[i], i, pass, validateChecksums, needsRecovery,
-                        chunkBuffer, xmlCache, jsonCache, format, wevtCache, sink);
+                        chunkBuffer, xmlCache, jsonCache, format, wevtCache, salvage, sink);
                     ready[slot].Release();
                 }
             }
@@ -681,17 +701,19 @@ public class EvtxParser
     /// <param name="jsonCache">The worker's compiled JSON template cache. Null when using XML output.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="wevtCache">Provider templates for records whose embedded template is missing or corrupt, or null.</param>
+    /// <param name="salvage">True to keep the well-formed prefix of a record whose BinXml is corrupt instead of dropping it.</param>
     /// <param name="sink">Buffer that receives the chunk's UTF-8 output.</param>
     /// <returns>Number of records rendered from the chunk.</returns>
     private static int RenderChunk(ChunkSource source, long offset, int index, ChunkPass pass, bool validateChecksums,
                                    bool[]? needsRecovery, byte[]? chunkBuffer,
                                    Dictionary<Guid, CompiledTemplate?>? xmlCache,
                                    Dictionary<Guid, CompiledJsonTemplate?>? jsonCache,
-                                   OutputFormat format, WevtCache? wevtCache, ArrayBufferWriter<byte> sink)
+                                   OutputFormat format, WevtCache? wevtCache, bool salvage,
+                                   ArrayBufferWriter<byte> sink)
     {
         int at = source.Load(offset, chunkBuffer, out byte[] data);
         if (pass == ChunkPass.Recover)
-            return EvtxChunk.RenderTo(data, at, headerless: true, xmlCache, jsonCache, format, sink, wevtCache);
+            return EvtxChunk.RenderTo(data, at, headerless: true, xmlCache, jsonCache, format, sink, wevtCache, salvage);
 
         ReadOnlySpan<byte> chunkData = data.AsSpan(at, EvtxChunk.ChunkSize);
         if (!chunkData[..8].SequenceEqual("ElfChnk\0"u8))
@@ -707,7 +729,7 @@ public class EvtxParser
                 return 0;
         }
 
-        return EvtxChunk.RenderTo(data, at, headerless: false, xmlCache, jsonCache, format, sink, wevtCache);
+        return EvtxChunk.RenderTo(data, at, headerless: false, xmlCache, jsonCache, format, sink, wevtCache, salvage);
     }
 
     #endregion

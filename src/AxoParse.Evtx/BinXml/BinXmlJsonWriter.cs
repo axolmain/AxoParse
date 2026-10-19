@@ -100,24 +100,16 @@ internal sealed partial class BinXmlParser
 
         // Not compilable: decode the template body directly with this instance's substitution values
         ReadOnlySpan<byte> tplBody = _fileData.AsSpan(tplBodyFileOffset, (int)hdr.DataSize);
-        int tplPos = 0;
-        int tplChunkBase = (int)hdr.DefDataOffset + 24;
-
-        if ((tplBody.Length >= 4) && (tplBody[0] == BinXmlToken.FragmentHeader))
-            tplPos += 4;
-
-        JsonWriter writer = default;
         SubstitutionValues values = new(offsets, sizes, types);
+        int tplChunkBase = (int)hdr.DefDataOffset + 24;
         if (!escaped)
         {
-            DecodeContent(tplBody, ref tplPos, values, tplChunkBase, ref vsb, ref writer, hasDepId: true, depth: 0,
-                inAttr: false);
+            DecodeTemplateBody<JsonWriter>(tplBody, values, tplChunkBase, ref vsb);
             return;
         }
 
         ValueUtf8Builder escapeVsb = new(stackalloc byte[512]);
-        DecodeContent(tplBody, ref tplPos, values, tplChunkBase, ref escapeVsb, ref writer, hasDepId: true, depth: 0,
-            inAttr: false);
+        DecodeTemplateBody<JsonWriter>(tplBody, values, tplChunkBase, ref escapeVsb);
         BinXmlValueFormatter.AppendJsonEscapedUtf8(ref vsb, escapeVsb.AsSpan());
         escapeVsb.Dispose();
     }

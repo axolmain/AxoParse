@@ -12,8 +12,38 @@
   The benchmark CLI now uses it. On the 30 MB sample (Apple M4), peak memory went from 39 to 8 MiB single-threaded
   and 49 to 18 MiB with 8 threads. Time went from 33.7 to 31.9 ms (XML) and 38.5 to 35.9 ms (JSON) single-threaded,
   and from 13.0 to 11.9 ms (XML) with 8 threads.
+- **`salvage: true`** (on `Parse`, `ParseAsync` and `WriteTo`, last parameter) keeps the well-formed part of a record
+  whose BinXml is corrupt instead of failing it. Decoding stops at the corruption and every open element is closed, so
+  the XML or JSON is still well-formed. `EvtxEvent.Diagnostic` says where it stopped (`BinXml salvaged …`). Off by
+  default.
+
+**Fixes:**
+
+- **Entity references with inline names truncated the event.** An entity reference's name (like `quot` in
+  `&quot;`) uses the same name structure as an element name, so it can be defined inline. Its inline bytes were
+  read as tokens, and everything after the first such entity was lost. 26 records in the two CAPI2 samples and 2 in
+  `Archive-ForwardedEvents-test.evtx` were cut short this way (for example, an HTTP header list ended at
+  `Via: 1.1 [&quot;`). All records of those three samples now match the Rust `evtx` crate's output.
+- **Corrupt records could render invalid JSON while reporting success.** These bugs were found by the corruption test,
+  which now requires every non-empty JSON record to parse:
+  - A record or template whose bytes held more than one top-level item rendered `{…}{…}` or `{…},…`. A record and a
+    template body now each end after their root element.
+  - A nested template that rendered nothing left a dangling comma in its parent's `#content`; it now renders `""`.
+  - A SYSTEMTIME field out of range for its digits (month 300, say) was written as non-digit bytes, including control
+    characters. Such fields are now written in full.
+
+  Intact records are unaffected.
 
 **Changes:**
+
+- **Corrupt BinXml fails the record instead of rendering junk.** Records, embedded BinXml values and templates that
+  don't compile are now decoded by one strict decoder shared by XML and JSON, as in the Rust `evtx` crate. An unknown
+  token, nesting deeper than 64 levels, a name running past the data, a substitution outside a template, or an
+  element inside an attribute value fails the record with a diagnostic. Before, the bytes were skipped and the record
+  could render partial or meaningless output (like `<></>`) while reporting success. Use `salvage: true` to keep the
+  well-formed part instead. Output for intact records is unchanged apart from the entity fix above.
+- JSON for templates that don't compile now matches the compiled path: attribute values are formatted as JSON (they
+  were XML-escaped, so `&` came out as `&amp;`), and an empty value in element content renders as `""`.
 
 - **Rendering only reads a record's own chunk.** A template body or substitution value that ran past the end of its
   64 KB chunk used to be read from the next chunk's bytes. Now the template is treated as unavailable or the record
@@ -30,6 +60,7 @@
   cancellation token, so existing calls still compile. Compiled callers need a rebuild (the method signatures changed).
 - Template compilation now goes through one format-neutral compiler (phases 1–3 of the renderer refactor). It removes
   the separate XML, JSON and WEVT template compilers (~880 lines). Output is unchanged.
+- **API:** `Parse`, `ParseAsync` and the `WriteTo` overloads take `bool salvage = false` as their last parameter.
 
 ---
 
