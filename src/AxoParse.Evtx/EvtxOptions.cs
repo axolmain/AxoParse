@@ -82,6 +82,12 @@ public sealed record EvtxOptions
     public EvtxFields Fields { get; init; }
 
     /// <summary>
+    /// Which events to produce, or null (the default) for all. Events that don't pass are dropped before they are
+    /// rendered; see <see cref="EvtxFilter"/>. Applies to every operation, including <c>WriteTo</c>.
+    /// </summary>
+    public EvtxFilter? Filter { get; init; }
+
+    /// <summary>
     /// When true, events are not rendered: <see cref="EvtxEvent.Utf8"/> is empty and only the typed fields are read
     /// (System fields always, plus EventData when <see cref="Fields"/> asks for it), which is much faster for counting
     /// and statistics. <see cref="Format"/> is ignored, and a record's diagnostic only reports a failure to read its

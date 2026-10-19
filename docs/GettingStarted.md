@@ -60,6 +60,7 @@ EvtxLog strict = EvtxParser.Parse("security.evtx", options with { ValidateChecks
 | `ValidateChecksums` | `false` | Skip chunks that fail CRC32 validation; each one is reported in `EvtxLog.Diagnostics` |
 | `Salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it  |
 | `WevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt       |
+| `Filter`            | `null`  | Which events to produce (see below)                                                   |
 | `Fields`            | `None`  | Typed fields to read: `EvtxFields.System`, `EventData` or `All` (see below)           |
 | `FieldsOnly`        | `false` | Read typed fields without rendering (`Utf8` stays empty); not for `WriteTo`           |
 | `XmlEventsRoot`     | `false` | `WriteTo` with XML: wrap the records in `<Events>` so the output is one XML document  |
@@ -103,6 +104,52 @@ pairs, which cost a formatted value per data item. A field the event doesn't hav
 
 For statistics, set `FieldsOnly = true` as well: records aren't rendered at all (`Utf8` is empty), about 2.5x faster
 than rendering XML.
+
+## Filtering, lookup and resuming
+
+`EvtxOptions.Filter` keeps only the events that pass every criterion you set; it applies to every entry point,
+including `WriteTo`. Events that don't pass are dropped before they are rendered, so filtering saves most of the work.
+
+```csharp
+EvtxFilter filter = new()
+{
+    EventIds = [4624, 4625],               // System/EventID
+    Providers = ["Microsoft-Windows-Security-Auditing"], // System/Provider@Name, ignoring case
+    Levels = [2, 3],                       // System/Level
+    From = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc), // TimeCreated, inclusive
+    To = new DateTime(2024, 2, 1, 0, 0, 0, DateTimeKind.Utc),   // TimeCreated, exclusive
+    FromRecordId = 1000,                   // inclusive
+    ToRecordId = 2000,                     // inclusive
+};
+foreach (EvtxEvent evt in EvtxParser.ReadEvents("security.evtx", new EvtxOptions { Filter = filter }))
+    Console.WriteLine(evt.GetText());
+```
+
+Criteria other than the record-ID range are checked against the System fields, which are then read for every record
+(much cheaper than rendering). The record-ID range is checked against each record's header, and whole chunks whose
+header shows they can't hold a matching record are skipped. A chunk flagged dirty (still being written when the log
+was copied) can hold records past the last ID its header shows, so only its first ID is trusted.
+
+`FindEvent(path, recordId)` returns the event with that record ID (or null) at a fraction of a parse's cost: on the
+30 MB sample, about 0.6 ms against 74 ms for a full parse.
+
+To resume after the last event you handled, filter from the next record ID:
+
+```csharp
+ulong next = 0;
+while (true)
+{
+    EvtxOptions page = new() { Filter = new EvtxFilter { FromRecordId = next } };
+    List<EvtxEvent> events = EvtxParser.ReadEvents("security.evtx", page).Take(1000).ToList();
+    if (events.Count == 0) break;
+    // ... handle the page ...
+    next = events[^1].RecordId + 1;
+}
+```
+
+Events come out in file order, which is record-ID order unless the log has wrapped around (a full circular log
+overwrites its oldest chunks in place). For a wrapped log, page by record-ID windows (`FromRecordId`/`ToRecordId`)
+instead.
 
 ## JSON output
 

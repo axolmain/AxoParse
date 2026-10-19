@@ -43,6 +43,11 @@ Every other rendering change affects corrupt input only. `WriteTo` now writes a 
   substitution values as records are parsed, not from rendered text; every field and pair of every sample record
   matches the record's own XML. `FieldsOnly = true` skips rendering (about 2.5x faster than rendering XML). Parses
   that don't ask for fields are unchanged in speed.
+- **Filtering before rendering** (`EvtxOptions.Filter` / `EvtxFilter`): event IDs, providers, levels, a TimeCreated
+  range and a record-ID range, applied to every entry point including `WriteTo`. Events that don't pass are never
+  rendered, and record-ID ranges skip whole chunks by their headers (a dirty chunk's last ID isn't trusted: the samples
+  include dirty chunks holding records past it). **`EvtxParser.FindEvent(path|byte[], recordId)`** looks one record up
+  (about 0.6 ms on the 30 MB sample against 74 ms for a parse), and `FromRecordId` resumes after the last event read.
 - **Streaming input.** `WriteTo`, `ReadEvents` and `Parse` given a path (or a stream) read each 64 KB chunk as a
   worker renders it (positional reads for files), so reading overlaps rendering and the file is never loaded whole.
   Output is identical to the in-memory overloads. The benchmark CLI uses it (see the peak memory column below).
@@ -290,6 +295,7 @@ records recovered from regions whose chunk header is damaged.
 | `ReadEvents(byte[] fileData \| string path, ...)` | `IEnumerable<EvtxEvent>` | Streams events while later chunks are parsed in the background; a few chunks per worker in memory. The path overload opens the file when enumeration starts and closes it when it ends. |
 | `ReadEventsAsync(byte[] fileData \| string path, ...)` | `IAsyncEnumerable<EvtxEvent>` | As `ReadEvents`, waiting for chunks without blocking a thread. |
 | `WriteTo(byte[] fileData \| string path \| Stream input, Stream output, ...)` | `int` (records written) | Writes every event's UTF-8 output, each followed by a line feed (JSON Lines for JSON). `input` must be readable and seekable; a `FileStream` is read with positional reads. `output` is written to but not flushed or closed. |
+| `FindEvent(byte[] fileData \| string path, ulong recordId, ...)` | `EvtxEvent?` | The first event with that record ID, or null. Skips chunks that can't hold it and renders only matching records. |
 | `ParseChunk(ReadOnlySpan<byte> chunkData, EvtxOptions? options = null)` | `EvtxChunk` | Decodes one standalone 64 KB chunk (carving, chunk-by-chunk reading). Offsets are chunk-relative. |
 | `ParseFileHeader(ReadOnlySpan<byte> data)` | `EvtxFileHeader` | Decodes the first 128 bytes of a file. |
 
@@ -311,11 +317,31 @@ public sealed record EvtxOptions
 | `ValidateChecksums` | `bool`         | `false` | Skip chunks failing CRC32 validation (reported as `ChunkChecksumMismatch`) |
 | `Salvage`           | `bool`         | `false` | Keep the well-formed prefix of a record whose BinXml is corrupt |
 | `WevtCache`         | `WevtCache?`   | `null`  | Provider templates for records whose embedded template is missing or corrupt |
+| `Filter`            | `EvtxFilter?`  | `null`  | Which events to produce (see `EvtxFilter`) |
 | `Fields`            | `EvtxFields`   | `None`  | Typed fields to read: `System`, `EventData` (implies `System`) or `All` |
 | `FieldsOnly`        | `bool`         | `false` | Read typed fields without rendering; `Utf8` stays empty (not for `WriteTo`) |
 | `XmlEventsRoot`     | `bool`         | `false` | `WriteTo` with XML only: wrap the records in `<Events>` … `</Events>` lines |
 
 `EvtxOptions.Default` holds the defaults. Derive variants with `with`.
+
+---
+
+### `EvtxFilter`
+
+```csharp
+public sealed record EvtxFilter
+```
+
+An event must pass every criterion that is set (null accepts everything). Events that don't pass are dropped before
+rendering.
+
+| Property       | Type                            | Description |
+|----------------|---------------------------------|-------------|
+| `EventIds`     | `IReadOnlyCollection<ushort>?`  | `System/EventID` values to keep |
+| `Providers`    | `IReadOnlyCollection<string>?`  | `System/Provider@Name` values to keep, ignoring case |
+| `Levels`       | `IReadOnlyCollection<byte>?`    | `System/Level` values to keep |
+| `From` / `To`  | `DateTime?`                     | `TimeCreated` range in UTC: `From` inclusive, `To` exclusive |
+| `FromRecordId` / `ToRecordId` | `ulong?`         | Record-ID range, both inclusive; skips whole chunks by header |
 
 ---
 

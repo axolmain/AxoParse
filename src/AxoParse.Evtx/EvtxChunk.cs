@@ -236,6 +236,9 @@ public sealed class EvtxChunk
     {
         ReadOnlySpan<byte> chunkData = data.AsSpan(at, ChunkSize);
         EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
+        if (RecordFilter.For(options.Filter)?.SkipsChunk(header) == true)
+            return new EvtxChunk(header, fileOffset, recovered: false, at, new List<EvtxRecord>(), [], [], null);
+
         int expectedRecords = ExpectedRecordCount(header);
         List<EvtxRecord> records = ReadRecords(chunkData, at, header.FreeSpaceOffset, expectedRecords);
 
@@ -290,11 +293,24 @@ public sealed class EvtxChunk
                                  EvtxOptions options, ArrayBufferWriter<byte> sink)
     {
         OutputFormat format = options.Format;
+        RecordFilter? filter = RecordFilter.For(options.Filter);
         ReadOnlySpan<byte> chunkData = data.AsSpan(at, ChunkSize);
         // Rendering reads template definitions straight from the chunk, so the template table isn't preloaded here
-        uint dataEnd = headerless
-            ? (uint)chunkData.Length
-            : EvtxChunkHeader.ParseEvtxChunkHeader(chunkData).FreeSpaceOffset;
+        uint dataEnd = (uint)chunkData.Length;
+        if (!headerless)
+        {
+            EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
+            if (filter?.SkipsChunk(header) == true)
+                return 0;
+            dataEnd = header.FreeSpaceOffset;
+        }
+
+        FieldSink? fields = null;
+        if (filter is { NeedsFields: true })
+        {
+            fields = _threadFieldSink ??= new FieldSink();
+            fields.Reset(collectPairs: false);
+        }
 
         // Render each record as soon as the walk finds it, while its bytes are still in cache. The parser is created
         // on the first record, as Parse/ParseHeaderless only construct it once records exist (its constructor
@@ -305,7 +321,13 @@ public sealed class EvtxChunk
         int offset = _chunkHeaderSize;
         while (TryReadNextRecord(chunkData, at, scanEnd, ref offset, out EvtxRecord record))
         {
-            binXml ??= new BinXmlParser(data, at, compiledCache, options.WevtCache, options.Salvage);
+            if ((filter != null) && !filter.MatchesRecordId(record.EventRecordId))
+                continue;
+
+            binXml ??= new BinXmlParser(data, at, compiledCache, options.WevtCache, options.Salvage, fields != null);
+            if ((fields != null) && !MatchesFields(binXml, record, format, fields, filter!, out _))
+                continue;
+
             int before = sink.WrittenCount;
             try
             {
@@ -412,6 +434,8 @@ public sealed class EvtxChunk
     {
         OutputFormat format = options.Format;
         bool fieldsOnly = options.FieldsOnly;
+        RecordFilter? filter = RecordFilter.For(options.Filter);
+        bool filterFields = filter is { NeedsFields: true };
         ArrayBufferWriter<byte> scratch = _threadRenderScratch ??= new ArrayBufferWriter<byte>(_initialScratchBytes);
         scratch.ResetWrittenCount();
         FieldSink? fields = null;
@@ -420,17 +444,31 @@ public sealed class EvtxChunk
             fields = _threadFieldSink ??= new FieldSink();
             fields.Reset((options.Fields & EvtxFields.EventData) != 0);
         }
-        List<EvtxRecord> kept = headerless ? new List<EvtxRecord>(records.Count) : records;
+        // A recovery region and a filtered chunk keep only some records
+        List<EvtxRecord> kept = headerless || (filter != null) ? new List<EvtxRecord>(records.Count) : records;
         int[] recordEnds = new int[records.Count];
         Dictionary<int, EvtxDiagnostic>? diagnostics = null;
         int count = 0;
         for (int i = 0; i < records.Count; i++)
         {
+            if ((filter != null) && !filter.MatchesRecordId(records[i].EventRecordId))
+                continue;
+
             int before = scratch.WrittenCount;
             bool produced = false;
             EvtxDiagnosticKind kind = default;
             string? message = null;
-            if (fields != null)
+            if (filterFields)
+            {
+                if (!MatchesFields(binXml, records[i], format, fields!, filter!, out Exception? failure))
+                    continue;
+                if (fieldsOnly && (failure != null))
+                {
+                    kind = EvtxDiagnosticKind.RecordRenderFailed;
+                    message = $"BinXml fields failed: {failure.Message}";
+                }
+            }
+            else if (fields != null)
             {
                 fields.BeginRecord();
                 try
@@ -473,17 +511,15 @@ public sealed class EvtxChunk
                 produced = scratch.WrittenCount > before;
             }
 
-            if (headerless)
+            // Recovery keeps only records that produced output; a failed render produced none
+            if (headerless && !produced)
             {
-                // Recovery keeps only records that produced output; a failed render produced none
-                if (!produced)
-                {
-                    fields?.DiscardRecord();
-                    continue;
-                }
-                kept.Add(records[i]);
+                fields?.DiscardRecord();
+                continue;
             }
 
+            if (!ReferenceEquals(kept, records))
+                kept.Add(records[i]);
             fields?.CommitRecord();
             if (message != null)
             {
@@ -509,8 +545,41 @@ public sealed class EvtxChunk
     /// True if a parse with <paramref name="options"/> reads typed fields.
     /// </summary>
     /// <param name="options">Parse options.</param>
-    /// <returns>True when <see cref="EvtxOptions.Fields"/> asks for any or <see cref="EvtxOptions.FieldsOnly"/> is set.</returns>
-    private static bool ReadsFields(EvtxOptions options) => (options.Fields != EvtxFields.None) || options.FieldsOnly;
+    /// <returns>True when <see cref="EvtxOptions.Fields"/> asks for any, <see cref="EvtxOptions.FieldsOnly"/> is set, or
+    /// the filter checks fields.</returns>
+    private static bool ReadsFields(EvtxOptions options) =>
+        (options.Fields != EvtxFields.None) || options.FieldsOnly || (RecordFilter.For(options.Filter)?.NeedsFields == true);
+
+    /// <summary>
+    /// Reads a record's fields into <paramref name="fields"/> (a new record) and checks them against the filter.
+    /// </summary>
+    /// <param name="binXml">Parser for the chunk.</param>
+    /// <param name="record">The record.</param>
+    /// <param name="format">Output format (selects the template caches).</param>
+    /// <param name="fields">Receives the fields; its current record holds them afterwards.</param>
+    /// <param name="filter">The filter.</param>
+    /// <param name="failure">The exception reading the fields threw (corrupt record), or null.</param>
+    /// <returns>True if the record passes. A corrupt record is checked against the fields read before the corruption,
+    /// which are the fields its event reports.</returns>
+    private static bool MatchesFields(BinXmlParser binXml, EvtxRecord record, OutputFormat format, FieldSink fields,
+                                      RecordFilter filter, out Exception? failure)
+    {
+        fields.BeginRecord();
+        failure = null;
+        try
+        {
+            binXml.ReadRecordFields(record, format, fields);
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+
+        if (filter.MatchesFields(fields.Current, record.WrittenTime))
+            return true;
+        fields.DiscardRecord();
+        return false;
+    }
 
     /// <summary>
     /// Renders a record to a throwaway buffer to learn whether it produces output (fields-only recovery).
