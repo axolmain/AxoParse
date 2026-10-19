@@ -4,7 +4,7 @@
 
 | Method | Use when | Memory |
 |--------|----------|--------|
-| `EvtxParser.WriteTo` | You only need the rendered output (export, piping, hashing) | Flat: reusable per-worker buffers, nothing retained per record |
+| `EvtxParser.WriteTo` | You only need the rendered output (export, piping, hashing) | Flat: from a path or handle, a few reusable buffers per worker and the file is never loaded whole; nothing retained per record |
 | `EvtxParser.ParseAsync` | You want to start consuming events before the whole file is parsed | Holds only chunks not yet consumed (grows toward the whole file if the consumer is slower than the parser) |
 | `EvtxParser.Parse` | You need random access to chunks, records, templates, or diagnostics | Whole file's output held in memory |
 
@@ -27,16 +27,18 @@ thread pool overhead.
 
 ## Memory
 
-All entry points take the whole file as a `byte[]`.
+`Parse`, `ParseAsync` and `WriteTo(byte[], ...)` take the whole file as a `byte[]`. `WriteTo(path, ...)` and
+`WriteTo(SafeFileHandle, ...)` read each 64 KB chunk on demand instead.
 
 `Parse` renders each chunk's records into one exact-size UTF-8 buffer. `ParsedUtf8` and `ParsedJson` are slices of that
 buffer, so there's no per-record array. `ParsedXml` decodes a record to `string` only on first access, so if you
 don't read it, it costs nothing.
 
-`WriteTo` runs as a pipeline: workers claim chunks in file order and render each into a buffer from a small ring
-(4 per worker), while the calling thread writes each chunk as soon as it's next in order and hands its buffer back.
-Rendering and writing overlap, and no worker waits for a whole batch to finish. Peak memory is roughly the input file
-plus the ring: the benchmark CLI peaks at about 39 MiB on the 30 MB sample single-threaded, 49 MiB with 8 threads.
+`WriteTo` runs as a pipeline: workers claim chunks in file order, read (for the path/handle overloads) and render each
+into a buffer from a small ring (4 per worker), while the calling thread writes each chunk as soon as it's next in
+order and hands its buffer back. Reading, rendering and writing overlap, and no worker waits for a whole batch to
+finish. Streaming from a path, the benchmark CLI peaks at about 8 MiB on the 30 MB sample single-threaded and 18 MiB
+with 8 threads (39 and 49 MiB when it loaded the file first).
 
 ## XML vs JSON
 

@@ -54,7 +54,8 @@ I'd ever bother to, which keeps the history really clean to track. Commits with 
 ## Features
 
 - **XML and JSON output** — renders BinXml straight to UTF-8 XML or JSON (no xml-to-json conversion, no UTF-16 detour)
-- **Streaming output** — `WriteTo` writes rendered records to any `Stream` with flat memory use
+- **Streaming** — `WriteTo` reads a file chunk by chunk and writes rendered records to any `Stream`; memory stays at a
+  few MB whatever the file size
 - **Async enumeration** — `ParseAsync` yields events in file order as chunks finish parsing
 - **Multi-threaded** — parallel chunk processing with configurable thread count
 - **Template pre-compilation** — compiles BinXml templates once for zero repeated overhead
@@ -88,11 +89,12 @@ foreach (EvtxEvent evt in parser.GetEvents())
 
 ### Stream straight to a file
 
-The fastest way to export: no per-record objects, output is byte-identical to `Parse`.
+The fastest way to export. The file is read chunk by chunk as it's rendered (it's never loaded whole), nothing is kept
+per record, and the output is byte-identical to `Parse`.
 
 ```csharp
 using FileStream output = File.Create("security.json");
-EvtxParser.WriteTo(fileData, output, OutputFormat.Json);
+EvtxParser.WriteTo("security.evtx", output, OutputFormat.Json);
 ```
 
 ### Consume events as they're parsed

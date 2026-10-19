@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using AxoParse.Evtx.BinXml;
 using AxoParse.Evtx.Wevt;
+using Microsoft.Win32.SafeHandles;
 
 namespace AxoParse.Evtx.Evtx;
 
@@ -270,43 +271,55 @@ public class EvtxParser
                               CancellationToken cancellationToken = default)
     {
         EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(fileData);
-        int chunkStart = fileHeader.HeaderBlockSize;
-        int chunkCount = (fileData.Length - chunkStart) / EvtxChunk.ChunkSize;
+        return WriteAll(new ChunkSource(fileData, null), fileHeader.HeaderBlockSize, fileData.Length, output, format,
+            maxThreads, validateChecksums, cancellationToken);
+    }
 
-        // Same classification as Parse: magic-less regions go to recovery; checksum failures are skipped outright
-        ReadOnlySpan<byte> span = fileData;
-        int[] validOffsets = new int[chunkCount];
-        int validCount = 0;
-        int[] invalidOffsets = new int[chunkCount];
-        int invalidCount = 0;
-        for (int i = 0; i < chunkCount; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
+    /// <summary>
+    /// Streams an EVTX file from disk and writes every record's rendered output to <paramref name="output"/> as UTF-8,
+    /// without loading the file into memory. Each worker reads the 64 KB chunk it is about to render, so reading
+    /// overlaps rendering and memory stays at a few buffers per worker whatever the file size (files over 2 GB work).
+    /// Output and return value are identical to <see cref="WriteTo(byte[], Stream, OutputFormat, int, bool, CancellationToken)"/>
+    /// for the same bytes. The file is opened for reading with <see cref="FileShare.ReadWrite"/>, so a log another
+    /// process still has open can be read.
+    /// </summary>
+    /// <param name="path">Path of the .evtx file.</param>
+    /// <param name="output">Stream that receives the UTF-8 output. It is written to but not flushed or closed.</param>
+    /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
+    /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>Number of records written, counted as <see cref="TotalRecords"/> counts them for the same input.</returns>
+    public static int WriteTo(string path, Stream output, OutputFormat format = OutputFormat.Xml,
+                              int maxThreads = 0, bool validateChecksums = false,
+                              CancellationToken cancellationToken = default)
+    {
+        using SafeFileHandle file = File.OpenHandle(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        return WriteTo(file, output, format, maxThreads, validateChecksums, cancellationToken);
+    }
 
-            int offset = chunkStart + i * EvtxChunk.ChunkSize;
-            if (offset + EvtxChunk.ChunkSize > fileData.Length)
-                break;
-            if (!span.Slice(offset, 8).SequenceEqual("ElfChnk\0"u8))
-            {
-                invalidOffsets[invalidCount++] = offset;
-                continue;
-            }
-
-            if (validateChecksums)
-            {
-                ReadOnlySpan<byte> chunkData = span.Slice(offset, EvtxChunk.ChunkSize);
-                EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
-                if (!header.ValidateHeaderChecksum(chunkData) || !header.ValidateDataChecksum(chunkData))
-                    continue;
-            }
-
-            validOffsets[validCount++] = offset;
-        }
-
-        int workers = maxThreads > 0 ? maxThreads : Environment.ProcessorCount;
-        int total = WriteChunks(fileData, validOffsets, validCount, headerless: false, format, workers, output, cancellationToken);
-        total += WriteChunks(fileData, invalidOffsets, invalidCount, headerless: true, format, workers, output, cancellationToken);
-        return total;
+    /// <summary>
+    /// Streams an EVTX file from an open handle; see <see cref="WriteTo(string, Stream, OutputFormat, int, bool, CancellationToken)"/>.
+    /// Chunks are read with positional reads (<see cref="RandomAccess"/>), so the handle's file position is not used
+    /// or changed and the handle stays open.
+    /// </summary>
+    /// <param name="file">Handle opened for reading, e.g. by <see cref="File.OpenHandle"/>.</param>
+    /// <param name="output">Stream that receives the UTF-8 output. It is written to but not flushed or closed.</param>
+    /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
+    /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>Number of records written, counted as <see cref="TotalRecords"/> counts them for the same input.</returns>
+    public static int WriteTo(SafeFileHandle file, Stream output, OutputFormat format = OutputFormat.Xml,
+                              int maxThreads = 0, bool validateChecksums = false,
+                              CancellationToken cancellationToken = default)
+    {
+        long length = RandomAccess.GetLength(file);
+        Span<byte> headerBytes = stackalloc byte[_fileHeaderReadBytes];
+        int headerLength = ChunkSource.ReadFully(file, headerBytes[..(int)Math.Min(length, _fileHeaderReadBytes)], 0);
+        EvtxFileHeader fileHeader = EvtxFileHeader.ParseEvtxFileHeader(headerBytes[..headerLength]);
+        return WriteAll(new ChunkSource(null, file), fileHeader.HeaderBlockSize, length, output, format, maxThreads,
+            validateChecksums, cancellationToken);
     }
 
     /// <summary>
@@ -524,23 +537,68 @@ public class EvtxParser
     #region Non-Public Methods
 
     /// <summary>
-    /// Renders the given chunks and writes their UTF-8 output to <paramref name="output"/> in offset-array order.
-    /// With several workers, chunks are rendered as a pipeline: workers claim chunks in order and render into a ring of
-    /// reusable buffers while the calling thread writes each chunk as soon as it is next in order, so rendering and
-    /// writing overlap and no worker waits on a batch barrier. At most <c>workers × chunks in flight per worker</c>
-    /// rendered chunks are held at once. Each call starts with empty template caches, as each phase of
-    /// <see cref="Parse"/> does, so recovered regions never see templates compiled for valid chunks.
+    /// Shared body of the <c>WriteTo</c> overloads. Pass 1 visits every chunk slot in file order: workers check the
+    /// <c>ElfChnk</c> magic (and checksums when asked) on the chunk they load and render it if valid. Regions without
+    /// the magic are only marked; pass 2 then recovers records from them, in file order, with fresh template caches.
+    /// That is the same classification and order as <see cref="Parse"/>: checksum failures are skipped outright,
+    /// magic-less regions go to recovery.
     /// </summary>
-    /// <param name="fileData">Complete EVTX file bytes.</param>
-    /// <param name="offsets">Absolute file offsets of the chunks to render.</param>
+    /// <param name="source">Where chunk bytes come from.</param>
+    /// <param name="chunkStart">File offset of the first chunk (the file header's block size, normally 4096).</param>
+    /// <param name="length">Total file length in bytes; only whole 64 KB chunks are visited.</param>
+    /// <param name="output">Stream that receives the UTF-8 output.</param>
+    /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="maxThreads">Thread count: 0/-1 = all cores, 1 = single-threaded, N = use N threads.</param>
+    /// <param name="validateChecksums">When true, skip chunks that fail CRC32 header or data checksum validation.</param>
+    /// <param name="cancellationToken">Token to cancel the operation.</param>
+    /// <returns>Number of records written.</returns>
+    private static int WriteAll(ChunkSource source, int chunkStart, long length, Stream output, OutputFormat format,
+                                int maxThreads, bool validateChecksums, CancellationToken cancellationToken)
+    {
+        int chunkCount = (int)Math.Max(0, (length - chunkStart) / EvtxChunk.ChunkSize);
+        long[] offsets = new long[chunkCount];
+        for (int i = 0; i < chunkCount; i++)
+            offsets[i] = chunkStart + ((long)i * EvtxChunk.ChunkSize);
+
+        int workers = maxThreads > 0 ? maxThreads : Environment.ProcessorCount;
+        bool[] needsRecovery = new bool[chunkCount];
+        int total = WriteChunks(source, offsets, chunkCount, ChunkPass.Classify, validateChecksums, needsRecovery,
+            format, workers, output, cancellationToken);
+
+        int recoverCount = 0;
+        for (int i = 0; i < chunkCount; i++)
+        {
+            if (needsRecovery[i])
+                offsets[recoverCount++] = offsets[i];
+        }
+
+        total += WriteChunks(source, offsets, recoverCount, ChunkPass.Recover, validateChecksums: false, null,
+            format, workers, output, cancellationToken);
+        return total;
+    }
+
+    /// <summary>
+    /// Renders the given chunks and writes their UTF-8 output to <paramref name="output"/> in offset-array order.
+    /// With several workers, chunks are rendered as a pipeline: workers claim chunks in order, load and render them
+    /// into a ring of reusable buffers while the calling thread writes each chunk as soon as it is next in order, so
+    /// loading, rendering and writing overlap and no worker waits on a batch barrier. At most
+    /// <c>workers × chunks in flight per worker</c> rendered chunks are held at once. Each call starts with empty
+    /// template caches, as each phase of <see cref="Parse"/> does, so recovered regions never see templates compiled
+    /// for valid chunks.
+    /// </summary>
+    /// <param name="source">Where chunk bytes come from.</param>
+    /// <param name="offsets">Absolute file offsets of the chunks to process.</param>
     /// <param name="count">Number of entries of <paramref name="offsets"/> to use.</param>
-    /// <param name="headerless">True when the chunks are recovery candidates with damaged or missing headers.</param>
+    /// <param name="pass">Classify-and-render valid chunks, or recover records from damaged regions.</param>
+    /// <param name="validateChecksums">Classify pass only: skip chunks failing CRC32 validation.</param>
+    /// <param name="needsRecovery">Classify pass only: set for each index whose region lacks the chunk magic.</param>
     /// <param name="format">Output format (XML or JSON).</param>
     /// <param name="workers">Number of rendering threads (1 = render on the calling thread).</param>
     /// <param name="output">Stream that receives the UTF-8 output.</param>
     /// <param name="cancellationToken">Token to cancel the operation.</param>
     /// <returns>Number of records written, counted as <see cref="EvtxChunk.RenderTo"/> counts them.</returns>
-    private static int WriteChunks(byte[] fileData, int[] offsets, int count, bool headerless, OutputFormat format,
+    private static int WriteChunks(ChunkSource source, long[] offsets, int count, ChunkPass pass,
+                                   bool validateChecksums, bool[]? needsRecovery, OutputFormat format,
                                    int workers, Stream output, CancellationToken cancellationToken)
     {
         if (count == 0)
@@ -553,11 +611,13 @@ public class EvtxParser
             Dictionary<Guid, CompiledTemplate?>? xmlCache = xml ? new Dictionary<Guid, CompiledTemplate?>() : null;
             Dictionary<Guid, CompiledJsonTemplate?>? jsonCache = xml ? null : new Dictionary<Guid, CompiledJsonTemplate?>();
             ArrayBufferWriter<byte> sink = new(_initialSinkBytes);
+            byte[]? chunkBuffer = source.NeedsBuffer ? new byte[EvtxChunk.ChunkSize] : null;
             for (int i = 0; i < count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 sink.ResetWrittenCount();
-                total += EvtxChunk.RenderTo(fileData, offsets[i], headerless, xmlCache, jsonCache, format, sink);
+                total += RenderChunk(source, offsets[i], i, pass, validateChecksums, needsRecovery, chunkBuffer,
+                    xmlCache, jsonCache, format, sink);
                 output.Write(sink.WrittenSpan);
             }
 
@@ -584,6 +644,7 @@ public class EvtxParser
             // Template caches live for the worker's whole run, like the thread-local caches of Parse
             Dictionary<Guid, CompiledTemplate?>? xmlCache = xml ? new Dictionary<Guid, CompiledTemplate?>() : null;
             Dictionary<Guid, CompiledJsonTemplate?>? jsonCache = xml ? null : new Dictionary<Guid, CompiledJsonTemplate?>();
+            byte[]? chunkBuffer = source.NeedsBuffer ? new byte[EvtxChunk.ChunkSize] : null;
             try
             {
                 while (true)
@@ -596,7 +657,8 @@ public class EvtxParser
                     int slot = i % depth;
                     ArrayBufferWriter<byte> sink = sinks[slot] ??= new ArrayBufferWriter<byte>(_initialSinkBytes);
                     sink.ResetWrittenCount();
-                    kept[slot] = EvtxChunk.RenderTo(fileData, offsets[i], headerless, xmlCache, jsonCache, format, sink);
+                    kept[slot] = RenderChunk(source, offsets[i], i, pass, validateChecksums, needsRecovery,
+                        chunkBuffer, xmlCache, jsonCache, format, sink);
                     ready[slot].Release();
                 }
             }
@@ -644,21 +706,149 @@ public class EvtxParser
         return total;
     }
 
+    /// <summary>
+    /// Loads one chunk and renders it into <paramref name="sink"/>. In the classify pass, a region without the
+    /// <c>ElfChnk\0</c> magic is marked in <paramref name="needsRecovery"/> and a chunk failing checksum validation is
+    /// skipped; both produce no output.
+    /// </summary>
+    /// <param name="source">Where chunk bytes come from.</param>
+    /// <param name="offset">Absolute file offset of the chunk.</param>
+    /// <param name="index">Index of the chunk in this pass, used to mark <paramref name="needsRecovery"/>.</param>
+    /// <param name="pass">Classify-and-render or recover.</param>
+    /// <param name="validateChecksums">Classify pass only: skip chunks failing CRC32 validation.</param>
+    /// <param name="needsRecovery">Classify pass only: per-index recovery flags.</param>
+    /// <param name="chunkBuffer">The worker's 64 KB read buffer when the source is a file; otherwise null.</param>
+    /// <param name="xmlCache">The worker's compiled XML template cache. Null when using JSON output.</param>
+    /// <param name="jsonCache">The worker's compiled JSON template cache. Null when using XML output.</param>
+    /// <param name="format">Output format (XML or JSON).</param>
+    /// <param name="sink">Buffer that receives the chunk's UTF-8 output.</param>
+    /// <returns>Number of records rendered from the chunk.</returns>
+    private static int RenderChunk(ChunkSource source, long offset, int index, ChunkPass pass, bool validateChecksums,
+                                   bool[]? needsRecovery, byte[]? chunkBuffer,
+                                   Dictionary<Guid, CompiledTemplate?>? xmlCache,
+                                   Dictionary<Guid, CompiledJsonTemplate?>? jsonCache,
+                                   OutputFormat format, ArrayBufferWriter<byte> sink)
+    {
+        int at = source.Load(offset, chunkBuffer, out byte[] data);
+        if (pass == ChunkPass.Recover)
+            return EvtxChunk.RenderTo(data, at, headerless: true, xmlCache, jsonCache, format, sink);
+
+        ReadOnlySpan<byte> chunkData = data.AsSpan(at, EvtxChunk.ChunkSize);
+        if (!chunkData[..8].SequenceEqual("ElfChnk\0"u8))
+        {
+            needsRecovery![index] = true;
+            return 0;
+        }
+
+        if (validateChecksums)
+        {
+            EvtxChunkHeader header = EvtxChunkHeader.ParseEvtxChunkHeader(chunkData);
+            if (!header.ValidateHeaderChecksum(chunkData) || !header.ValidateDataChecksum(chunkData))
+                return 0;
+        }
+
+        return EvtxChunk.RenderTo(data, at, headerless: false, xmlCache, jsonCache, format, sink);
+    }
+
     #endregion
 
     #region Non-Public Fields
 
     /// <summary>
-    /// Initial size of each per-worker UTF-8 output buffer used by <see cref="WriteTo"/> (128 KB).
+    /// Initial size of each per-worker UTF-8 output buffer used by <c>WriteTo</c> (128 KB).
     /// A 64 KB chunk typically renders to 100-200 KB of text; buffers grow on demand and are reused.
     /// </summary>
     private const int _initialSinkBytes = 128 * 1024;
 
     /// <summary>
-    /// Rendered-but-unwritten chunks allowed per worker in the <see cref="WriteTo"/> pipeline. More lets fast workers
+    /// Rendered-but-unwritten chunks allowed per worker in the <c>WriteTo</c> pipeline. More lets fast workers
     /// run further ahead of a slow chunk; fewer bounds memory to workers × this × chunk output size (~100-200 KB).
     /// </summary>
     private const int _chunksInFlightPerWorker = 4;
+
+    /// <summary>
+    /// Bytes read from the start of a file to parse its header: the 4 KB header block (only the first 128 bytes are
+    /// decoded).
+    /// </summary>
+    private const int _fileHeaderReadBytes = 4096;
+
+    #endregion
+
+    #region Nested Types
+
+    /// <summary>
+    /// Which of <see cref="WriteAll"/>'s two passes a <see cref="WriteChunks"/> call runs.
+    /// </summary>
+    private enum ChunkPass
+    {
+        /// <summary>
+        /// Check each region's chunk magic (and checksums when asked), render valid chunks, mark the rest for recovery.
+        /// </summary>
+        Classify,
+
+        /// <summary>
+        /// Recover records from regions whose chunk header is damaged or missing.
+        /// </summary>
+        Recover,
+    }
+
+    /// <summary>
+    /// Where <c>WriteTo</c> gets chunk bytes: a slice of an in-memory file, or a positional read from a file handle
+    /// into the worker's own 64 KB buffer. Rendering only touches the chunk's own bytes (see
+    /// <see cref="BinXml.BinXmlParser"/>), so both give identical output.
+    /// </summary>
+    /// <param name="fileData">Whole file in memory, or null when reading from <paramref name="file"/>.</param>
+    /// <param name="file">Open file handle, or null when <paramref name="fileData"/> is set.</param>
+    private readonly struct ChunkSource(byte[]? fileData, SafeFileHandle? file)
+    {
+        /// <summary>
+        /// True when each worker needs its own 64 KB buffer to read chunks into.
+        /// </summary>
+        public bool NeedsBuffer => fileData == null;
+
+        /// <summary>
+        /// Makes the 64 KB chunk at <paramref name="offset"/> available.
+        /// </summary>
+        /// <param name="offset">Absolute file offset of the chunk.</param>
+        /// <param name="buffer">The worker's read buffer (file sources only).</param>
+        /// <param name="data">Array holding the chunk.</param>
+        /// <returns>Offset of the chunk within <paramref name="data"/>.</returns>
+        public int Load(long offset, byte[]? buffer, out byte[] data)
+        {
+            if (fileData != null)
+            {
+                data = fileData;
+                return (int)offset;
+            }
+
+            ReadFully(file!, buffer, offset);
+            data = buffer!;
+            return 0;
+        }
+
+        /// <summary>
+        /// Fills <paramref name="destination"/> from <paramref name="file"/> at <paramref name="offset"/>, looping over
+        /// short reads.
+        /// </summary>
+        /// <param name="file">Open file handle.</param>
+        /// <param name="destination">Bytes to fill.</param>
+        /// <param name="offset">File offset to read from.</param>
+        /// <returns>The number of bytes read (always <c>destination.Length</c>).</returns>
+        /// <exception cref="EndOfStreamException">The file ended first (it shrank while being read).</exception>
+        public static int ReadFully(SafeFileHandle file, Span<byte> destination, long offset)
+        {
+            int filled = 0;
+            while (filled < destination.Length)
+            {
+                int read = RandomAccess.Read(file, destination[filled..], offset + filled);
+                if (read == 0)
+                    throw new EndOfStreamException($"EVTX file ended at {offset + filled} while reading {destination.Length} bytes at {offset}");
+                filled += read;
+            }
+
+            return filled;
+        }
+    }
 
     #endregion
 }

@@ -34,6 +34,7 @@ internal sealed partial class BinXmlParser
     {
         _fileData = fileData;
         _chunkFileOffset = chunkFileOffset;
+        _chunkEnd = Math.Min(chunkFileOffset + EvtxChunk.ChunkSize, fileData.Length);
         _templates = templates;
         _compiledCache = compiledCache;
         _compiledJsonCache = compiledJsonCache;
@@ -104,6 +105,31 @@ internal sealed partial class BinXmlParser
     #endregion
 
     #region Non-Public Methods
+
+    /// <summary>
+    /// Returns <paramref name="size"/> bytes at <paramref name="fileOffset"/>, which must lie within this chunk.
+    /// Offsets and sizes come from the file; a range running past the chunk end throws, failing only the current
+    /// record (the chunk render loop reports it as a diagnostic) instead of reading the next chunk's bytes.
+    /// </summary>
+    /// <param name="fileOffset">Offset into <see cref="_fileData"/>, at or after the chunk start.</param>
+    /// <param name="size">Number of bytes.</param>
+    /// <returns>The requested bytes.</returns>
+    private ReadOnlySpan<byte> ChunkBytes(int fileOffset, int size)
+    {
+        if ((uint)fileOffset + (uint)size > (uint)_chunkEnd)
+            ThrowValuePastChunkEnd(fileOffset, size);
+        return _fileData.AsSpan(fileOffset, size);
+    }
+
+    /// <summary>
+    /// Throws for a substitution value that runs past the chunk end (kept out of line so the check stays small).
+    /// </summary>
+    /// <param name="fileOffset">Value offset read from the file.</param>
+    /// <param name="size">Value size read from the file.</param>
+    [DoesNotReturn]
+    private void ThrowValuePastChunkEnd(int fileOffset, int size) =>
+        throw new InvalidDataException(
+            $"Substitution value at 0x{fileOffset:X} ({size} bytes) runs past the end of its chunk at 0x{_chunkEnd:X}");
 
     /// <summary>
     /// Reads a template instance's substitution count (u32 at <paramref name="countPos"/>) and rejects counts the
@@ -554,7 +580,7 @@ internal sealed partial class BinXmlParser
         if (hdr.DataSize == 0) return;
 
         int tplBodyFileOffset = _chunkFileOffset + (int)hdr.DefDataOffset + 24;
-        if (tplBodyFileOffset + (int)hdr.DataSize > _fileData.Length) return;
+        if (tplBodyFileOffset + (int)hdr.DataSize > _chunkEnd) return;
 
         // Slice spans to actual value count
         ReadOnlySpan<int> offsets = valueOffsets.Slice(0, hdr.NumValues);
@@ -792,7 +818,7 @@ internal sealed partial class BinXmlParser
     private void WriteBinXmlValue(int size, byte valueType, int fileOffset, int binxmlChunkBase, ref ValueUtf8Builder vsb)
     {
         if (size == 0) return;
-        ReadOnlySpan<byte> valueBytes = _fileData.AsSpan(fileOffset, size);
+        ReadOnlySpan<byte> valueBytes = ChunkBytes(fileOffset, size);
 
         // Array flag
         if ((valueType & BinXmlValueType.ArrayFlag) != 0)
@@ -1036,6 +1062,14 @@ internal sealed partial class BinXmlParser
     /// Raw EVTX file bytes shared across all chunks and records.
     /// </summary>
     private readonly byte[] _fileData;
+
+    /// <summary>
+    /// Exclusive end of this chunk within <see cref="_fileData"/>: <c>_chunkFileOffset + 65536</c>, clamped to the data
+    /// length. Every template body and substitution value must lie before it. A chunk is self-contained, so bytes
+    /// past its end belong to the next chunk; bounding reads here makes rendering from the whole file and from a
+    /// standalone 64 KB chunk buffer identical, as in the Rust evtx crate, which parses each chunk from its own buffer.
+    /// </summary>
+    private readonly int _chunkEnd;
 
     /// <summary>
     /// Per-chunk cache of element/attribute names keyed by chunk-relative offset.

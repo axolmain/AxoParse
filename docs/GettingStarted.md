@@ -39,14 +39,17 @@ foreach (EvtxEvent evt in parser.GetEvents())
 
 ## Stream output to a file or stdout
 
-When you only need the rendered output, `WriteTo` is the fastest path. It renders each chunk into a reusable UTF-8
-buffer and writes it straight to the stream, so memory stays flat regardless of file size and nothing is retained per
-record. The bytes are identical to concatenating `Parse` output.
+When you only need the rendered output, `WriteTo` is the fastest path. Given a path (or an open `SafeFileHandle`), each
+worker reads the 64 KB chunk it's about to render, renders it into a reusable UTF-8 buffer, and the chunks are written
+to the stream in order. The file is never loaded whole, so memory stays at a few MB whatever its size (files over 2 GB
+work), and nothing is retained per record. The bytes are identical to concatenating `Parse` output.
 
 ```csharp
 using FileStream output = File.Create("security.json");
-int written = EvtxParser.WriteTo(fileData, output, OutputFormat.Json);
+int written = EvtxParser.WriteTo("security.evtx", output, OutputFormat.Json);
 ```
+
+If the file is already in memory, `WriteTo(byte[] fileData, ...)` takes the bytes instead, with the same output.
 
 ## Consume events as they're parsed
 
