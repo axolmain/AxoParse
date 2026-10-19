@@ -29,7 +29,7 @@ Use `--native-only` to skip everything except C# and Rust native benchmarks.
 External parsers are cloned and built under `$EXTERNAL_DIR` (default `$TMPDIR/evtx-bench`).
 
 Before timing anything, the C# CLI's output is checked against the golden hashes from `GoldenOutputTests`
-(`perf/AxoParse.CliHash`: every sample × XML/JSON × 1/8 threads). If any output differs, the run stops instead of
+(`perf/AxoParse.CliHash`: every sample × XML/structured JSON × 1/8 threads, against the `framed/` hashes). If any output differs, the run stops instead of
 benchmarking a broken build. Use `--skip-verify` to bypass this, for example while timing a deliberate output change
 before re-blessing.
 

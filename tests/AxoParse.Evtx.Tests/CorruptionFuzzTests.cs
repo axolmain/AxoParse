@@ -18,9 +18,8 @@ public class CorruptionFuzzTests
     #region Public Methods
 
     /// <summary>
-    /// Verifies that no seeded mutation of any sample makes <see cref="EvtxParser.Parse"/> or
-    /// <see cref="EvtxParser.WriteTo"/> throw an undocumented exception, single-threaded and (every tenth round)
-    /// multi-threaded. Each mutation gets <see cref="_perMutationTimeout"/>, so an infinite loop is reported with its
+    /// Verifies that no seeded mutation of any sample makes <c>Parse</c>, <c>WriteTo</c> or <c>ReadEvents</c> throw an
+    /// undocumented exception, single-threaded and (every tenth round) multi-threaded. Each mutation gets <see cref="_perMutationTimeout"/>, so an infinite loop is reported with its
     /// seed instead of hanging the run, whatever the round count.
     /// </summary>
     [Fact]
@@ -87,6 +86,7 @@ public class CorruptionFuzzTests
             foreach (EvtxEvent _ in parser.Events) { }
             EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.JsonStructured, MaxThreads = threads }, token);
             EvtxParser.WriteTo(data, Stream.Null, new EvtxOptions { Format = OutputFormat.Xml, MaxThreads = threads, ValidateChecksums = true }, token);
+            foreach (EvtxEvent _ in EvtxParser.ReadEvents(data, new EvtxOptions { MaxThreads = threads, Salvage = true }, token)) { }
 
             EvtxLog salvaged = EvtxParser.Parse(data, new EvtxOptions { MaxThreads = threads, Format = OutputFormat.JsonStructured, Salvage = true }, token);
             foreach (EvtxEvent evt in salvaged.Events)

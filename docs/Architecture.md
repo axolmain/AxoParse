@@ -2,45 +2,52 @@
 
 ## Parsing pipeline
 
-Raw file bytes flow through three layers:
+File bytes flow through three layers:
 
 ```
-byte[] fileData
+path / byte[] / seekable Stream  (ChunkSource)
     |
     v
-EvtxParser.Parse()
+EvtxParser.Parse / ReadEvents / ReadEventsAsync / WriteTo
     |
-    |-- 1. File layer: validate 4KB header, scan for valid 64KB chunks
+    |-- 1. File layer: parse the 4 KB header, list the 64 KB chunk slots
     |
-    |-- 2. Chunk layer (parallel): each chunk parses its own header,
-    |      preloads string cache + template table, walks event records
+    |-- 2. Chunk layer (parallel): each worker loads a chunk (a slice of the
+    |      byte[], or a positional read into its own 64 KB buffer), checks
+    |      the ElfChnk magic (and CRC32 when asked), walks event records
     |
     |-- 3. Render layer: BinXmlParser converts each record's BinXml token
     |      stream directly to UTF-8 XML or JSON, appended to one buffer
     |      per chunk (no UTF-16 strings in between)
     |
     v
-EvtxParser { FileHeader, Chunks[], TotalRecords }
+EvtxLog { Header, Chunks[], RecordCount, Events, Diagnostics }   (or a stream of events, or bytes)
 ```
 
-There are three entry points over the same pipeline:
+Every entry point runs the same two passes over the same pipeline, so they classify chunks identically and produce
+events (or bytes) in the same order:
 
 | Entry point | Output |
 |-------------|--------|
-| `EvtxParser.Parse` | Holds every chunk. Each `EvtxChunk` keeps its records plus one UTF-8 buffer of rendered output, exposed per record as `ParsedUtf8` / `ParsedJson` slices or as lazily decoded `ParsedXml` strings. |
-| `EvtxParser.ParseAsync` | Same phases, but parsed chunks go through a channel and a reorder buffer, so `EvtxEvent`s are yielded in file order as soon as each chunk is ready. |
-| `EvtxParser.WriteTo` | Same chunk classification (done by the workers, so checksum validation runs in parallel), but doesn't build `EvtxChunk`s. Workers claim chunks in order, load each (a slice of the `byte[]`, or a positional read of the file into a per-worker 64 KB buffer) and render it into a buffer from a bounded ring. The calling thread writes each chunk to the output `Stream` as soon as it's next in file order and returns the buffer, so rendering and writing overlap with no batch barrier. Output bytes match `Parse`. |
+| `Parse` | Collects every `EvtxChunk` into an `EvtxLog`. Each chunk keeps its records plus one UTF-8 buffer of rendered output; an `EvtxEvent` is a 16-byte view (chunk + index) over it. |
+| `ReadEvents` / `ReadEventsAsync` | Yields each chunk's events as soon as the chunk is next in order; only a few chunks per worker are alive at once. |
+| `WriteTo` | Doesn't build `EvtxChunk`s: each chunk is rendered into a reusable buffer (a line feed after each record) and written to the output `Stream` as soon as it is next in order. |
 
 ## Threading model
 
-`EvtxParser.Parse()` runs in four phases:
+`ChunkPipeline` runs one piece of work per chunk slot on `MaxThreads` workers and hands results to the calling thread
+in slot order. Workers claim slots in order and fill a bounded ring of result slots (4 per worker); the consumer takes
+each slot as soon as it's next and releases it for reuse, so loading, rendering and consuming overlap with no batch
+barrier and memory stays flat. With one worker the work runs inline on the calling thread. Chunks are self-contained
+(own header, own string/template tables), so workers share nothing except the read-only input. Each worker keeps its
+own compiled-template cache for its whole run.
 
-1. **Sequential scan** — walk chunk boundaries, verify `ElfChnk\0` magic, optionally validate CRC32 checksums. Collects valid chunk offsets.
-2. **Parallel parse** — `Parallel.For` dispatches each valid chunk to a thread. Chunks are self-contained (own header, own string/template caches), so threads share nothing except the read-only file buffer. Each worker has its own compiled-template cache.
-3. **Sequential collect** — gather parsed chunks and sum record counts.
-4. **Parallel recovery** — chunks with destroyed headers are scanned for `0x2A2A` record magic to recover individual records.
-
-The `maxThreads` parameter maps directly to `ParallelOptions.MaxDegreeOfParallelism`.
+1. **Pass 1** — every chunk slot in file order: a slot without the `ElfChnk\0` magic is marked for recovery; with
+   `ValidateChecksums`, a chunk failing CRC32 is skipped (a `ChunkChecksumMismatch` diagnostic); every other chunk is
+   parsed and rendered.
+2. **Pass 2** — the marked slots, in file order, with fresh workers (so fresh template caches): each 64 KB region is
+   scanned for `0x2A2A` record magic and the records found are rendered. Only records that produce output are kept;
+   these chunks have `Recovered = true`.
 
 ## Template compilation
 
@@ -66,16 +73,21 @@ Substitution values are formatted by one type switch (`BinXmlValueWriter.cs`); t
 
 ## Corruption resilience
 
-- Chunks with invalid `ElfChnk\0` signatures are not discarded — Phase 4 scans their 64KB region for `0x2A2A` record magic and recovers individual records
-- Records whose BinXml is corrupt fail on their own with a diagnostic and empty output, rather than crashing the parser or rendering junk. With `salvage: true` they keep their well-formed prefix instead (decoding stops at the corruption and the writers close every open element)
-- CRC32 validation is opt-in (`validateChecksums: true`) — when enabled, chunks failing header or data checksums are skipped entirely
+- Chunks with invalid `ElfChnk\0` signatures are not discarded — pass 2 scans their 64KB region for `0x2A2A` record magic and recovers individual records
+- Records whose BinXml is corrupt fail on their own with an `EvtxDiagnostic` and empty output, rather than crashing the parser or rendering junk. With `Salvage = true` they keep their well-formed prefix instead (decoding stops at the corruption and the writers close every open element)
+- CRC32 validation is opt-in (`ValidateChecksums = true`) — when enabled, chunks failing header or data checksums are skipped entirely
 
 ## Key types
 
 | Type | Role |
 |------|------|
-| `EvtxParser` | Entry point. Orchestrates parsing, holds results. |
+| `EvtxParser` | Static entry points (`Parse`, `ReadEvents`, `ReadEventsAsync`, `WriteTo`, `ParseChunk`, `ParseFileHeader`). |
+| `EvtxOptions` | Immutable options record shared by every entry point. |
+| `EvtxLog` | Result of `Parse`: file header, chunks, record count, diagnostics. |
 | `EvtxChunk` | Self-contained 64KB chunk with header, records, and one UTF-8 buffer of rendered output. |
+| `EvtxEvent` | 16-byte view of one record of a chunk: record ID, written time, file offset, output, diagnostic. |
+| `ChunkSource` | Where chunk bytes come from: a `byte[]`, positional reads of a file handle, or a locked seekable stream. |
+| `ChunkPipeline` | Runs per-chunk work on workers and hands results to one consumer in order (bounded ring). |
 | `BinXmlParser` | Converts BinXml token streams to UTF-8 XML or JSON. One instance per chunk. |
 | `CompiledTemplate` | A template compiled for one format: UTF-8 static parts + substitution slots (one type and one executor for XML and JSON). |
 | `ValueUtf8Builder` | Stack-first, `ArrayPool`-backed UTF-8 builder all rendering goes through. Transcodes UTF-16 text from the file as it's appended, and gives the same bytes as encoding the whole record once (unpaired surrogates become U+FFFD). |

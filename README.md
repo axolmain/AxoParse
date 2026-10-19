@@ -54,16 +54,16 @@ I'd ever bother to, which keeps the history really clean to track. Commits with 
 ## Features
 
 - **XML and JSON output** — renders BinXml straight to UTF-8 XML or JSON (no xml-to-json conversion, no UTF-16 detour)
-- **Streaming** — `WriteTo` reads a file chunk by chunk and writes rendered records to any `Stream`; memory stays at a
-  few MB whatever the file size
-- **Async enumeration** — `ParseAsync` yields events in file order as chunks finish parsing
+- **Streaming** — `ReadEvents` / `ReadEventsAsync` stream events and `WriteTo` writes JSON Lines or XML to any
+  `Stream`, reading the file chunk by chunk; memory stays at a few MB whatever the file size
+- **One options record** — `EvtxOptions` is immutable and shareable; every entry point is thread-safe
 - **Multi-threaded** — parallel chunk processing with configurable thread count
 - **Template pre-compilation** — compiles BinXml templates once for zero repeated overhead
 - **WEVT fallback templates** — `WevtCache` reads templates from Windows provider PE binaries (DLL/EXE) and uses them
   to render records whose embedded template is missing or corrupt (carved and damaged logs)
 - **CRC32 validation** — optional checksum verification on chunks
-- **Resilient** — a corrupt record fails on its own with a diagnostic (strict, like the Rust `evtx` crate), or keeps
-  its well-formed part with `salvage: true`; bad checksums and damaged chunks don't stop the rest of the file
+- **Resilient** — a corrupt record fails on its own with a typed `EvtxDiagnostic` (strict, like the Rust `evtx` crate),
+  or keeps its well-formed part with `Salvage = true`; bad checksums and damaged chunks don't stop the rest of the file
 - **Minimal allocations** — span-based zero-copy parsing, stack allocations, and value types throughout
 - **Culture-invariant** — output is identical regardless of the machine's locale
 
@@ -76,44 +76,46 @@ dotnet add package AxoParse.Evtx
 ## Usage
 
 ```csharp
-using AxoParse.Evtx.Evtx;
+using AxoParse.Evtx;
 
-byte[] fileData = File.ReadAllBytes("security.evtx");
-EvtxParser parser = EvtxParser.Parse(fileData);
+EvtxLog log = EvtxParser.Parse("security.evtx");
 
-foreach (EvtxEvent evt in parser.GetEvents())
+foreach (EvtxEvent evt in log.Events)
 {
     if (evt.IsSuccess)
-        Console.WriteLine(evt.Xml);
+        Console.WriteLine($"{evt.RecordId} {evt.WrittenTimeUtc:O} {evt.GetText()}");
 }
 ```
 
 ### Stream straight to a file
 
 The fastest way to export. The file is read chunk by chunk as it's rendered (it's never loaded whole), nothing is kept
-per record, and the output is byte-identical to `Parse`.
+per record, and every record is written on its own line (JSON Lines for JSON) with the same bytes `Parse` renders.
 
 ```csharp
-using FileStream output = File.Create("security.json");
-EvtxParser.WriteTo("security.evtx", output, OutputFormat.Json);
+using FileStream output = File.Create("security.jsonl");
+EvtxParser.WriteTo("security.evtx", output, new EvtxOptions { Format = OutputFormat.JsonStructured });
 ```
 
 ### Consume events as they're parsed
 
 ```csharp
-await foreach (EvtxEvent evt in EvtxParser.ParseAsync(fileData))
-    Console.WriteLine(evt.Xml);
+await foreach (EvtxEvent evt in EvtxParser.ReadEventsAsync("security.evtx"))
+    Console.WriteLine(evt.GetText());
 ```
 
 ### Options
 
-| Parameter           | Default | Description                                               |
-|---------------------|---------|-----------------------------------------------------------|
-| `maxThreads`        | `0`     | Thread count. `0`/`-1` = all cores, `1` = single-threaded |
-| `format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.Json`                 |
-| `validateChecksums` | `false` | Skip chunks that fail CRC32 validation                    |
-| `wevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt |
-| `salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it |
+Every entry point takes an optional `EvtxOptions` (an immutable record: `new EvtxOptions { ... }` or `with`).
+
+| Property            | Default | Description                                                                          |
+|---------------------|---------|--------------------------------------------------------------------------------------|
+| `Format`            | `Xml`   | `OutputFormat.Xml` or `OutputFormat.JsonStructured`                                  |
+| `MaxThreads`        | `0`     | Worker threads. `0` = all cores, `1` = single-threaded                               |
+| `ValidateChecksums` | `false` | Skip chunks that fail CRC32 validation (reported as diagnostics)                     |
+| `Salvage`           | `false` | Keep the well-formed part of a record whose BinXml is corrupt instead of failing it |
+| `WevtCache`         | `null`  | Provider templates used when a record's embedded template is missing or corrupt      |
+| `XmlEventsRoot`     | `false` | `WriteTo` with XML: wrap the records in `<Events>` so the output is one XML document |
 
 ## Benchmark Results
 
