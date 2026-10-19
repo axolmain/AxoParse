@@ -62,7 +62,8 @@ I'd ever bother to, which keeps the history really clean to track. Commits with 
 - **WEVT fallback templates** — `WevtCache` reads templates from Windows provider PE binaries (DLL/EXE) and uses them
   to render records whose embedded template is missing or corrupt (carved and damaged logs)
 - **CRC32 validation** — optional checksum verification on chunks
-- **Resilient** — gracefully handles corrupted records, bad checksums, and malformed chunks
+- **Resilient** — a corrupt record fails on its own with a diagnostic (strict, like the Rust `evtx` crate), or keeps
+  its well-formed part with `salvage: true`; bad checksums and damaged chunks don't stop the rest of the file
 - **Minimal allocations** — span-based zero-copy parsing, stack allocations, and value types throughout
 - **Culture-invariant** — output is identical regardless of the machine's locale
 
