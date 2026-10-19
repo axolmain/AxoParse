@@ -2,6 +2,27 @@
 
 ## Release Notes
 
+### v0.3.0 (unreleased)
+
+**New:**
+
+- **`EvtxParser.WriteTo(string path, ...)` and `WriteTo(SafeFileHandle file, ...)`** stream a file from disk. Each worker
+  reads the 64 KB chunk it renders (positional reads, so the handle's position isn't used), so reading overlaps
+  rendering and the file is never loaded whole. Output and record count are identical to `WriteTo(byte[], ...)`.
+  The benchmark CLI now uses it. On the 30 MB sample (Apple M4), peak memory went from 39 to 8 MiB single-threaded
+  and 49 to 18 MiB with 8 threads. Time went from 33.7 to 31.9 ms (XML) and 38.5 to 35.9 ms (JSON) single-threaded,
+  and from 13.0 to 11.9 ms (XML) with 8 threads.
+
+**Changes:**
+
+- **Rendering only reads a record's own chunk.** A template body or substitution value that ran past the end of its
+  64 KB chunk used to be read from the next chunk's bytes. Now the template is treated as unavailable or the record
+  fails (with a diagnostic), as in the Rust `evtx` crate, which parses each chunk from its own buffer. This only
+  affects corrupt files: output for every test sample is unchanged.
+- `WriteTo` checks chunk magic and checksums on its worker threads, so `validateChecksums: true` costs less wall time.
+
+---
+
 ### v0.2.1 — Checksum and robustness fixes, faster multi-threaded `WriteTo`
 
 **Fixes:**
@@ -261,7 +282,15 @@ public static int WriteTo(
     int maxThreads = 0,
     bool validateChecksums = false,
     CancellationToken cancellationToken = default)
+
+public static int WriteTo(string path, Stream output, /* same options */)
+public static int WriteTo(SafeFileHandle file, Stream output, /* same options */)
 ```
+
+The path and handle overloads stream the file: each worker reads the 64 KB chunk it renders with a positional read,
+so the file is never loaded whole, files over 2 GB work, and the handle's position isn't used or changed. The path
+overload opens the file with `FileShare.ReadWrite`, so a log another process still has open can be read. All three
+produce identical output.
 
 Parses the file and writes every record's rendered UTF-8 output to `output`. The order and bytes match concatenating
 `Parse` output: valid chunks in file order, then records recovered from regions whose chunk header is damaged.
